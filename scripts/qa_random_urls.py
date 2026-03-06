@@ -64,6 +64,13 @@ SOURCES: list[dict] = [
     {"url": "https://en.wikivoyage.org/wiki/Special:Random", "lang": "en", "cat": "wikimedia"},
     {"url": "https://en.wikinews.org/wiki/Special:Random", "lang": "en", "cat": "wikimedia"},
     {"url": "https://en.wikibooks.org/wiki/Special:Random", "lang": "en", "cat": "wikimedia"},
+    # Non-Wikipedia: news, tech, reference (test beyond Wikimedia patterns)
+    {"url": "https://httpbin.org/html", "lang": "en", "cat": "reference"},
+    {"url": "https://news.ycombinator.com/", "lang": "en", "cat": "forum"},
+    {"url": "https://lite.cnn.com/", "lang": "en", "cat": "news"},
+    {"url": "https://text.npr.org/", "lang": "en", "cat": "news"},
+    {"url": "https://lobste.rs/", "lang": "en", "cat": "forum"},
+    {"url": "https://www.gutenberg.org/cache/epub/1342/pg1342-images.html", "lang": "en", "cat": "reference"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -72,7 +79,16 @@ SOURCES: list[dict] = [
 
 TAG_RE = re.compile(r"<(script|style|nav|header|footer|noscript|template|svg)\b", re.I)
 DOUBLE_SPACE_RE = re.compile(r"  ")
-HTML_TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+# Only flag standard HTML tags, not arbitrary <word> patterns.
+# Decoded entities like &lt;ref&gt; legitimately produce <ref> in output,
+# but standard HTML tags (p, div, span, etc.) should never appear.
+HTML_TAG_RE = re.compile(
+    r"<(script|style|div|span|p|a|b|i|em|strong|h[1-6]|table|tr|td|th|"
+    r"ul|ol|li|nav|header|footer|aside|form|img|br|hr|section|article|"
+    r"main|blockquote|code|pre|head|body|html|meta|link|title|input|"
+    r"button|select|option|textarea|iframe|noscript|template|svg)\b[^>]*>",
+    re.I,
+)
 
 
 @dataclass
@@ -132,6 +148,17 @@ def check_invariants(text: str, html: str) -> list[CheckResult]:
         results.append(CheckResult("no_control_chars", False, f"found: {codes}"))
     else:
         results.append(CheckResult("no_control_chars", True))
+
+    # 7. No invisible Unicode characters (bidi marks, ZWSP, soft hyphen, etc.)
+    invisible = [
+        c for c in text
+        if ord(c) in (0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x00AD, 0x2060, 0xFEFF)
+    ]
+    if invisible:
+        codes = [f"U+{ord(c):04X}" for c in invisible[:5]]
+        results.append(CheckResult("no_invisible_chars", False, f"found: {codes}"))
+    else:
+        results.append(CheckResult("no_invisible_chars", True))
 
     return results
 
@@ -199,7 +226,7 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     parser.add_argument(
         "--category",
-        choices=["wikipedia", "wikimedia", "all"],
+        choices=["wikipedia", "wikimedia", "news", "forum", "reference", "all"],
         default="all",
         help="URL category to test",
     )

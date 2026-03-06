@@ -688,6 +688,8 @@ fn is_invisible_char(ch: char) -> bool {
         '\u{200B}'  // Zero-width space
         | '\u{200C}' // Zero-width non-joiner
         | '\u{200D}' // Zero-width joiner
+        | '\u{200E}' // Left-to-right mark (bidi control)
+        | '\u{200F}' // Right-to-left mark (bidi control)
         | '\u{00AD}' // Soft hyphen
         | '\u{2060}' // Word joiner
         | '\u{FEFF}' // BOM / zero-width no-break space (mid-text)
@@ -1646,5 +1648,175 @@ mod tests {
         assert!(!text.contains("TermDefinition"), "dt/dd separated: {text}");
         assert!(text.contains("Term"), "dt preserved: {text}");
         assert!(text.contains("Definition"), "dd preserved: {text}");
+    }
+
+    // ===== Bidi mark stripping =====
+
+    #[test]
+    fn lrm_stripped() {
+        // Left-to-right marks from &lrm; entity should be stripped
+        let text = strip_to_text("<p>Hello&lrm; world</p>");
+        assert!(!text.contains('\u{200E}'), "LRM stripped: {text}");
+        assert!(text.contains("Hello"), "text preserved: {text}");
+    }
+
+    #[test]
+    fn rlm_stripped() {
+        let text = strip_to_text("<p>Hello&rlm; world</p>");
+        assert!(!text.contains('\u{200F}'), "RLM stripped: {text}");
+    }
+
+    #[test]
+    fn bidi_marks_in_raw_text_stripped() {
+        // Bidi marks can appear as raw Unicode, not just entities
+        let text = strip_to_text("<p>Name\u{200E}\u{200F}Here</p>");
+        assert!(text.contains("NameHere"), "bidi marks stripped: {text}");
+    }
+
+    // ===== Entity edge cases =====
+
+    #[test]
+    fn entity_at_end_of_input() {
+        // Entity at very end of input (no terminator at all)
+        let text = strip_to_text("<p>Hello &amp");
+        assert!(text.contains("Hello"), "text before entity: {text}");
+        // &amp without ; at end should try semicolon-optional decode
+        assert!(
+            text.contains('&') || text.contains("&amp"),
+            "entity at end handled: {text}"
+        );
+    }
+
+    #[test]
+    fn entity_numeric_at_end_of_input() {
+        let text = strip_to_text("<p>Hello &#169");
+        assert!(text.contains("Hello"), "text preserved: {text}");
+        // Numeric entities without ; at end pass through
+        assert!(text.contains("&#169"), "numeric entity at end: {text}");
+    }
+
+    #[test]
+    fn double_encoded_entity() {
+        // &amp;amp; should decode to &amp; (one round of decoding only)
+        let text = strip_to_text("<p>&amp;amp; test</p>");
+        assert!(text.contains("&amp;"), "double-encoded stays once: {text}");
+    }
+
+    #[test]
+    fn adjacent_entities() {
+        // Multiple entities with no space between
+        let text = strip_to_text("<p>&lt;&gt;&amp;</p>");
+        assert_eq!(text, "<>&");
+    }
+
+    #[test]
+    fn entity_with_leading_hash_garbage() {
+        // &#xyz; (non-numeric after #) should pass through
+        let text = strip_to_text("<p>&#xyz; text</p>");
+        assert!(text.contains("&#xyz;"), "garbage numeric entity: {text}");
+    }
+
+    // ===== Tag edge cases =====
+
+    #[test]
+    fn empty_tag_name() {
+        // < > with just whitespace should not panic
+        let text = strip_to_text("<p>Before< >After</p>");
+        assert!(text.contains("Before"), "before empty tag: {text}");
+        assert!(text.contains("After"), "after empty tag: {text}");
+    }
+
+    #[test]
+    fn tag_only_slash() {
+        // </> should not panic
+        let text = strip_to_text("<p>Before</>After</p>");
+        assert!(text.contains("Before"), "before: {text}");
+        assert!(text.contains("After"), "after: {text}");
+    }
+
+    #[test]
+    fn deeply_nested_skip_tags() {
+        // Three levels of skip tag nesting
+        let html = r#"<header><nav><aside>
+            <ul><li>Deep hidden content</li></ul>
+        </aside></nav></header>
+        <p>Visible text.</p>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Visible text"), "visible preserved: {text}");
+        assert!(!text.contains("Deep hidden"), "deeply nested skipped: {text}");
+    }
+
+    #[test]
+    fn unclosed_script_eats_rest() {
+        // An unclosed <script> should suppress all remaining text
+        let text = strip_to_text("<p>Before</p><script>alert('hi')");
+        assert!(text.contains("Before"), "before script: {text}");
+        assert!(!text.contains("alert"), "script content hidden: {text}");
+    }
+
+    #[test]
+    fn unclosed_style_eats_rest() {
+        let text = strip_to_text("<p>Before</p><style>.x{color:red}");
+        assert!(text.contains("Before"), "before style: {text}");
+        assert!(!text.contains("color"), "style content hidden: {text}");
+    }
+
+    #[test]
+    fn script_with_html_inside() {
+        // Script containing HTML-like strings should not confuse parser
+        let html = r#"<script>var s = "<p>fake</p>";</script><p>Real</p>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Real"), "real content: {text}");
+        assert!(!text.contains("fake"), "script html not leaked: {text}");
+    }
+
+    #[test]
+    fn consecutive_block_tags_single_space() {
+        // Multiple consecutive block tags should not produce excessive spaces
+        let text = strip_to_text("</p><p></p><p>Content</p>");
+        assert!(!text.contains("  "), "no double spaces: {text}");
+    }
+
+    #[test]
+    fn uppercase_tags_handled() {
+        // HTML tags can be uppercase
+        let text = strip_to_text("<P>Hello</P><DIV>World</DIV>");
+        assert!(text.contains("Hello"), "uppercase P: {text}");
+        assert!(text.contains("World"), "uppercase DIV: {text}");
+        assert!(!text.contains("HelloWorld"), "block separation: {text}");
+    }
+
+    #[test]
+    fn mixed_case_script_tag() {
+        let text = strip_to_text("<SCRIPT>evil()</SCRIPT><p>Safe</p>");
+        assert!(text.contains("Safe"), "safe content: {text}");
+        assert!(!text.contains("evil"), "script stripped: {text}");
+    }
+
+    // ===== decode_entities public API =====
+
+    #[test]
+    fn decode_entities_standalone() {
+        assert_eq!(decode_entities("Caf&eacute;"), "Café");
+        assert_eq!(decode_entities("&#169; 2026"), "\u{00A9} 2026");
+        assert_eq!(decode_entities("no entities here"), "no entities here");
+        assert_eq!(decode_entities(""), "");
+    }
+
+    #[test]
+    fn decode_entities_multiple() {
+        assert_eq!(
+            decode_entities("&lt;div&gt; &amp; &quot;test&quot;"),
+            "<div> & \"test\""
+        );
+    }
+
+    #[test]
+    fn decode_entities_mixed_types() {
+        // Named + decimal + hex in same string
+        assert_eq!(
+            decode_entities("&copy; &#8212; &#x2019;"),
+            "\u{00A9} \u{2014} \u{2019}"
+        );
     }
 }
