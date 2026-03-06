@@ -34,16 +34,16 @@ All features are opt-in. The default build has zero heavy dependencies
 
 ```toml
 [dependencies]
-deformat = { version = "0.1", features = ["readability", "html2text"] }
+deformat = { version = "0.2", features = ["readability", "html2text"] }
 ```
 
 ## HTML extraction
 
 Three strategies, from simplest to most capable:
 
-1. **`html::strip_to_text`** (always available) -- fast regex/char-based tag
-   stripping with HTML entity decoding, semantic element filtering (`<nav>`,
-   `<header>`, `<footer>`, `<aside>`), and Wikipedia boilerplate removal.
+1. **`html::strip_to_text`** (always available) -- fast char-based tag stripping
+   with 252 named HTML entities, Windows-1252 C1 range mapping, semantic element
+   filtering, image alt text extraction, and Wikipedia boilerplate removal.
 
 2. **`extract_html2text`** (feature `html2text`) -- DOM-based conversion that
    preserves layout structure (tables, lists, indentation).
@@ -52,6 +52,14 @@ Three strategies, from simplest to most capable:
    algorithm that extracts the main article content, stripping navigation,
    sidebars, and boilerplate. Falls back to `strip_to_text` if extraction
    produces insufficient content.
+
+### Entity decoding
+
+```rust
+// Standalone entity decoding (useful for attribute values, etc.)
+assert_eq!(deformat::html::decode_entities("Caf&eacute;"), "Café");
+assert_eq!(deformat::html::decode_entities("&#169; 2026"), "\u{00A9} 2026");
+```
 
 ## Format detection
 
