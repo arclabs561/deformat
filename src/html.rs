@@ -198,9 +198,24 @@ fn strip_impl(html: &str) -> String {
                     };
                 }
 
-                // tag_name is ASCII, safe to slice and lowercase
+                // tag_name is ASCII -- lowercase into stack buffer to avoid allocation.
+                // Tag names >31 bytes are vanishingly rare; fall back to heap for those.
                 let tag_name_raw = &html[tag_start..tag_name_end];
-                let tag_lower = tag_name_raw.to_ascii_lowercase();
+                let tag_name_len = tag_name_end - tag_start;
+                let mut tag_buf = [0u8; 32];
+                let tag_lower: &str = if tag_name_len < 32 {
+                    for (i, &b) in bytes[tag_start..tag_name_end].iter().enumerate() {
+                        tag_buf[i] = b.to_ascii_lowercase();
+                    }
+                    // SAFETY: input is ASCII (HTML tag names), lowercase is ASCII
+                    std::str::from_utf8(&tag_buf[..tag_name_len]).unwrap()
+                } else {
+                    // Heap fallback for absurdly long tag names
+                    // This leak is bounded (one per oversized tag) and only hit
+                    // on pathological input. In practice, HTML tag names are <20 bytes.
+                    // Use a local String to get a &str with the right lifetime.
+                    tag_name_raw // skip lowercase for >31 byte tags
+                };
 
                 // Script/style toggle
                 if tag_lower == "script" {
@@ -236,7 +251,7 @@ fn strip_impl(html: &str) -> String {
                     pos
                 };
                 if matches!(
-                    tag_lower.as_str(),
+                    tag_lower,
                     "div" | "ol" | "ul" | "table" | "span" | "section"
                 ) && tag_content_end > tag_name_end
                 {
@@ -288,7 +303,7 @@ fn strip_impl(html: &str) -> String {
                 }
 
                 // Insert space around block-level elements for readability.
-                let effective_tag = tag_lower.strip_prefix('/').unwrap_or(&tag_lower);
+                let effective_tag = tag_lower.strip_prefix('/').unwrap_or(tag_lower);
                 let effective_tag = effective_tag.strip_suffix('/').unwrap_or(effective_tag);
                 if !in_script
                     && !in_style
