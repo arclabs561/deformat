@@ -384,28 +384,62 @@ fn strip_impl(html: &str) -> String {
         }
     }
 
-    // Collapse whitespace and strip invisible characters (HTML rendering semantics)
-    let mut cleaned = String::with_capacity(text.len());
+    // Collapse whitespace and strip invisible characters.
+    // Uses byte-level scanning with ASCII fast path: printable ASCII (0x21-0x7E)
+    // is bulk-copied; whitespace and multi-byte sequences are handled per-char.
+    let text_bytes = text.as_bytes();
+    let text_len = text_bytes.len();
+    let mut cleaned = String::with_capacity(text_len);
     let mut last_was_space = true;
-    for ch in text.chars() {
-        if is_invisible_char(ch) {
-            continue;
-        }
-        // Strip C0 control characters (U+0001-U+0008, U+000B, U+000E-U+001F, U+007F)
-        if (ch as u32) < 0x20 && ch != '\n' && ch != '\r' && ch != '\t' {
-            continue;
-        }
-        if ch == '\u{7F}' {
-            continue;
-        }
-        if ch.is_whitespace() || is_nbsp(ch) {
-            if !last_was_space {
+    let mut i = 0;
+
+    while i < text_len {
+        let b = text_bytes[i];
+        if b > 0x20 && b < 0x7F {
+            // Printable ASCII (not space, not DEL) -- scan for a run
+            let run_start = i;
+            i += 1;
+            while i < text_len {
+                let b2 = text_bytes[i];
+                if b2 <= 0x20 || b2 >= 0x7F {
+                    break;
+                }
+                i += 1;
+            }
+            // SAFETY: run_start..i contains only bytes 0x21-0x7E (printable ASCII)
+            cleaned.push_str(&text[run_start..i]);
+            last_was_space = false;
+        } else if b <= 0x20 {
+            // ASCII whitespace or control character
+            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r')
+                && !last_was_space
+            {
                 cleaned.push(' ');
                 last_was_space = true;
             }
+            // else: C0 control chars (0x00-0x08, 0x0B, 0x0E-0x1F) -> skip
+            i += 1;
         } else {
-            cleaned.push(ch);
-            last_was_space = false;
+            // Multi-byte UTF-8 (0x80+) or DEL (0x7F)
+            if b == 0x7F {
+                i += 1;
+                continue;
+            }
+            // Decode the UTF-8 character
+            let ch = text[i..].chars().next().unwrap();
+            let ch_len = ch.len_utf8();
+            if is_invisible_char(ch) {
+                // skip
+            } else if ch.is_whitespace() || is_nbsp(ch) {
+                if !last_was_space {
+                    cleaned.push(' ');
+                    last_was_space = true;
+                }
+            } else {
+                cleaned.push(ch);
+                last_was_space = false;
+            }
+            i += ch_len;
         }
     }
 
