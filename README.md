@@ -34,7 +34,7 @@ All features are opt-in. The default build has zero heavy dependencies
 
 ```toml
 [dependencies]
-deformat = { version = "0.2", features = ["readability", "html2text"] }
+deformat = { version = "0.3", features = ["readability", "html2text"] }
 ```
 
 ## HTML extraction
@@ -42,8 +42,10 @@ deformat = { version = "0.2", features = ["readability", "html2text"] }
 Three strategies, from simplest to most capable:
 
 1. **`html::strip_to_text`** (always available) -- fast char-based tag stripping
-   with 252 named HTML entities, Windows-1252 C1 range mapping, semantic element
-   filtering, image alt text extraction, and Wikipedia boilerplate removal.
+   with ~300 named HTML entities (ISO-8859-1, Latin Extended-A for Central/Eastern
+   European names, Greek, math, typography), Windows-1252 C1 range mapping,
+   CJK ruby annotation stripping, semantic element filtering, image alt text
+   extraction, and Wikipedia boilerplate removal.
 
 2. **`extract_html2text`** (feature `html2text`) -- DOM-based conversion that
    preserves layout structure (tables, lists, indentation).
