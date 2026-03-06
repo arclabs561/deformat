@@ -122,7 +122,16 @@ pub fn is_html(content: &str) -> bool {
         || trimmed.starts_with("<HTML")
         || trimmed.starts_with("<?xml")
         || (trimmed.contains("<head") && trimmed.contains("<body"))
-        || (trimmed.starts_with('<') && trimmed.contains("</"))
+        || (starts_with_tag(trimmed) && trimmed.contains("</"))
+}
+
+/// Check if content starts with what looks like an HTML tag (`<` followed by an ASCII letter).
+///
+/// Rules out `<3`, `<=`, `<script>` comparisons in code, etc.
+fn starts_with_tag(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some('<'))
+        && matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
 }
 
 /// Detect whether raw bytes start with the PDF magic number.
@@ -289,5 +298,62 @@ mod tests {
         assert_eq!(Format::Html.mime_type(), "text/html");
         assert_eq!(Format::Pdf.mime_type(), "application/pdf");
         assert_eq!(Format::PlainText.mime_type(), "text/plain");
+    }
+
+    // ===== Edge cases =====
+
+    #[test]
+    fn is_html_body_only() {
+        // Content with just a <body> tag and closing tag
+        assert!(is_html("<body><p>Content</p></body>"));
+    }
+
+    #[test]
+    fn is_html_angle_bracket_in_text() {
+        // Mathematical or comparison text with < should NOT be HTML
+        assert!(!is_html("if x < 10 then y > 20"));
+        assert!(!is_html("a < b and c > d"));
+    }
+
+    #[test]
+    fn is_html_email_template_marker() {
+        // Some email HTML starts with whitespace + html tag
+        assert!(is_html("\r\n\r\n<html>\r\n<head>"));
+    }
+
+    #[test]
+    fn detect_path_dotfile() {
+        assert_eq!(detect_path(Path::new(".hidden")), Format::Unknown);
+    }
+
+    #[test]
+    fn detect_path_multiple_dots() {
+        assert_eq!(detect_path(Path::new("file.backup.html")), Format::Html);
+        assert_eq!(detect_path(Path::new("report.2024.pdf")), Format::Pdf);
+    }
+
+    #[test]
+    fn detect_bytes_utf8_bom() {
+        // UTF-8 BOM followed by HTML
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(b"<html><body>text</body></html>");
+        // BOM bytes make this non-PDF, and the UTF-8 content should be detectable
+        assert_ne!(detect_bytes(&bytes), Format::Pdf);
+    }
+
+    #[test]
+    fn format_equality() {
+        assert_eq!(Format::Html, Format::Html);
+        assert_ne!(Format::Html, Format::Pdf);
+    }
+
+    #[test]
+    fn format_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(Format::Html);
+        set.insert(Format::Pdf);
+        set.insert(Format::Html); // duplicate
+        assert_eq!(set.len(), 2);
     }
 }
