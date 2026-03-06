@@ -13,6 +13,7 @@
 //!    Readability algorithm that extracts the main article content, stripping
 //!    navigation, sidebars, and boilerplate.
 
+use memchr::memchr2;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -87,232 +88,288 @@ pub fn extract_with_html2text(html: &str, width: usize) -> Result<String, String
 // ---------------------------------------------------------------------------
 
 fn strip_impl(html: &str) -> String {
+    let bytes = html.as_bytes();
+    let len = bytes.len();
+    let mut pos = 0;
     let mut text = String::with_capacity(html.len());
-    let mut in_tag = false;
     let mut in_script = false;
     let mut in_style = false;
     let mut skip_depth: u32 = 0;
     let mut wiki_skip_depth: u32 = 0;
-    let mut chars = html.chars().peekable();
 
-    while let Some(ch) = chars.next() {
-        match ch {
-            '<' => {
-                // HTML comment: <!-- ... -->
-                if chars.peek() == Some(&'!') {
-                    let mut lookahead = String::new();
-                    // Collect up to 3 chars to check for "!--"
-                    for _ in 0..3 {
-                        if let Some(&c) = chars.peek() {
-                            lookahead.push(c);
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    if lookahead == "!--" {
-                        // Skip until "-->"
+    while pos < len {
+        let skipping = in_script || in_style || skip_depth > 0;
+
+        // Fast scan: find next '<' or '&' using SIMD-accelerated memchr.
+        // In skip mode, only look for '<' (entities don't matter).
+        let next = if skipping {
+            memchr::memchr(b'<', &bytes[pos..]).map(|o| pos + o)
+        } else {
+            memchr2(b'<', b'&', &bytes[pos..]).map(|o| pos + o)
+        };
+
+        match next {
+            None => {
+                // No more markers -- copy remainder if not skipping
+                if !skipping {
+                    text.push_str(&html[pos..]);
+                }
+                break;
+            }
+            Some(marker_pos) => {
+                // Bulk-copy text before the marker (splitting at ASCII positions
+                // is always valid UTF-8)
+                if !skipping && marker_pos > pos {
+                    text.push_str(&html[pos..marker_pos]);
+                }
+                pos = marker_pos;
+            }
+        }
+
+        match bytes[pos] {
+            b'<' => {
+                pos += 1;
+                if pos >= len {
+                    break;
+                }
+
+                // HTML comment <!-- ... --> or <!DOCTYPE ...>
+                if bytes[pos] == b'!' {
+                    if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
+                        pos += 3; // skip "!--"
                         let mut dashes = 0u32;
-                        for c in chars.by_ref() {
-                            if c == '-' {
-                                dashes += 1;
-                            } else if c == '>' && dashes >= 2 {
-                                break;
-                            } else {
-                                dashes = 0;
+                        while pos < len {
+                            match bytes[pos] {
+                                b'-' => dashes += 1,
+                                b'>' if dashes >= 2 => {
+                                    pos += 1;
+                                    break;
+                                }
+                                _ => dashes = 0,
                             }
+                            pos += 1;
                         }
                         continue;
                     }
-                    // Not a comment (e.g. <!DOCTYPE ...>) -- fast-forward to '>'
-                    for c in chars.by_ref() {
-                        if c == '>' {
-                            break;
-                        }
+                    // <!DOCTYPE ...> or other <! directive
+                    if let Some(o) = memchr::memchr(b'>', &bytes[pos..]) {
+                        pos += o + 1;
+                    } else {
+                        pos = len;
                     }
                     continue;
                 }
 
-                in_tag = true;
-                let mut tag_buffer = String::new();
-                tag_buffer.push('<');
-                let mut tag_name = String::new();
+                // Parse tag: collect tag name and scan to closing '>'
+                let tag_start = pos; // first byte after '<'
+                let mut tag_name_end = pos;
                 let mut in_tag_name = true;
-                let mut in_attr_quote: Option<char> = None; // Track quote context
+                let mut in_attr_quote: Option<u8> = None;
 
-                while let Some(&next_ch) = chars.peek() {
-                    // Inside a quoted attribute value, '>' does not end the tag
+                while pos < len {
+                    let b = bytes[pos];
                     if let Some(q) = in_attr_quote {
-                        let c = chars.next().expect("peek returned Some");
-                        tag_buffer.push(c);
-                        if c == q {
+                        if b == q {
                             in_attr_quote = None;
                         }
+                        pos += 1;
                         continue;
                     }
-
-                    if next_ch == '>' {
-                        chars.next();
-                        tag_buffer.push('>');
-                        let tag_lower = tag_name.to_lowercase();
-
-                        // Script/style toggle
-                        if tag_lower == "script" || tag_lower.starts_with("script ") {
-                            in_script = true;
-                        } else if tag_lower == "/script" || tag_lower.starts_with("/script ") {
-                            in_script = false;
-                        } else if tag_lower == "style" || tag_lower.starts_with("style ") {
-                            in_style = true;
-                        } else if tag_lower == "/style" || tag_lower.starts_with("/style ") {
-                            in_style = false;
-                        }
-
-                        // Semantic skip tags
-                        let skip_tags: &[&str] = &[
-                            "head", "nav", "header", "footer", "aside", "menu",
-                            "noscript", "form", "select", "figcaption",
-                            "template", "svg", "textarea", "iframe",
-                            "rt", "rp", // Ruby annotations (CJK pronunciation guides)
-                        ];
-
-                        // Wikipedia/MediaWiki structural skip
-                        let tag_lower_full = format!(
-                            "{} {}",
-                            tag_name.to_lowercase(),
-                            tag_buffer[1..].to_lowercase()
-                        );
-                        let wiki_skip_ids: &[&str] = &[
-                            "toc", "references", "reflist", "catlinks",
-                            "mw-panel", "mw-navigation", "sidebar", "sitesub",
-                            "contentsub", "jump-to-nav", "navbox", "external",
-                            "see-also", "further-reading", "mw-head",
-                            "mw-page-base", "mw-head-base", "footer", "printfooter",
-                        ];
-                        let is_wiki_skip = wiki_skip_ids.iter().any(|id| {
-                            tag_lower_full.contains(&format!("id=\"{}\"", id))
-                                || tag_lower_full.contains(&format!("class=\"{}", id))
-                                || (tag_lower_full.contains(id)
-                                    && (tag_lower_full.contains("class=")
-                                        || tag_lower_full.contains("id=")))
-                        });
-                        if is_wiki_skip
-                            && matches!(
-                                tag_name.to_lowercase().as_str(),
-                                "div" | "ol" | "ul" | "table" | "span" | "section"
-                            )
-                        {
-                            wiki_skip_depth += 1;
-                            skip_depth += 1;
-                        }
-
-                        // Handle closing tags for wiki-skip containers
-                        if wiki_skip_depth > 0 {
-                            let wiki_close_tags: &[&str] =
-                                &["div", "ol", "ul", "table", "span", "section"];
-                            for &wtag in wiki_close_tags {
-                                if tag_lower == format!("/{}", wtag)
-                                    || tag_lower.starts_with(&format!("/{} ", wtag))
-                                {
-                                    wiki_skip_depth = wiki_skip_depth.saturating_sub(1);
-                                    skip_depth = skip_depth.saturating_sub(1);
-                                }
-                            }
-                        }
-
-                        // Semantic tag depth tracking
-                        for &stag in skip_tags {
-                            if tag_lower == stag
-                                || tag_lower.starts_with(&format!("{} ", stag))
-                            {
-                                skip_depth += 1;
-                            } else if tag_lower == format!("/{}", stag)
-                                || tag_lower.starts_with(&format!("/{} ", stag))
-                            {
-                                skip_depth = skip_depth.saturating_sub(1);
-                            }
-                        }
-
-                        in_tag = false;
+                    if b == b'>' {
+                        pos += 1; // consume '>'
                         break;
-                    } else if next_ch.is_whitespace() {
+                    }
+                    if in_tag_name && b.is_ascii_whitespace() {
+                        tag_name_end = pos;
                         in_tag_name = false;
-                        tag_buffer.push(chars.next().expect("peek returned Some"));
-                    } else if in_tag_name {
-                        tag_name.push(chars.next().expect("peek returned Some"));
+                    }
+                    if !in_tag_name && (b == b'"' || b == b'\'') {
+                        in_attr_quote = Some(b);
+                    }
+                    pos += 1;
+                }
+
+                if in_tag_name {
+                    // Tag had no attributes -- name extends to '>' or end
+                    tag_name_end = if pos > 0 && pos <= len && bytes[pos - 1] == b'>' {
+                        pos - 1
                     } else {
-                        let c = chars.next().expect("peek returned Some");
-                        // Detect start of quoted attribute value
-                        if (c == '"' || c == '\'') && in_attr_quote.is_none() {
-                            in_attr_quote = Some(c);
+                        pos
+                    };
+                }
+
+                // tag_name is ASCII, safe to slice and lowercase
+                let tag_name_raw = &html[tag_start..tag_name_end];
+                let tag_lower = tag_name_raw.to_ascii_lowercase();
+
+                // Script/style toggle
+                if tag_lower == "script" {
+                    in_script = true;
+                } else if tag_lower == "/script" {
+                    in_script = false;
+                } else if tag_lower == "style" {
+                    in_style = true;
+                } else if tag_lower == "/style" {
+                    in_style = false;
+                }
+
+                // Semantic skip tags
+                const SKIP_TAGS: &[&str] = &[
+                    "head", "nav", "header", "footer", "aside", "menu",
+                    "noscript", "form", "select", "figcaption",
+                    "template", "svg", "textarea", "iframe",
+                    "rt", "rp",
+                ];
+
+                // Full tag content (attributes) for wiki-skip detection.
+                // pos is now past '>'; the tag content is [tag_start..pos-1)
+                let tag_content_end = if pos > 0 && bytes[pos - 1] == b'>' {
+                    pos - 1
+                } else {
+                    pos
+                };
+                let tag_full_lower = html[tag_start..tag_content_end].to_ascii_lowercase();
+
+                // Wikipedia/MediaWiki structural skip
+                const WIKI_SKIP_IDS: &[&str] = &[
+                    "toc", "references", "reflist", "catlinks",
+                    "mw-panel", "mw-navigation", "sidebar", "sitesub",
+                    "contentsub", "jump-to-nav", "navbox", "external",
+                    "see-also", "further-reading", "mw-head",
+                    "mw-page-base", "mw-head-base", "footer", "printfooter",
+                ];
+                let is_wiki_skip = WIKI_SKIP_IDS.iter().any(|id| {
+                    tag_full_lower.contains(&format!("id=\"{}\"", id))
+                        || tag_full_lower.contains(&format!("class=\"{}", id))
+                        || (tag_full_lower.contains(id)
+                            && (tag_full_lower.contains("class=")
+                                || tag_full_lower.contains("id=")))
+                });
+                if is_wiki_skip
+                    && matches!(
+                        tag_lower.as_str(),
+                        "div" | "ol" | "ul" | "table" | "span" | "section"
+                    )
+                {
+                    wiki_skip_depth += 1;
+                    skip_depth += 1;
+                }
+
+                // Handle closing tags for wiki-skip containers
+                if wiki_skip_depth > 0 {
+                    const WIKI_CLOSE: &[&str] =
+                        &["div", "ol", "ul", "table", "span", "section"];
+                    for &wtag in WIKI_CLOSE {
+                        if tag_lower == format!("/{}", wtag) {
+                            wiki_skip_depth = wiki_skip_depth.saturating_sub(1);
+                            skip_depth = skip_depth.saturating_sub(1);
                         }
-                        tag_buffer.push(c);
+                    }
+                }
+
+                // Semantic tag depth tracking
+                for &stag in SKIP_TAGS {
+                    if tag_lower == stag {
+                        skip_depth += 1;
+                    } else if tag_lower == format!("/{}", stag) {
+                        skip_depth = skip_depth.saturating_sub(1);
                     }
                 }
 
                 // Insert space around block-level elements for readability.
-                // Strip leading "/" from closing tags (</td>) and trailing "/"
-                // from self-closing tags (<br/>) so both match "td" / "br".
-                let effective_tag = tag_name.to_lowercase();
-                let effective_tag = effective_tag
-                    .strip_prefix('/')
-                    .unwrap_or(&effective_tag);
-                let effective_tag = effective_tag
-                    .strip_suffix('/')
-                    .unwrap_or(effective_tag);
+                let effective_tag = tag_lower.strip_prefix('/').unwrap_or(&tag_lower);
+                let effective_tag = effective_tag.strip_suffix('/').unwrap_or(effective_tag);
                 if !in_script
                     && !in_style
                     && skip_depth == 0
-                    && matches!(
-                        effective_tag,
-                        "p" | "div" | "br" | "wbr" | "hr"
-                            | "li" | "ul" | "ol"
-                            | "td" | "th" | "tr" | "dt" | "dd"
-                            | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-                            | "section" | "article" | "header" | "footer"
-                            | "aside" | "main" | "blockquote" | "figcaption"
-                            | "figure" | "details" | "summary"
-                            | "caption" | "thead" | "tbody" | "tfoot"
-                            | "address" | "pre" | "fieldset" | "legend"
-                    )
+                    && is_block_tag(effective_tag)
                     && !text.ends_with(' ')
                     && !text.is_empty()
                 {
                     text.push(' ');
                 }
 
-                // Extract alt text from <img> tags (important for NER:
-                // news photo alt text often contains full person names)
+                // Extract alt text from <img> tags
+                if !in_script
+                    && !in_style
+                    && skip_depth == 0
+                    && tag_lower == "img"
                 {
-                    let tl = tag_name.to_lowercase();
-                    if !in_script
-                        && !in_style
-                        && skip_depth == 0
-                        && (tl == "img" || tl.starts_with("img "))
-                    {
-                        if let Some(alt) = extract_attr_value(&tag_buffer, "alt") {
-                            if !alt.is_empty() {
-                                let decoded_alt = decode_entities_in_str(&alt);
-                                if !text.ends_with(' ') && !text.is_empty() {
-                                    text.push(' ');
-                                }
-                                text.push_str(&decoded_alt);
+                    // Reconstruct tag buffer for attr extraction: <...>
+                    let tag_buf_start = tag_start.saturating_sub(1); // include '<'
+                    let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                    if let Some(alt) = extract_attr_value(tag_buffer, "alt") {
+                        if !alt.is_empty() {
+                            let decoded = decode_entities_in_str(&alt);
+                            if !text.ends_with(' ') && !text.is_empty() {
                                 text.push(' ');
                             }
+                            text.push_str(&decoded);
+                            text.push(' ');
                         }
                     }
                 }
             }
-            '>' if in_tag => {
-                in_tag = false;
+            b'&' => {
+                pos += 1;
+                // Parse entity: scan bytes until ';', whitespace, or '<'
+                let entity_start = pos - 1; // includes '&'
+                let mut entity_end = pos;
+                let mut found_semicolon = false;
+
+                while entity_end < len {
+                    match bytes[entity_end] {
+                        b';' => {
+                            entity_end += 1;
+                            found_semicolon = true;
+                            break;
+                        }
+                        b' ' | b'\t' | b'\n' | b'\r' | b'<' => break,
+                        _ => entity_end += 1,
+                    }
+                }
+
+                let entity_str = &html[entity_start..entity_end];
+                pos = entity_end;
+
+                if found_semicolon {
+                    if let Some(ch) = decode_named_entity(entity_str) {
+                        text.push(ch);
+                    } else if entity_str.starts_with("&#") && entity_str.len() > 3 {
+                        let num_str = &entity_str[2..entity_str.len() - 1];
+                        let parsed = if let Some(hex) =
+                            num_str.strip_prefix('x').or_else(|| num_str.strip_prefix('X'))
+                        {
+                            u32::from_str_radix(hex, 16).ok()
+                        } else {
+                            num_str.parse::<u32>().ok()
+                        };
+                        if let Some(ch) = parsed.and_then(numeric_entity_to_char) {
+                            text.push(ch);
+                        } else {
+                            text.push_str(entity_str);
+                        }
+                    } else {
+                        text.push_str(entity_str);
+                    }
+                } else {
+                    // Semicolon-optional entities (e.g. &amp without trailing ;)
+                    if entity_str.len() > 2
+                        && entity_str.as_bytes()[1].is_ascii_alphabetic()
+                        && entity_str[1..].bytes().all(|b| b.is_ascii_alphanumeric())
+                    {
+                        let with_semi = format!("{};", entity_str);
+                        if let Some(ch) = decode_named_entity(&with_semi) {
+                            text.push(ch);
+                            continue;
+                        }
+                    }
+                    text.push_str(entity_str);
+                }
             }
-            _ if in_tag || in_script || in_style || skip_depth > 0 => {}
-            '&' => {
-                decode_entity(&mut chars, &mut text);
+            _ => {
+                pos += 1;
             }
-            ch if !in_tag && !in_script && !in_style && skip_depth == 0 => {
-                text.push(ch);
-            }
-            _ => {}
         }
     }
 
@@ -321,16 +378,14 @@ fn strip_impl(html: &str) -> String {
     let mut last_was_space = true;
     for ch in text.chars() {
         if is_invisible_char(ch) {
-            // Strip zero-width/formatting chars that break NER tokenization
             continue;
         }
         // Strip C0 control characters (U+0001-U+0008, U+000B, U+000E-U+001F, U+007F)
-        // that can sneak in via numeric entities like &#13; or &#1;
         if (ch as u32) < 0x20 && ch != '\n' && ch != '\r' && ch != '\t' {
             continue;
         }
         if ch == '\u{7F}' {
-            continue; // DEL
+            continue;
         }
         if ch.is_whitespace() || is_nbsp(ch) {
             if !last_was_space {
@@ -347,6 +402,41 @@ fn strip_impl(html: &str) -> String {
     let cleaned = WIKI_REF_BRACKET.replace_all(cleaned.trim(), "");
     let cleaned = DOUBLE_SPACE.replace_all(&cleaned, " ");
     cleaned.trim().to_string()
+}
+
+/// Returns true if the tag name is a block-level element that should get
+/// a space inserted before it in the text output.
+fn is_block_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "p" | "div" | "br" | "wbr" | "hr"
+            | "li" | "ul" | "ol"
+            | "td" | "th" | "tr" | "dt" | "dd"
+            | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+            | "section" | "article" | "header" | "footer"
+            | "aside" | "main" | "blockquote" | "figcaption"
+            | "figure" | "details" | "summary"
+            | "caption" | "thead" | "tbody" | "tfoot"
+            | "address" | "pre" | "fieldset" | "legend"
+    )
+}
+
+/// Convert a numeric entity codepoint to a character, applying HTML5 spec rules:
+/// - `&#0;` -> U+FFFD
+/// - C1 range (128-159) -> Windows-1252 mapping
+/// - Surrogates -> U+FFFD
+/// - Beyond Unicode range -> U+FFFD
+fn numeric_entity_to_char(n: u32) -> Option<char> {
+    if n == 0 {
+        Some('\u{FFFD}')
+    } else if (0x80..=0x9F).contains(&n) {
+        win1252_to_unicode(n).or(Some('\u{FFFD}'))
+    } else if (0xD800..=0xDFFF).contains(&n) || n > 0x10FFFF {
+        // Surrogates and beyond-Unicode codepoints -> replacement character
+        Some('\u{FFFD}')
+    } else {
+        char::from_u32(n).or(Some('\u{FFFD}'))
+    }
 }
 
 /// Map a named HTML entity to its Unicode character.
