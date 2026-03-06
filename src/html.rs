@@ -23,8 +23,6 @@ use regex::Regex;
 static WIKI_REF_BRACKET: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\[(\d+|edit|citation needed)\]|\bedit\]").unwrap());
 
-/// Two or more consecutive spaces -- used to collapse after ref bracket removal.
-static DOUBLE_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r" {2,}").unwrap());
 
 /// Strip HTML tags and decode entities, returning clean plain text.
 ///
@@ -407,6 +405,11 @@ fn strip_impl(html: &str) -> String {
         }
     }
 
+    // Strip Wikipedia reference markers [1], [edit], [citation needed] etc.
+    // Do this before whitespace cleanup so the cleanup pass collapses any
+    // resulting double spaces (no need for a separate DOUBLE_SPACE regex).
+    let text = WIKI_REF_BRACKET.replace_all(&text, "");
+
     // Collapse whitespace and strip invisible characters.
     // Uses byte-level scanning with ASCII fast path: printable ASCII (0x21-0x7E)
     // is bulk-copied; whitespace and multi-byte sequences are handled per-char.
@@ -466,9 +469,6 @@ fn strip_impl(html: &str) -> String {
         }
     }
 
-    // Strip Wikipedia reference markers, then collapse any resulting double spaces
-    let cleaned = WIKI_REF_BRACKET.replace_all(cleaned.trim(), "");
-    let cleaned = DOUBLE_SPACE.replace_all(&cleaned, " ");
     cleaned.trim().to_string()
 }
 
