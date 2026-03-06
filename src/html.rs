@@ -694,7 +694,19 @@ fn is_invisible_char(ch: char) -> bool {
     )
 }
 
-/// Decode all HTML entities in a string (e.g. attribute values).
+/// Decode all HTML entities in a string.
+///
+/// Handles named entities (`&amp;`), decimal (`&#169;`), hex (`&#xA9;`),
+/// Windows-1252 C1 range mapping, and semicolon-optional entities.
+///
+/// ```
+/// assert_eq!(deformat::html::decode_entities("Caf&eacute;"), "Café");
+/// assert_eq!(deformat::html::decode_entities("&#169; 2026"), "\u{00A9} 2026");
+/// ```
+pub fn decode_entities(s: &str) -> String {
+    decode_entities_in_str(s)
+}
+
 fn decode_entities_in_str(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
