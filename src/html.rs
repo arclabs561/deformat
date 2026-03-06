@@ -290,10 +290,11 @@ fn strip_impl(html: &str) -> String {
                     {
                         if let Some(alt) = extract_attr_value(&tag_buffer, "alt") {
                             if !alt.is_empty() {
+                                let decoded_alt = decode_entities_in_str(&alt);
                                 if !text.ends_with(' ') && !text.is_empty() {
                                     text.push(' ');
                                 }
-                                text.push_str(&alt);
+                                text.push_str(&decoded_alt);
                                 text.push(' ');
                             }
                         }
@@ -691,6 +692,20 @@ fn is_invisible_char(ch: char) -> bool {
         | '\u{2060}' // Word joiner
         | '\u{FEFF}' // BOM / zero-width no-break space (mid-text)
     )
+}
+
+/// Decode all HTML entities in a string (e.g. attribute values).
+fn decode_entities_in_str(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            decode_entity(&mut chars, &mut result);
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// Decode an HTML entity starting after the `&`. Pushes the decoded
@@ -1597,6 +1612,13 @@ mod tests {
         let text = strip_to_text("<p>Super<wbr>cali<wbr>fragilistic</p>");
         // wbr inserts space, preventing weird tokenization
         assert!(!text.contains("Supercali"), "wbr inserts space: {text}");
+    }
+
+    #[test]
+    fn img_alt_entities_decoded() {
+        let html = r#"<p>Photo:</p><img alt="Caf&eacute; au lait" src="photo.jpg">"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Café"), "entities in alt decoded: {text}");
     }
 
     #[test]
