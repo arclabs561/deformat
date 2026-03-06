@@ -221,16 +221,8 @@ fn strip_impl(html: &str) -> String {
                     "rt", "rp",
                 ];
 
-                // Full tag content (attributes) for wiki-skip detection.
-                // pos is now past '>'; the tag content is [tag_start..pos-1)
-                let tag_content_end = if pos > 0 && bytes[pos - 1] == b'>' {
-                    pos - 1
-                } else {
-                    pos
-                };
-                let tag_full_lower = html[tag_start..tag_content_end].to_ascii_lowercase();
-
-                // Wikipedia/MediaWiki structural skip
+                // Wikipedia/MediaWiki structural skip.
+                // Only check opening container tags that have attributes.
                 const WIKI_SKIP_IDS: &[&str] = &[
                     "toc", "references", "reflist", "catlinks",
                     "mw-panel", "mw-navigation", "sidebar", "sitesub",
@@ -238,41 +230,60 @@ fn strip_impl(html: &str) -> String {
                     "see-also", "further-reading", "mw-head",
                     "mw-page-base", "mw-head-base", "footer", "printfooter",
                 ];
-                let is_wiki_skip = WIKI_SKIP_IDS.iter().any(|id| {
-                    tag_full_lower.contains(&format!("id=\"{}\"", id))
-                        || tag_full_lower.contains(&format!("class=\"{}", id))
-                        || (tag_full_lower.contains(id)
-                            && (tag_full_lower.contains("class=")
-                                || tag_full_lower.contains("id=")))
-                });
-                if is_wiki_skip
-                    && matches!(
-                        tag_lower.as_str(),
-                        "div" | "ol" | "ul" | "table" | "span" | "section"
-                    )
+                let tag_content_end = if pos > 0 && bytes[pos - 1] == b'>' {
+                    pos - 1
+                } else {
+                    pos
+                };
+                if matches!(
+                    tag_lower.as_str(),
+                    "div" | "ol" | "ul" | "table" | "span" | "section"
+                ) && tag_content_end > tag_name_end
                 {
-                    wiki_skip_depth += 1;
-                    skip_depth += 1;
-                }
-
-                // Handle closing tags for wiki-skip containers
-                if wiki_skip_depth > 0 {
-                    const WIKI_CLOSE: &[&str] =
-                        &["div", "ol", "ul", "table", "span", "section"];
-                    for &wtag in WIKI_CLOSE {
-                        if tag_lower == format!("/{}", wtag) {
-                            wiki_skip_depth = wiki_skip_depth.saturating_sub(1);
-                            skip_depth = skip_depth.saturating_sub(1);
+                    // Only allocate lowercase when the tag has attributes
+                    let tag_full_lower =
+                        html[tag_start..tag_content_end].to_ascii_lowercase();
+                    let has_class = tag_full_lower.contains("class=");
+                    let has_id = tag_full_lower.contains("id=");
+                    if has_class || has_id {
+                        let is_wiki_skip = WIKI_SKIP_IDS.iter().any(|id| {
+                            tag_full_lower.contains(id)
+                        });
+                        if is_wiki_skip {
+                            wiki_skip_depth += 1;
+                            skip_depth += 1;
                         }
                     }
                 }
 
+                // Handle closing tags for wiki-skip and semantic skip.
+                // Use strip_prefix('/') to avoid format! allocations.
+                let is_close = tag_lower.starts_with('/');
+                let close_name = if is_close { &tag_lower[1..] } else { "" };
+
+                if wiki_skip_depth > 0
+                    && is_close
+                    && matches!(
+                        close_name,
+                        "div" | "ol" | "ul" | "table" | "span" | "section"
+                    )
+                {
+                    wiki_skip_depth = wiki_skip_depth.saturating_sub(1);
+                    skip_depth = skip_depth.saturating_sub(1);
+                }
+
                 // Semantic tag depth tracking
-                for &stag in SKIP_TAGS {
-                    if tag_lower == stag {
-                        skip_depth += 1;
-                    } else if tag_lower == format!("/{}", stag) {
-                        skip_depth = skip_depth.saturating_sub(1);
+                if is_close {
+                    for &stag in SKIP_TAGS {
+                        if close_name == stag {
+                            skip_depth = skip_depth.saturating_sub(1);
+                        }
+                    }
+                } else {
+                    for &stag in SKIP_TAGS {
+                        if tag_lower == stag {
+                            skip_depth += 1;
+                        }
                     }
                 }
 
