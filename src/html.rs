@@ -4,7 +4,7 @@
 //!
 //! 1. **`strip_to_text`** (always available) -- fast tag stripping with
 //!    entity decoding, semantic element filtering, and Wikipedia boilerplate
-//!    removal. Zero dependencies beyond `once_cell` + `regex`.
+//!    removal. Uses `memchr` for SIMD-accelerated scanning.
 //!
 //! 2. **`extract_with_html2text`** (feature `html2text`) -- DOM-based
 //!    conversion that preserves layout structure (tables, lists, indentation).
