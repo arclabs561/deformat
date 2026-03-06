@@ -369,10 +369,18 @@ fn strip_impl(html: &str) -> String {
                         && entity_str.as_bytes()[1].is_ascii_alphabetic()
                         && entity_str[1..].bytes().all(|b| b.is_ascii_alphanumeric())
                     {
-                        let with_semi = format!("{};", entity_str);
-                        if let Some(ch) = decode_named_entity(&with_semi) {
-                            text.push(ch);
-                            continue;
+                        // Stack buffer to avoid format! allocation
+                        let eb = entity_str.as_bytes();
+                        if eb.len() < 32 {
+                            let mut buf = [0u8; 32];
+                            buf[..eb.len()].copy_from_slice(eb);
+                            buf[eb.len()] = b';';
+                            let with_semi =
+                                std::str::from_utf8(&buf[..eb.len() + 1]).unwrap();
+                            if let Some(ch) = decode_named_entity(with_semi) {
+                                text.push(ch);
+                                continue;
+                            }
                         }
                     }
                     text.push_str(entity_str);
@@ -924,45 +932,62 @@ pub fn decode_entities(s: &str) -> String {
 }
 
 fn decode_entities_in_str(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '&' {
-            decode_entity(&mut chars, &mut result);
-        } else {
-            result.push(ch);
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut result = String::with_capacity(len);
+    let mut pos = 0;
+
+    while pos < len {
+        // Find next '&' using memchr; bulk-copy everything before it
+        match memchr::memchr(b'&', &bytes[pos..]) {
+            Some(offset) => {
+                if offset > 0 {
+                    result.push_str(&s[pos..pos + offset]);
+                }
+                pos += offset;
+                // Parse the entity starting at '&'
+                pos = decode_entity_bytes(s, bytes, pos, &mut result);
+            }
+            None => {
+                // No more '&' -- copy remainder and done
+                result.push_str(&s[pos..]);
+                break;
+            }
         }
     }
     result
 }
 
-/// Decode an HTML entity starting after the `&`. Pushes the decoded
-/// character(s) into `text`.
-fn decode_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, text: &mut String) {
-    let mut entity = String::from("&");
+/// Decode an HTML entity starting at `pos` (which points to '&').
+/// Returns the new position after the entity.
+fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -> usize {
+    let len = bytes.len();
+    debug_assert!(bytes[start] == b'&');
+
+    // Scan for entity end: ';', whitespace, '<', or end of input.
+    // Entity names are ASCII, so byte scanning is safe.
+    let mut end = start + 1;
     let mut found_semicolon = false;
 
-    while let Some(&next_ch) = chars.peek() {
-        if next_ch == ';' {
-            chars.next();
-            entity.push(';');
-            found_semicolon = true;
-            break;
+    while end < len {
+        match bytes[end] {
+            b';' => {
+                end += 1;
+                found_semicolon = true;
+                break;
+            }
+            b' ' | b'\t' | b'\n' | b'\r' | b'<' => break,
+            _ => end += 1,
         }
-        if next_ch.is_whitespace() || next_ch == '<' {
-            // Don't consume the terminator -- it belongs to the next token
-            break;
-        }
-        entity.push(chars.next().expect("peek returned Some"));
     }
 
+    let entity_str = &s[start..end];
+
     if found_semicolon {
-        // Try named entity lookup first, then numeric fallback
-        if let Some(ch) = decode_named_entity(&entity) {
+        if let Some(ch) = decode_named_entity(entity_str) {
             text.push(ch);
-        } else if entity.starts_with("&#") && entity.len() > 3 {
-            // Numeric entity (decimal &#N; or hex &#xN;)
-            let num_str = &entity[2..entity.len() - 1];
+        } else if entity_str.starts_with("&#") && entity_str.len() > 3 {
+            let num_str = &entity_str[2..entity_str.len() - 1];
             let parsed = if let Some(hex) =
                 num_str.strip_prefix('x').or_else(|| num_str.strip_prefix('X'))
             {
@@ -970,49 +995,39 @@ fn decode_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, text: &mu
             } else {
                 num_str.parse::<u32>().ok()
             };
-            if let Some(ch) = parsed.and_then(|n| {
-                if n == 0 {
-                    // HTML5 spec: &#0; maps to U+FFFD REPLACEMENT CHARACTER
-                    Some('\u{FFFD}')
-                } else if (0x80..=0x9F).contains(&n) {
-                    // C1 control range: use Win-1252 mapping, or U+FFFD for
-                    // unmapped codepoints (0x81, 0x8D, 0x8F, 0x90) per HTML5 spec
-                    win1252_to_unicode(n).or(Some('\u{FFFD}'))
-                } else if (0xD800..=0xDFFF).contains(&n) {
-                    // Surrogate codepoints: always U+FFFD per HTML5 spec
-                    Some('\u{FFFD}')
-                } else if n > 0x10FFFF {
-                    // Beyond Unicode range: U+FFFD
-                    Some('\u{FFFD}')
-                } else {
-                    // char::from_u32 returns None for noncharacters (U+FDD0-U+FDEF,
-                    // last two of each plane); fall through to emit U+FFFD
-                    char::from_u32(n).or(Some('\u{FFFD}'))
-                }
-            }) {
+            if let Some(ch) = parsed.and_then(numeric_entity_to_char) {
                 text.push(ch);
             } else {
-                text.push_str(&entity);
+                text.push_str(entity_str);
             }
         } else {
-            text.push_str(&entity);
+            text.push_str(entity_str);
         }
     } else {
-        // Semicolon-optional: try interpreting as a named entity without ';'
-        // Real web content sometimes omits the semicolon (e.g. &hellip or &amp)
-        // Only attempt for entity-like strings (&alpha...) not arbitrary text (&T)
-        if entity.len() > 2
-            && entity.as_bytes()[1].is_ascii_alphabetic()
-            && entity.chars().skip(1).all(|c| c.is_ascii_alphanumeric())
+        // Semicolon-optional: try as named entity with appended ';'
+        // Only for entity-like strings (&alpha...) -- all ASCII alphanumeric after '&'
+        if entity_str.len() > 2
+            && bytes[start + 1].is_ascii_alphabetic()
+            && entity_str[1..].bytes().all(|b| b.is_ascii_alphanumeric())
         {
-            let with_semi = format!("{};", entity);
-            if let Some(ch) = decode_named_entity(&with_semi) {
-                text.push(ch);
-                return;
+            // Use a stack buffer to avoid format! allocation
+            let entity_bytes = entity_str.as_bytes();
+            let entity_with_semi_len = entity_bytes.len() + 1;
+            if entity_with_semi_len <= 32 {
+                let mut buf = [0u8; 32];
+                buf[..entity_bytes.len()].copy_from_slice(entity_bytes);
+                buf[entity_bytes.len()] = b';';
+                // SAFETY: entity_str is ASCII (checked above), ';' is ASCII
+                let with_semi = std::str::from_utf8(&buf[..entity_with_semi_len]).unwrap();
+                if let Some(ch) = decode_named_entity(with_semi) {
+                    text.push(ch);
+                    return end;
+                }
             }
         }
-        text.push_str(&entity);
+        text.push_str(entity_str);
     }
+    end
 }
 
 #[cfg(test)]
