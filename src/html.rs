@@ -232,29 +232,7 @@ fn strip_impl(html: &str) -> String {
 
                 // Semantic skip tags -- matched via is_skip_tag() below.
 
-                // Wikipedia/MediaWiki structural skip.
-                // Only check opening container tags that have attributes.
-                const WIKI_SKIP_IDS: &[&str] = &[
-                    "toc",
-                    "references",
-                    "reflist",
-                    "catlinks",
-                    "mw-panel",
-                    "mw-navigation",
-                    "sidebar",
-                    "sitesub",
-                    "contentsub",
-                    "jump-to-nav",
-                    "navbox",
-                    "external",
-                    "see-also",
-                    "further-reading",
-                    "mw-head",
-                    "mw-page-base",
-                    "mw-head-base",
-                    "footer",
-                    "printfooter",
-                ];
+                // Wikipedia/MediaWiki structural skip (zero-alloc via is_wiki_skip_tag).
                 let tag_content_end = if pos > 0 && bytes[pos - 1] == b'>' {
                     pos - 1
                 } else {
@@ -265,17 +243,15 @@ fn strip_impl(html: &str) -> String {
                     "div" | "ol" | "ul" | "table" | "span" | "section"
                 ) && tag_content_end > tag_name_end
                 {
-                    // Only allocate lowercase when the tag has attributes
-                    let tag_full_lower = html[tag_start..tag_content_end].to_ascii_lowercase();
-                    let has_class = tag_full_lower.contains("class=");
-                    let has_id = tag_full_lower.contains("id=");
-                    if has_class || has_id {
-                        let is_wiki_skip =
-                            WIKI_SKIP_IDS.iter().any(|id| tag_full_lower.contains(id));
-                        if is_wiki_skip {
-                            wiki_skip_depth += 1;
-                            skip_depth += 1;
-                        }
+                    // Zero-alloc wiki skip detection: extract class/id attr values
+                    // using the existing borrowed-return extract_attr_value, then
+                    // case-insensitively check for skip IDs.
+                    let tag_buf_start = tag_start.saturating_sub(1); // include '<'
+                    let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                    let is_wiki_skip = is_wiki_skip_tag(tag_buffer);
+                    if is_wiki_skip {
+                        wiki_skip_depth += 1;
+                        skip_depth += 1;
                     }
                 }
 
@@ -563,6 +539,45 @@ fn strip_wiki_ref_markers(s: &str) -> Cow<'_, str> {
     }
 
     Cow::Owned(result)
+}
+
+/// Check if a tag buffer contains a Wikipedia/MediaWiki class or id that
+/// indicates structural boilerplate (TOC, references, navboxes, etc.).
+///
+/// Uses `extract_attr_value` for zero-allocation attribute extraction,
+/// then does case-insensitive substring matching against known skip IDs.
+fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
+    const WIKI_SKIP_IDS: &[&str] = &[
+        "toc",
+        "references",
+        "reflist",
+        "catlinks",
+        "mw-panel",
+        "mw-navigation",
+        "sidebar",
+        "sitesub",
+        "contentsub",
+        "jump-to-nav",
+        "navbox",
+        "external",
+        "see-also",
+        "further-reading",
+        "mw-head",
+        "mw-page-base",
+        "mw-head-base",
+        "footer",
+        "printfooter",
+    ];
+    // Check class and id attribute values (case-insensitive via lowercase comparison)
+    for attr in &["class", "id"] {
+        if let Some(val) = extract_attr_value(tag_buffer, attr) {
+            let val_lower = val.to_ascii_lowercase();
+            if WIKI_SKIP_IDS.iter().any(|id| val_lower.contains(id)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Returns true if the tag name is a semantic skip element whose content
