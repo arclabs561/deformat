@@ -392,3 +392,181 @@ fn extract_preserves_format_for_cjk_html() {
     assert!(result.text.contains("東京"), "base text in extract: {}", result.text);
     assert!(!result.text.contains("とうきょう"), "furigana stripped in extract: {}", result.text);
 }
+
+// =============================================================================
+// Central/Eastern European entity decoding
+// =============================================================================
+
+#[test]
+fn polish_wikipedia_article() {
+    let html = r#"<!DOCTYPE html>
+    <html><head><title>Łódź - Wikipedia</title></head>
+    <body>
+        <nav><a href="/">Strona główna</a></nav>
+        <article>
+            <h1>&Lstrok;&oacute;d&zacute;</h1>
+            <p>&Lstrok;&oacute;d&zacute; jest trzecim co do wielko&sacute;ci miastem
+               w Polsce. Prezydent miasta, Hanna Zdanowska (ur. 1957),
+               kieruje miastem od 2010 roku. W 2023 roku Jaros&lstrok;aw
+               Kaczy&nacute;ski odwiedzi&lstrok; &Lstrok;&oacute;d&zacute;.</p>
+            <p>Miasto le&zdot;y nad rzek&aogonek; &Lstrok;&oacute;dk&aogonek;
+               i jest wa&zdot;nym o&sacute;rodkiem przemys&lstrok;owym.</p>
+        </article>
+        <footer><p>&copy; Wikipedia</p></footer>
+    </body></html>"#;
+
+    let text = deformat::html::strip_to_text(html);
+
+    // Polish entities decoded correctly
+    assert!(text.contains("Łódź"), "Lstrok+oacute+zacute: {text}");
+    assert!(text.contains("Jarosław"), "lstrok: {text}");
+    assert!(text.contains("Kaczyński"), "nacute: {text}");
+    assert!(text.contains("wielkości"), "sacute: {text}");
+    assert!(text.contains("leży"), "zdot: {text}");
+    assert!(text.contains("rzeką"), "aogonek: {text}");
+    assert!(text.contains("ośrodkiem"), "sacute in word: {text}");
+    assert!(text.contains("przemysłowym"), "lstrok in word: {text}");
+
+    // Boilerplate stripped
+    assert!(!text.contains("Strona główna"), "nav stripped: {text}");
+    assert!(!text.contains("Wikipedia"), "footer stripped: {text}");
+}
+
+#[test]
+fn turkish_entity_decoding() {
+    let html = r#"<article>
+        <p>Recep Tayyip Erdo&gbreve;an, T&uuml;rkiye Cumhurba&scedil;kan&inodot;,
+           &Idot;stanbul'da bir toplant&inodot;ya kat&inodot;ld&inodot;.
+           Mu&gbreve;la ve Antalya'dan delegeler de vard&inodot;.</p>
+    </article>"#;
+
+    let text = deformat::html::strip_to_text(html);
+    assert!(text.contains("Erdoğan"), "gbreve: {text}");
+    assert!(text.contains("İstanbul"), "Idot: {text}");
+    assert!(text.contains("Cumhurbaşkanı"), "scedil+inodot: {text}");
+    assert!(text.contains("Muğla"), "gbreve in city name: {text}");
+    assert!(text.contains("toplantıya"), "inodot in word: {text}");
+}
+
+#[test]
+fn czech_entity_decoding() {
+    let html = r#"<article>
+        <p>V &Ccaron;esk&eacute; republice se kon&aacute; summit.
+           Premi&eacute;r Petr Fiala a prezident Petr Pavel se setkali
+           v Pra&zcaron;sk&eacute;m hrad&ecaron;.</p>
+    </article>"#;
+
+    let text = deformat::html::strip_to_text(html);
+    assert!(text.contains("České"), "Ccaron: {text}");
+    assert!(text.contains("Pražském"), "zcaron: {text}");
+    assert!(text.contains("hradě"), "ecaron: {text}");
+}
+
+// =============================================================================
+// decode_entities standalone function
+// =============================================================================
+
+#[test]
+fn decode_entities_multilingual() {
+    assert_eq!(
+        deformat::html::decode_entities("Caf&eacute; in &Lstrok;&oacute;d&zacute;"),
+        "Café in Łódź"
+    );
+    assert_eq!(
+        deformat::html::decode_entities("Erdo&gbreve;an visited &Idot;stanbul"),
+        "Erdoğan visited İstanbul"
+    );
+    assert_eq!(
+        deformat::html::decode_entities("&Ccaron;esk&aacute; &amp; Slovensk&aacute;"),
+        "Česká & Slovenská"
+    );
+}
+
+// =============================================================================
+// Complex kitchen-sink document
+// =============================================================================
+
+#[test]
+fn kitchen_sink_all_features() {
+    // Tests: skip tags, entities (named + numeric + Win1252), ruby annotations,
+    // tables, img alt, wiki boilerplate, bidi controls, and whitespace handling
+    let html = r#"<!DOCTYPE html>
+    <html><head>
+        <title>Test Article</title>
+        <style>body { color: black; }</style>
+        <script>var x = 1;</script>
+    </head>
+    <body>
+        <nav><a href="/">Home</a> | <a href="/about">About</a></nav>
+        <header><div id="sitesub">From TestWiki</div></header>
+        <article>
+            <h1><ruby>東京<rt>とうきょう</rt></ruby> Summit 2026</h1>
+            <div id="toc"><h2>Contents</h2><ul><li>1 Overview</li></ul></div>
+            <p>Nestl&eacute; CEO Laurent Freixe met with
+               <ruby>安倍<rt>あべ</rt></ruby><ruby>晋三<rt>しんぞう</rt></ruby>
+               in S&atilde;o Paulo. The &#8364;5 billion deal[1] was
+               signed at the B&ouml;rse Frankfurt&#146;s main hall.</p>
+            <table class="infobox">
+                <tr><th>Location</th><td>&Lstrok;&oacute;d&zacute;, Poland</td></tr>
+                <tr><th>Date</th><td>March 15, 2026</td></tr>
+            </table>
+            <p>Erdo&gbreve;an and &Ccaron;esk&yacute; delegates attended.
+               <img src="photo.jpg" alt="Laurent Freixe at podium">
+               The atmosphere was &#x201C;historic&#x201D;.</p>
+            <ol class="references">
+                <li id="cite_note-1">Source: Reuters (2026).</li>
+            </ol>
+            <div class="navbox"><table><tr><td>Related articles</td></tr></table></div>
+        </article>
+        <aside><h3>Trending</h3><ul><li>Other news</li></ul></aside>
+        <footer><p>&copy; 2026 TestWiki. Licensed under CC.</p></footer>
+    </body></html>"#;
+
+    let text = deformat::html::strip_to_text(html);
+
+    // Content preserved
+    assert!(text.contains("東京"), "CJK base text: {text}");
+    assert!(text.contains("Summit 2026"), "title: {text}");
+    assert!(text.contains("Nestlé"), "eacute entity: {text}");
+    assert!(text.contains("Laurent Freixe"), "name: {text}");
+    assert!(text.contains("安倍"), "CJK name 1: {text}");
+    assert!(text.contains("晋三"), "CJK name 2: {text}");
+    assert!(text.contains("São Paulo"), "atilde entity: {text}");
+    assert!(text.contains("€"), "numeric entity (euro): {text}");
+    assert!(text.contains("Börse"), "ouml entity: {text}");
+    assert!(text.contains("Łódź"), "Latin Extended-A entities: {text}");
+    assert!(text.contains("Erdoğan"), "Turkish gbreve: {text}");
+    assert!(text.contains("Český"), "Czech Ccaron: {text}");
+    assert!(text.contains("Laurent Freixe at podium"), "img alt text: {text}");
+
+    // Win-1252 entity: &#146; = right single quote
+    assert!(text.contains('\u{2019}'), "Win1252 right quote: {text}");
+    // Hex entity: curly quotes
+    assert!(text.contains('\u{201C}'), "hex left curly quote: {text}");
+    assert!(text.contains('\u{201D}'), "hex right curly quote: {text}");
+
+    // Furigana stripped
+    assert!(!text.contains("とうきょう"), "Tokyo furigana stripped: {text}");
+    assert!(!text.contains("あべ"), "Abe furigana stripped: {text}");
+    assert!(!text.contains("しんぞう"), "Shinzo furigana stripped: {text}");
+
+    // Boilerplate stripped
+    assert!(!text.contains("Home"), "nav stripped: {text}");
+    assert!(!text.contains("About"), "nav stripped: {text}");
+    assert!(!text.contains("TestWiki"), "footer stripped: {text}");
+    assert!(!text.contains("Contents"), "TOC stripped: {text}");
+    assert!(!text.contains("Reuters"), "references stripped: {text}");
+    assert!(!text.contains("Related articles"), "navbox stripped: {text}");
+    assert!(!text.contains("Trending"), "aside stripped: {text}");
+    assert!(!text.contains("Other news"), "aside stripped: {text}");
+    assert!(!text.contains("color: black"), "style stripped: {text}");
+    assert!(!text.contains("var x"), "script stripped: {text}");
+
+    // Structural invariants
+    assert!(!text.contains("  "), "no double spaces: {text}");
+    assert_eq!(text, text.trim(), "output trimmed");
+    assert!(!text.contains("[1]"), "wiki ref markers stripped: {text}");
+
+    // Table cells not fused
+    assert!(!text.contains("LocationŁódź"), "th-td not fused: {text}");
+}
