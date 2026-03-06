@@ -138,8 +138,19 @@ fn strip_impl(html: &str) -> String {
                 tag_buffer.push('<');
                 let mut tag_name = String::new();
                 let mut in_tag_name = true;
+                let mut in_attr_quote: Option<char> = None; // Track quote context
 
                 while let Some(&next_ch) = chars.peek() {
+                    // Inside a quoted attribute value, '>' does not end the tag
+                    if let Some(q) = in_attr_quote {
+                        let c = chars.next().expect("peek returned Some");
+                        tag_buffer.push(c);
+                        if c == q {
+                            in_attr_quote = None;
+                        }
+                        continue;
+                    }
+
                     if next_ch == '>' {
                         chars.next();
                         tag_buffer.push('>');
@@ -228,7 +239,12 @@ fn strip_impl(html: &str) -> String {
                     } else if in_tag_name {
                         tag_name.push(chars.next().expect("peek returned Some"));
                     } else {
-                        tag_buffer.push(chars.next().expect("peek returned Some"));
+                        let c = chars.next().expect("peek returned Some");
+                        // Detect start of quoted attribute value
+                        if (c == '"' || c == '\'') && in_attr_quote.is_none() {
+                            in_attr_quote = Some(c);
+                        }
+                        tag_buffer.push(c);
                     }
                 }
 
@@ -500,8 +516,14 @@ fn decode_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, text: &mu
             } else {
                 num_str.parse::<u32>().ok()
             };
-            if let Some(ch) = parsed.and_then(|n| win1252_to_unicode(n).or_else(|| char::from_u32(n)))
-            {
+            if let Some(ch) = parsed.and_then(|n| {
+                if n == 0 {
+                    // HTML5 spec: &#0; maps to U+FFFD REPLACEMENT CHARACTER
+                    Some('\u{FFFD}')
+                } else {
+                    win1252_to_unicode(n).or_else(|| char::from_u32(n))
+                }
+            }) {
                 text.push(ch);
             } else {
                 text.push_str(&entity);
@@ -901,6 +923,49 @@ mod tests {
         assert!(text.contains("Real"), "before: {text}");
         assert!(text.contains("Also real"), "after: {text}");
         assert!(!text.contains("IE only"), "conditional stripped: {text}");
+    }
+
+    #[test]
+    fn quoted_attribute_with_gt() {
+        // '>' inside a quoted attribute should NOT end the tag
+        let html = r#"<div title="a > b">Content</div>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Content"), "content preserved: {text}");
+        assert!(!text.contains("a > b"), "attr value not leaked: {text}");
+        assert!(!text.contains("title"), "attr name not leaked: {text}");
+    }
+
+    #[test]
+    fn quoted_attribute_with_lt() {
+        let html = r#"<span data-expr="x < 10">Result</span>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Result"), "content preserved: {text}");
+        assert!(!text.contains("x < 10"), "attr not leaked: {text}");
+    }
+
+    #[test]
+    fn single_quoted_attribute_with_gt() {
+        let html = "<div title='a > b'>Content</div>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Content"), "content preserved: {text}");
+        assert!(!text.contains("a > b"), "attr not leaked: {text}");
+    }
+
+    #[test]
+    fn nested_quotes_in_attribute() {
+        // Double quotes inside single-quoted attr
+        let html = r#"<a title='He said "hello"'>Link</a>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Link"), "content preserved: {text}");
+        assert!(!text.contains("hello"), "nested quote attr not leaked: {text}");
+    }
+
+    #[test]
+    fn null_entity_becomes_replacement_char() {
+        let text = strip_to_text("<p>Before&#0;After</p>");
+        assert!(text.contains("Before"), "before null: {text}");
+        assert!(text.contains("After"), "after null: {text}");
+        assert!(text.contains('\u{FFFD}'), "null becomes replacement char: {text}");
     }
 
     #[test]
