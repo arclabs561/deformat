@@ -499,3 +499,63 @@ proptest! {
         );
     }
 }
+
+// =============================================================================
+// Invariant: strip_to_text is idempotent (output is already clean text)
+// =============================================================================
+
+proptest! {
+    #[test]
+    fn strip_is_idempotent(html in arb_html_fragment()) {
+        let once = deformat::html::strip_to_text(&html);
+        // Entity decoding can produce '<' / '>' from &lt; / &gt;, which the
+        // second pass would then treat as tag markers. Skip check in that case.
+        if once.contains('<') || once.contains('>') {
+            return Ok(());
+        }
+        let twice = deformat::html::strip_to_text(&once);
+        prop_assert_eq!(
+            once,
+            twice,
+            "strip_to_text not idempotent on input: {:?}",
+            &html[..html.len().min(80)]
+        );
+    }
+}
+
+// =============================================================================
+// Invariant: output is valid UTF-8 (should be guaranteed by Rust, but verify)
+// =============================================================================
+
+proptest! {
+    #[test]
+    fn output_is_valid_utf8(html in arb_html_fragment()) {
+        let text = deformat::html::strip_to_text(&html);
+        // If we got here, the String was valid UTF-8.
+        // Double-check by round-tripping through bytes.
+        let bytes = text.as_bytes();
+        let roundtrip = std::str::from_utf8(bytes);
+        prop_assert!(
+            roundtrip.is_ok(),
+            "Output is not valid UTF-8: {:?}",
+            text
+        );
+    }
+}
+
+// =============================================================================
+// Invariant: detect_str agrees with memchr('<', ...) heuristic
+// =============================================================================
+
+proptest! {
+    #[test]
+    fn no_angle_bracket_means_not_html(text in "[a-zA-Z0-9 .,!?'-]{1,200}") {
+        // Text with no '<' should never be detected as HTML
+        prop_assert_eq!(
+            deformat::detect::detect_str(&text),
+            deformat::detect::Format::PlainText,
+            "Text without '<' detected as HTML: {:?}",
+            &text[..text.len().min(80)]
+        );
+    }
+}
