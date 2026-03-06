@@ -252,6 +252,57 @@ fn output_is_trimmed() {
 }
 
 // =============================================================================
+// Table / infobox extraction
+// =============================================================================
+
+#[test]
+fn wikipedia_infobox_cells_not_fused() {
+    let html = r#"<html><body>
+        <table class="infobox">
+            <tr><th>Born</th><td>June 1, 1955</td></tr>
+            <tr><th>Country</th><td>England</td></tr>
+            <tr><th>Died</th><td>March 9, 2020</td></tr>
+            <tr><th>Nationality</th><td>British</td></tr>
+        </table>
+        <p>Article content about this person.</p>
+    </body></html>"#;
+    let text = deformat::html::strip_to_text(html);
+
+    // Key invariant: no cell fusion
+    assert!(
+        !text.contains("BornJune"),
+        "th-td fusion: {text}"
+    );
+    assert!(
+        !text.contains("EnglandDied"),
+        "cross-row fusion: {text}"
+    );
+    assert!(
+        !text.contains("BritishArticle"),
+        "table-paragraph fusion: {text}"
+    );
+    assert!(text.contains("Article content"), "body preserved: {text}");
+}
+
+// =============================================================================
+// Attribute value isolation
+// =============================================================================
+
+#[test]
+fn attribute_gt_does_not_break_extraction() {
+    // Real-world: data attributes with comparison operators
+    let html = r#"<html><body>
+        <div data-filter="age > 18" data-sort="name < desc">
+            <p>Visible content here.</p>
+        </div>
+    </body></html>"#;
+    let text = deformat::html::strip_to_text(html);
+    assert!(text.contains("Visible content"), "content preserved: {text}");
+    assert!(!text.contains("age > 18"), "attr not leaked: {text}");
+    assert!(!text.contains("data-filter"), "attr name not leaked: {text}");
+}
+
+// =============================================================================
 // Extracted struct
 // =============================================================================
 

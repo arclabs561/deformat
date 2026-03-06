@@ -248,23 +248,50 @@ fn strip_impl(html: &str) -> String {
                     }
                 }
 
-                // Insert space after block-level elements for readability
+                // Insert space around block-level elements for readability.
+                // Strip leading "/" from closing tags so </td> matches "td".
+                let effective_tag = tag_name.to_lowercase();
+                let effective_tag = effective_tag
+                    .strip_prefix('/')
+                    .unwrap_or(&effective_tag);
                 if !in_script
                     && !in_style
                     && skip_depth == 0
                     && matches!(
-                        tag_name.to_lowercase().as_str(),
+                        effective_tag,
                         "p" | "div" | "br" | "li" | "ul" | "ol"
                             | "td" | "th" | "tr" | "dt" | "dd"
                             | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
                             | "section" | "article" | "header" | "footer"
                             | "aside" | "main" | "blockquote" | "figcaption"
                             | "figure" | "details" | "summary"
+                            | "caption" | "thead" | "tbody" | "tfoot"
                     )
                     && !text.ends_with(' ')
                     && !text.is_empty()
                 {
                     text.push(' ');
+                }
+
+                // Extract alt text from <img> tags (important for NER:
+                // news photo alt text often contains full person names)
+                {
+                    let tl = tag_name.to_lowercase();
+                    if !in_script
+                        && !in_style
+                        && skip_depth == 0
+                        && (tl == "img" || tl.starts_with("img "))
+                    {
+                        if let Some(alt) = extract_attr_value(&tag_buffer, "alt") {
+                            if !alt.is_empty() {
+                                if !text.ends_with(' ') && !text.is_empty() {
+                                    text.push(' ');
+                                }
+                                text.push_str(&alt);
+                                text.push(' ');
+                            }
+                        }
+                    }
                 }
             }
             '>' if in_tag => {
@@ -430,6 +457,36 @@ fn decode_named_entity(entity: &str) -> Option<char> {
         // Numeric shortcuts commonly seen in web content
         "&#39;" => Some('\''),
         _ => None,
+    }
+}
+
+/// Extract the value of an HTML attribute from a tag buffer.
+///
+/// Handles both `attr="value"` and `attr='value'` formats.
+/// Returns `None` if the attribute is not found.
+fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
+    let tag_lower = tag.to_lowercase();
+    // Look for attr_name= (with optional whitespace around =)
+    let needle = format!("{}=", attr_name);
+    let pos = tag_lower.find(&needle)?;
+    let after_eq = pos + needle.len();
+    let rest = &tag[after_eq..];
+    let rest = rest.trim_start();
+
+    if let Some(inner) = rest.strip_prefix('"') {
+        // Double-quoted value
+        let end = inner.find('"')?;
+        Some(inner[..end].to_string())
+    } else if let Some(inner) = rest.strip_prefix('\'') {
+        // Single-quoted value
+        let end = inner.find('\'')?;
+        Some(inner[..end].to_string())
+    } else {
+        // Unquoted value (ends at whitespace or >)
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '>')
+            .unwrap_or(rest.len());
+        Some(rest[..end].to_string())
     }
 }
 
@@ -1109,6 +1166,72 @@ mod tests {
         assert!(text.contains("Article text"), "article preserved: {text}");
         assert!(!text.contains("Chart Label"), "svg text skipped: {text}");
         assert!(!text.contains("Graph"), "svg title skipped: {text}");
+    }
+
+    // ===== Image alt text extraction =====
+
+    #[test]
+    fn img_alt_text_extracted() {
+        let html = r#"<p>The president spoke today.</p>
+            <img src="photo.jpg" alt="President Biden at the White House">
+            <p>He discussed policy.</p>"#;
+        let text = strip_to_text(html);
+        assert!(
+            text.contains("President Biden at the White House"),
+            "alt text extracted: {text}"
+        );
+        assert!(text.contains("spoke today"), "body preserved: {text}");
+    }
+
+    #[test]
+    fn img_alt_empty_not_added() {
+        let html = r#"<p>Text.</p><img src="spacer.gif" alt=""><p>More.</p>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Text"), "before img: {text}");
+        assert!(text.contains("More"), "after img: {text}");
+    }
+
+    #[test]
+    fn img_no_alt_attribute() {
+        let html = r#"<p>Text.</p><img src="photo.jpg"><p>More.</p>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Text"), "before: {text}");
+        assert!(text.contains("More"), "after: {text}");
+    }
+
+    #[test]
+    fn img_alt_in_skipped_region_not_extracted() {
+        let html = r#"<nav><img alt="Logo" src="logo.png"></nav><p>Content.</p>"#;
+        let text = strip_to_text(html);
+        assert!(!text.contains("Logo"), "alt in nav skipped: {text}");
+        assert!(text.contains("Content"), "body preserved: {text}");
+    }
+
+    // ===== Table cell separation =====
+
+    #[test]
+    fn table_cells_separated() {
+        // Wikipedia infobox pattern: <th>Key</th><td>Value</td> must not fuse
+        let html = r#"<table><tr><th>Country</th><td>England</td></tr>
+            <tr><th>Region</th><td>South East</td></tr></table>"#;
+        let text = strip_to_text(html);
+        assert!(
+            !text.contains("CountryEngland"),
+            "th/td must be separated: {text}"
+        );
+        assert!(text.contains("Country"), "th preserved: {text}");
+        assert!(text.contains("England"), "td preserved: {text}");
+        assert!(
+            !text.contains("EnglandRegion"),
+            "rows must be separated: {text}"
+        );
+    }
+
+    #[test]
+    fn closing_td_inserts_space() {
+        let html = "<td>Apple</td><td>Inc</td>";
+        let text = strip_to_text(html);
+        assert!(!text.contains("AppleInc"), "cells separated: {text}");
     }
 
     #[test]
