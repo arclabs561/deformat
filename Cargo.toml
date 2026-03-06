@@ -38,3 +38,4 @@ readability = ["dep:dom_smoothie"]
 pdf = ["dep:pdf-extract"]
 
 [dev-dependencies]
+proptest = "1"

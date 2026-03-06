@@ -338,126 +338,271 @@ fn strip_impl(html: &str) -> String {
 /// Covers the most common entities encountered in real web content,
 /// especially those important for NER (accented names, currency symbols,
 /// punctuation). Not exhaustive -- rare entities pass through as-is.
+/// Sorted table of named HTML entities -> Unicode codepoint.
+/// Covers the ~250 most commonly encountered entities in web content,
+/// including all of ISO-8859-1/Latin-1, Greek letters, math symbols,
+/// arrows, and typographic punctuation.
+static NAMED_ENTITIES: &[(&str, char)] = &[
+    ("&AElig;", '\u{00C6}'),
+    ("&Aacute;", '\u{00C1}'),
+    ("&Acirc;", '\u{00C2}'),
+    ("&Agrave;", '\u{00C0}'),
+    ("&Alpha;", '\u{0391}'),
+    ("&Aring;", '\u{00C5}'),
+    ("&Atilde;", '\u{00C3}'),
+    ("&Auml;", '\u{00C4}'),
+    ("&Beta;", '\u{0392}'),
+    ("&Ccedil;", '\u{00C7}'),
+    ("&Chi;", '\u{03A7}'),
+    ("&Dagger;", '\u{2021}'),
+    ("&Delta;", '\u{0394}'),
+    ("&ETH;", '\u{00D0}'),
+    ("&Eacute;", '\u{00C9}'),
+    ("&Ecirc;", '\u{00CA}'),
+    ("&Egrave;", '\u{00C8}'),
+    ("&Epsilon;", '\u{0395}'),
+    ("&Eta;", '\u{0397}'),
+    ("&Euml;", '\u{00CB}'),
+    ("&Gamma;", '\u{0393}'),
+    ("&Iacute;", '\u{00CD}'),
+    ("&Icirc;", '\u{00CE}'),
+    ("&Igrave;", '\u{00CC}'),
+    ("&Iota;", '\u{0399}'),
+    ("&Iuml;", '\u{00CF}'),
+    ("&Kappa;", '\u{039A}'),
+    ("&Lambda;", '\u{039B}'),
+    ("&Mu;", '\u{039C}'),
+    ("&Ntilde;", '\u{00D1}'),
+    ("&Nu;", '\u{039D}'),
+    ("&OElig;", '\u{0152}'),
+    ("&Oacute;", '\u{00D3}'),
+    ("&Ocirc;", '\u{00D4}'),
+    ("&Ograve;", '\u{00D2}'),
+    ("&Omega;", '\u{03A9}'),
+    ("&Omicron;", '\u{039F}'),
+    ("&Oslash;", '\u{00D8}'),
+    ("&Otilde;", '\u{00D5}'),
+    ("&Ouml;", '\u{00D6}'),
+    ("&Phi;", '\u{03A6}'),
+    ("&Pi;", '\u{03A0}'),
+    ("&Prime;", '\u{2033}'),
+    ("&Psi;", '\u{03A8}'),
+    ("&Rho;", '\u{03A1}'),
+    ("&Scaron;", '\u{0160}'),
+    ("&Sigma;", '\u{03A3}'),
+    ("&THORN;", '\u{00DE}'),
+    ("&Tau;", '\u{03A4}'),
+    ("&Theta;", '\u{0398}'),
+    ("&Uacute;", '\u{00DA}'),
+    ("&Ucirc;", '\u{00DB}'),
+    ("&Ugrave;", '\u{00D9}'),
+    ("&Upsilon;", '\u{03A5}'),
+    ("&Uuml;", '\u{00DC}'),
+    ("&Xi;", '\u{039E}'),
+    ("&Yacute;", '\u{00DD}'),
+    ("&Yuml;", '\u{0178}'),
+    ("&Zeta;", '\u{0396}'),
+    ("&aacute;", '\u{00E1}'),
+    ("&acirc;", '\u{00E2}'),
+    ("&acute;", '\u{00B4}'),
+    ("&aelig;", '\u{00E6}'),
+    ("&agrave;", '\u{00E0}'),
+    ("&alefsym;", '\u{2135}'),
+    ("&alpha;", '\u{03B1}'),
+    ("&amp;", '&'),
+    ("&and;", '\u{2227}'),
+    ("&ang;", '\u{2220}'),
+    ("&apos;", '\''),
+    ("&aring;", '\u{00E5}'),
+    ("&asymp;", '\u{2248}'),
+    ("&atilde;", '\u{00E3}'),
+    ("&auml;", '\u{00E4}'),
+    ("&bdquo;", '\u{201E}'),
+    ("&beta;", '\u{03B2}'),
+    ("&brvbar;", '\u{00A6}'),
+    ("&bull;", '\u{2022}'),
+    ("&cap;", '\u{2229}'),
+    ("&ccedil;", '\u{00E7}'),
+    ("&cedil;", '\u{00B8}'),
+    ("&cent;", '\u{00A2}'),
+    ("&chi;", '\u{03C7}'),
+    ("&circ;", '\u{02C6}'),
+    ("&clubs;", '\u{2663}'),
+    ("&cong;", '\u{2245}'),
+    ("&copy;", '\u{00A9}'),
+    ("&crarr;", '\u{21B5}'),
+    ("&cup;", '\u{222A}'),
+    ("&curren;", '\u{00A4}'),
+    ("&dArr;", '\u{21D3}'),
+    ("&dagger;", '\u{2020}'),
+    ("&darr;", '\u{2193}'),
+    ("&deg;", '\u{00B0}'),
+    ("&delta;", '\u{03B4}'),
+    ("&diams;", '\u{2666}'),
+    ("&divide;", '\u{00F7}'),
+    ("&eacute;", '\u{00E9}'),
+    ("&ecirc;", '\u{00EA}'),
+    ("&egrave;", '\u{00E8}'),
+    ("&empty;", '\u{2205}'),
+    ("&emsp;", '\u{2003}'),
+    ("&ensp;", '\u{2002}'),
+    ("&epsilon;", '\u{03B5}'),
+    ("&equiv;", '\u{2261}'),
+    ("&eta;", '\u{03B7}'),
+    ("&eth;", '\u{00F0}'),
+    ("&euml;", '\u{00EB}'),
+    ("&euro;", '\u{20AC}'),
+    ("&exist;", '\u{2203}'),
+    ("&fnof;", '\u{0192}'),
+    ("&forall;", '\u{2200}'),
+    ("&frac12;", '\u{00BD}'),
+    ("&frac14;", '\u{00BC}'),
+    ("&frac34;", '\u{00BE}'),
+    ("&frasl;", '\u{2044}'),
+    ("&gamma;", '\u{03B3}'),
+    ("&ge;", '\u{2265}'),
+    ("&gt;", '>'),
+    ("&hArr;", '\u{21D4}'),
+    ("&harr;", '\u{2194}'),
+    ("&hearts;", '\u{2665}'),
+    ("&hellip;", '\u{2026}'),
+    ("&iacute;", '\u{00ED}'),
+    ("&icirc;", '\u{00EE}'),
+    ("&iexcl;", '\u{00A1}'),
+    ("&igrave;", '\u{00EC}'),
+    ("&image;", '\u{2111}'),
+    ("&infin;", '\u{221E}'),
+    ("&int;", '\u{222B}'),
+    ("&iota;", '\u{03B9}'),
+    ("&iquest;", '\u{00BF}'),
+    ("&isin;", '\u{2208}'),
+    ("&iuml;", '\u{00EF}'),
+    ("&kappa;", '\u{03BA}'),
+    ("&lArr;", '\u{21D0}'),
+    ("&lambda;", '\u{03BB}'),
+    ("&lang;", '\u{2329}'),
+    ("&laquo;", '\u{00AB}'),
+    ("&larr;", '\u{2190}'),
+    ("&lceil;", '\u{2308}'),
+    ("&ldquo;", '\u{201C}'),
+    ("&le;", '\u{2264}'),
+    ("&lfloor;", '\u{230A}'),
+    ("&lowast;", '\u{2217}'),
+    ("&loz;", '\u{25CA}'),
+    ("&lrm;", '\u{200E}'),
+    ("&lsaquo;", '\u{2039}'),
+    ("&lsquo;", '\u{2018}'),
+    ("&lt;", '<'),
+    ("&macr;", '\u{00AF}'),
+    ("&mdash;", '\u{2014}'),
+    ("&micro;", '\u{00B5}'),
+    ("&middot;", '\u{00B7}'),
+    ("&minus;", '\u{2212}'),
+    ("&mu;", '\u{03BC}'),
+    ("&nabla;", '\u{2207}'),
+    ("&nbsp;", ' '),
+    ("&ndash;", '\u{2013}'),
+    ("&ne;", '\u{2260}'),
+    ("&ni;", '\u{220B}'),
+    ("&not;", '\u{00AC}'),
+    ("&notin;", '\u{2209}'),
+    ("&nsub;", '\u{2284}'),
+    ("&ntilde;", '\u{00F1}'),
+    ("&nu;", '\u{03BD}'),
+    ("&oacute;", '\u{00F3}'),
+    ("&ocirc;", '\u{00F4}'),
+    ("&oelig;", '\u{0153}'),
+    ("&ograve;", '\u{00F2}'),
+    ("&oline;", '\u{203E}'),
+    ("&omega;", '\u{03C9}'),
+    ("&omicron;", '\u{03BF}'),
+    ("&oplus;", '\u{2295}'),
+    ("&or;", '\u{2228}'),
+    ("&ordf;", '\u{00AA}'),
+    ("&ordm;", '\u{00BA}'),
+    ("&oslash;", '\u{00F8}'),
+    ("&otilde;", '\u{00F5}'),
+    ("&otimes;", '\u{2297}'),
+    ("&ouml;", '\u{00F6}'),
+    ("&para;", '\u{00B6}'),
+    ("&part;", '\u{2202}'),
+    ("&permil;", '\u{2030}'),
+    ("&perp;", '\u{22A5}'),
+    ("&phi;", '\u{03C6}'),
+    ("&pi;", '\u{03C0}'),
+    ("&piv;", '\u{03D6}'),
+    ("&plusmn;", '\u{00B1}'),
+    ("&pound;", '\u{00A3}'),
+    ("&prime;", '\u{2032}'),
+    ("&prod;", '\u{220F}'),
+    ("&prop;", '\u{221D}'),
+    ("&psi;", '\u{03C8}'),
+    ("&quot;", '"'),
+    ("&rArr;", '\u{21D2}'),
+    ("&radic;", '\u{221A}'),
+    ("&rang;", '\u{232A}'),
+    ("&raquo;", '\u{00BB}'),
+    ("&rarr;", '\u{2192}'),
+    ("&rceil;", '\u{2309}'),
+    ("&rdquo;", '\u{201D}'),
+    ("&real;", '\u{211C}'),
+    ("&reg;", '\u{00AE}'),
+    ("&rfloor;", '\u{230B}'),
+    ("&rho;", '\u{03C1}'),
+    ("&rlm;", '\u{200F}'),
+    ("&rsaquo;", '\u{203A}'),
+    ("&rsquo;", '\u{2019}'),
+    ("&sbquo;", '\u{201A}'),
+    ("&scaron;", '\u{0161}'),
+    ("&sdot;", '\u{22C5}'),
+    ("&sect;", '\u{00A7}'),
+    ("&shy;", '\u{00AD}'),
+    ("&sigma;", '\u{03C3}'),
+    ("&sigmaf;", '\u{03C2}'),
+    ("&sim;", '\u{223C}'),
+    ("&spades;", '\u{2660}'),
+    ("&sub;", '\u{2282}'),
+    ("&sube;", '\u{2286}'),
+    ("&sum;", '\u{2211}'),
+    ("&sup1;", '\u{00B9}'),
+    ("&sup2;", '\u{00B2}'),
+    ("&sup3;", '\u{00B3}'),
+    ("&sup;", '\u{2283}'),
+    ("&supe;", '\u{2287}'),
+    ("&szlig;", '\u{00DF}'),
+    ("&tau;", '\u{03C4}'),
+    ("&there4;", '\u{2234}'),
+    ("&theta;", '\u{03B8}'),
+    ("&thetasym;", '\u{03D1}'),
+    ("&thinsp;", '\u{2009}'),
+    ("&thorn;", '\u{00FE}'),
+    ("&tilde;", '\u{02DC}'),
+    ("&times;", '\u{00D7}'),
+    ("&trade;", '\u{2122}'),
+    ("&uArr;", '\u{21D1}'),
+    ("&uacute;", '\u{00FA}'),
+    ("&uarr;", '\u{2191}'),
+    ("&ucirc;", '\u{00FB}'),
+    ("&ugrave;", '\u{00F9}'),
+    ("&uml;", '\u{00A8}'),
+    ("&upsih;", '\u{03D2}'),
+    ("&upsilon;", '\u{03C5}'),
+    ("&uuml;", '\u{00FC}'),
+    ("&weierp;", '\u{2118}'),
+    ("&xi;", '\u{03BE}'),
+    ("&yacute;", '\u{00FD}'),
+    ("&yen;", '\u{00A5}'),
+    ("&yuml;", '\u{00FF}'),
+    ("&zeta;", '\u{03B6}'),
+    ("&zwj;", '\u{200D}'),
+    ("&zwnj;", '\u{200C}'),
+];
+
 fn decode_named_entity(entity: &str) -> Option<char> {
-    match entity {
-        // Core XML entities
-        "&amp;" => Some('&'),
-        "&lt;" => Some('<'),
-        "&gt;" => Some('>'),
-        "&quot;" => Some('"'),
-        "&apos;" => Some('\''),
-        // Whitespace
-        "&nbsp;" => Some(' '),
-        "&ensp;" => Some('\u{2002}'),
-        "&emsp;" => Some('\u{2003}'),
-        "&thinsp;" => Some('\u{2009}'),
-        // Punctuation and typography
-        "&mdash;" => Some('\u{2014}'),
-        "&ndash;" => Some('\u{2013}'),
-        "&lsquo;" => Some('\u{2018}'),
-        "&rsquo;" => Some('\u{2019}'),
-        "&ldquo;" => Some('\u{201C}'),
-        "&rdquo;" => Some('\u{201D}'),
-        "&bull;" => Some('\u{2022}'),
-        "&hellip;" => Some('\u{2026}'),
-        "&prime;" => Some('\u{2032}'),
-        "&Prime;" => Some('\u{2033}'),
-        "&laquo;" => Some('\u{00AB}'),
-        "&raquo;" => Some('\u{00BB}'),
-        "&trade;" => Some('\u{2122}'),
-        "&copy;" => Some('\u{00A9}'),
-        "&reg;" => Some('\u{00AE}'),
-        "&deg;" => Some('\u{00B0}'),
-        "&middot;" => Some('\u{00B7}'),
-        "&sect;" => Some('\u{00A7}'),
-        "&para;" => Some('\u{00B6}'),
-        "&dagger;" => Some('\u{2020}'),
-        "&Dagger;" => Some('\u{2021}'),
-        // Currency
-        "&euro;" => Some('\u{20AC}'),
-        "&pound;" => Some('\u{00A3}'),
-        "&yen;" => Some('\u{00A5}'),
-        "&cent;" => Some('\u{00A2}'),
-        "&curren;" => Some('\u{00A4}'),
-        // Math / symbols
-        "&times;" => Some('\u{00D7}'),
-        "&divide;" => Some('\u{00F7}'),
-        "&plusmn;" => Some('\u{00B1}'),
-        "&minus;" => Some('\u{2212}'),
-        "&frac12;" => Some('\u{00BD}'),
-        "&frac14;" => Some('\u{00BC}'),
-        "&frac34;" => Some('\u{00BE}'),
-        "&micro;" => Some('\u{00B5}'),
-        "&sup2;" => Some('\u{00B2}'),
-        "&sup3;" => Some('\u{00B3}'),
-        "&not;" => Some('\u{00AC}'),
-        // Latin accented (critical for NER: names like Nestlé, Müller, Señor)
-        "&Agrave;" => Some('\u{00C0}'),
-        "&Aacute;" => Some('\u{00C1}'),
-        "&Acirc;" => Some('\u{00C2}'),
-        "&Atilde;" => Some('\u{00C3}'),
-        "&Auml;" => Some('\u{00C4}'),
-        "&Aring;" => Some('\u{00C5}'),
-        "&AElig;" => Some('\u{00C6}'),
-        "&Ccedil;" => Some('\u{00C7}'),
-        "&Egrave;" => Some('\u{00C8}'),
-        "&Eacute;" => Some('\u{00C9}'),
-        "&Ecirc;" => Some('\u{00CA}'),
-        "&Euml;" => Some('\u{00CB}'),
-        "&Igrave;" => Some('\u{00CC}'),
-        "&Iacute;" => Some('\u{00CD}'),
-        "&Icirc;" => Some('\u{00CE}'),
-        "&Iuml;" => Some('\u{00CF}'),
-        "&ETH;" => Some('\u{00D0}'),
-        "&Ntilde;" => Some('\u{00D1}'),
-        "&Ograve;" => Some('\u{00D2}'),
-        "&Oacute;" => Some('\u{00D3}'),
-        "&Ocirc;" => Some('\u{00D4}'),
-        "&Otilde;" => Some('\u{00D5}'),
-        "&Ouml;" => Some('\u{00D6}'),
-        "&Oslash;" => Some('\u{00D8}'),
-        "&Ugrave;" => Some('\u{00D9}'),
-        "&Uacute;" => Some('\u{00DA}'),
-        "&Ucirc;" => Some('\u{00DB}'),
-        "&Uuml;" => Some('\u{00DC}'),
-        "&Yacute;" => Some('\u{00DD}'),
-        "&THORN;" => Some('\u{00DE}'),
-        "&szlig;" => Some('\u{00DF}'),
-        "&agrave;" => Some('\u{00E0}'),
-        "&aacute;" => Some('\u{00E1}'),
-        "&acirc;" => Some('\u{00E2}'),
-        "&atilde;" => Some('\u{00E3}'),
-        "&auml;" => Some('\u{00E4}'),
-        "&aring;" => Some('\u{00E5}'),
-        "&aelig;" => Some('\u{00E6}'),
-        "&ccedil;" => Some('\u{00E7}'),
-        "&egrave;" => Some('\u{00E8}'),
-        "&eacute;" => Some('\u{00E9}'),
-        "&ecirc;" => Some('\u{00EA}'),
-        "&euml;" => Some('\u{00EB}'),
-        "&igrave;" => Some('\u{00EC}'),
-        "&iacute;" => Some('\u{00ED}'),
-        "&icirc;" => Some('\u{00EE}'),
-        "&iuml;" => Some('\u{00EF}'),
-        "&eth;" => Some('\u{00F0}'),
-        "&ntilde;" => Some('\u{00F1}'),
-        "&ograve;" => Some('\u{00F2}'),
-        "&oacute;" => Some('\u{00F3}'),
-        "&ocirc;" => Some('\u{00F4}'),
-        "&otilde;" => Some('\u{00F5}'),
-        "&ouml;" => Some('\u{00F6}'),
-        "&oslash;" => Some('\u{00F8}'),
-        "&ugrave;" => Some('\u{00F9}'),
-        "&uacute;" => Some('\u{00FA}'),
-        "&ucirc;" => Some('\u{00FB}'),
-        "&uuml;" => Some('\u{00FC}'),
-        "&yacute;" => Some('\u{00FD}'),
-        "&thorn;" => Some('\u{00FE}'),
-        "&yuml;" => Some('\u{00FF}'),
-        // Numeric shortcuts commonly seen in web content
-        "&#39;" => Some('\''),
-        _ => None,
-    }
+    NAMED_ENTITIES
+        .binary_search_by_key(&entity, |(name, _)| name)
+        .ok()
+        .map(|idx| NAMED_ENTITIES[idx].1)
 }
 
 /// Extract the value of an HTML attribute from a tag buffer.
@@ -549,14 +694,17 @@ fn decode_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, text: &mu
     let mut found_semicolon = false;
 
     while let Some(&next_ch) = chars.peek() {
-        entity.push(chars.next().expect("peek returned Some"));
         if next_ch == ';' {
+            chars.next();
+            entity.push(';');
             found_semicolon = true;
             break;
         }
         if next_ch.is_whitespace() || next_ch == '<' {
+            // Don't consume the terminator -- it belongs to the next token
             break;
         }
+        entity.push(chars.next().expect("peek returned Some"));
     }
 
     if found_semicolon {
@@ -577,8 +725,12 @@ fn decode_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, text: &mu
                 if n == 0 {
                     // HTML5 spec: &#0; maps to U+FFFD REPLACEMENT CHARACTER
                     Some('\u{FFFD}')
+                } else if (0x80..=0x9F).contains(&n) {
+                    // C1 control range: use Win-1252 mapping, or U+FFFD for
+                    // unmapped codepoints (0x81, 0x8D, 0x8F, 0x90) per HTML5 spec
+                    win1252_to_unicode(n).or(Some('\u{FFFD}'))
                 } else {
-                    win1252_to_unicode(n).or_else(|| char::from_u32(n))
+                    char::from_u32(n)
                 }
             }) {
                 text.push(ch);
@@ -589,6 +741,19 @@ fn decode_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, text: &mu
             text.push_str(&entity);
         }
     } else {
+        // Semicolon-optional: try interpreting as a named entity without ';'
+        // Real web content sometimes omits the semicolon (e.g. &hellip or &amp)
+        // Only attempt for entity-like strings (&alpha...) not arbitrary text (&T)
+        if entity.len() > 2
+            && entity.as_bytes()[1].is_ascii_alphabetic()
+            && entity.chars().skip(1).all(|c| c.is_ascii_alphanumeric())
+        {
+            let with_semi = format!("{};", entity);
+            if let Some(ch) = decode_named_entity(&with_semi) {
+                text.push(ch);
+                return;
+            }
+        }
         text.push_str(&entity);
     }
 }
@@ -631,6 +796,18 @@ mod tests {
         let text = strip_to_text("<p>A &amp; B &lt; C</p>");
         assert!(text.contains("A & B"));
         assert!(text.contains("< C"));
+    }
+
+    #[test]
+    fn entity_table_is_sorted() {
+        for window in NAMED_ENTITIES.windows(2) {
+            assert!(
+                window[0].0 < window[1].0,
+                "entity table not sorted: {:?} should come before {:?}",
+                window[0].0,
+                window[1].0
+            );
+        }
     }
 
     #[test]
@@ -1275,5 +1452,99 @@ mod tests {
         let text = strip_to_text(html);
         assert!(text.contains("Article content"), "content preserved: {text}");
         assert!(!text.contains("Related articles"), "navbox stripped: {text}");
+    }
+
+    // ===== Semicolon-optional entity decoding =====
+
+    #[test]
+    fn entity_without_semicolon_amp() {
+        // &amp without ; should decode to &
+        let text = strip_to_text("<p>AT&amp T</p>");
+        assert!(text.contains("AT& T") || text.contains("AT&"), "amp without semi: {text}");
+    }
+
+    #[test]
+    fn entity_without_semicolon_hellip() {
+        // &hellip without ; -> ellipsis
+        let text = strip_to_text("<p>Wait&hellip what?</p>");
+        assert!(text.contains('\u{2026}'), "hellip without semi: {text}");
+    }
+
+    #[test]
+    fn entity_without_semicolon_nbsp() {
+        // &nbsp without ; -> non-breaking space (collapsed to regular space)
+        let text = strip_to_text("<p>Hello&nbsp world</p>");
+        assert!(text.contains("Hello"), "nbsp without semi preserved text: {text}");
+    }
+
+    #[test]
+    fn entity_without_semicolon_not_greedy() {
+        // &T in AT&T should NOT be decoded as an entity
+        let text = strip_to_text("<p>AT&amp;T Corporation</p>");
+        assert!(text.contains("AT&T"), "AT&T with proper entity: {text}");
+    }
+
+    #[test]
+    fn entity_without_semicolon_short_passthrough() {
+        // Very short &X patterns should pass through, not try entity decode
+        let text = strip_to_text("<p>if x &lt 10</p>");
+        // &lt without ; should still decode (it's a known entity)
+        assert!(text.contains('<') || text.contains("lt"), "lt without semi: {text}");
+    }
+
+    #[test]
+    fn entity_without_semicolon_unknown_passthrough() {
+        // Unknown entity-like strings without ; should pass through as-is
+        let text = strip_to_text("<p>&xyzzy content</p>");
+        assert!(text.contains("&xyzzy"), "unknown entity passes through: {text}");
+    }
+
+    #[test]
+    fn entity_without_semicolon_eacute() {
+        // &eacute without ; -> é (critical for names like Nestlé)
+        let text = strip_to_text("<p>Nestl&eacute CEO</p>");
+        assert!(text.contains("Nestlé"), "eacute without semi: {text}");
+    }
+
+    // ===== Greek letter entities =====
+
+    #[test]
+    fn entity_greek_letters() {
+        let text = strip_to_text("<p>&alpha;-synuclein and &beta;-amyloid</p>");
+        assert!(text.contains('α'), "alpha: {text}");
+        assert!(text.contains('β'), "beta: {text}");
+    }
+
+    #[test]
+    fn entity_greek_uppercase() {
+        let text = strip_to_text("<p>&Delta;G = &minus;&Sigma;&Delta;H</p>");
+        assert!(text.contains('Δ'), "Delta: {text}");
+        assert!(text.contains('Σ'), "Sigma: {text}");
+    }
+
+    // ===== C1 range handling =====
+
+    #[test]
+    fn c1_unmapped_becomes_replacement() {
+        // 0x81, 0x8D, 0x8F, 0x90 have no Win-1252 mapping -> U+FFFD
+        let text = strip_to_text("<p>&#129;</p>"); // 0x81
+        assert!(text.contains('\u{FFFD}'), "0x81 -> U+FFFD: {text}");
+    }
+
+    // ===== Math and symbol entities =====
+
+    #[test]
+    fn entity_math_symbols() {
+        let text = strip_to_text("<p>&forall;x &exist;y : x &ne; y</p>");
+        assert!(text.contains('∀'), "forall: {text}");
+        assert!(text.contains('∃'), "exist: {text}");
+        assert!(text.contains('≠'), "ne: {text}");
+    }
+
+    #[test]
+    fn entity_arrows() {
+        let text = strip_to_text("<p>A &rarr; B &larr; C</p>");
+        assert!(text.contains('→'), "rarr: {text}");
+        assert!(text.contains('←'), "larr: {text}");
     }
 }
