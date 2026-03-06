@@ -116,7 +116,12 @@ pub fn is_html(content: &str) -> bool {
     while end > 0 && !content.is_char_boundary(end) {
         end -= 1;
     }
-    let trimmed = content[..end].trim_start();
+    let window = &content[..end];
+    // Quick rejection: no '<' means no HTML tags.
+    if !window.as_bytes().contains(&b'<') {
+        return false;
+    }
+    let trimmed = window.trim_start();
     trimmed.starts_with("<!")
         || trimmed.starts_with("<html")
         || trimmed.starts_with("<HTML")

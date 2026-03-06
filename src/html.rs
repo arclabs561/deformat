@@ -87,11 +87,13 @@ fn strip_impl(html: &str) -> String {
     if memchr::memchr(b'<', bytes).is_none() {
         let decoded = decode_entities_in_str(html);
         let stripped = strip_wiki_ref_markers(&decoded);
-        return cleanup_whitespace(&stripped);
+        return cleanup_whitespace(&stripped).into_owned();
     }
 
     let mut pos = 0;
-    let mut text = String::with_capacity(html.len());
+    // HTML text content is typically 30-50% of total size. Use len/2 to reduce
+    // over-allocation while avoiding frequent reallocs.
+    let mut text = String::with_capacity(html.len() / 2);
     let mut in_script = false;
     let mut in_style = false;
     let mut skip_depth: u32 = 0;
@@ -228,25 +230,7 @@ fn strip_impl(html: &str) -> String {
                     in_style = false;
                 }
 
-                // Semantic skip tags
-                const SKIP_TAGS: &[&str] = &[
-                    "head",
-                    "nav",
-                    "header",
-                    "footer",
-                    "aside",
-                    "menu",
-                    "noscript",
-                    "form",
-                    "select",
-                    "figcaption",
-                    "template",
-                    "svg",
-                    "textarea",
-                    "iframe",
-                    "rt",
-                    "rp",
-                ];
+                // Semantic skip tags -- matched via is_skip_tag() below.
 
                 // Wikipedia/MediaWiki structural skip.
                 // Only check opening container tags that have attributes.
@@ -313,17 +297,11 @@ fn strip_impl(html: &str) -> String {
 
                 // Semantic tag depth tracking
                 if is_close {
-                    for &stag in SKIP_TAGS {
-                        if close_name == stag {
-                            skip_depth = skip_depth.saturating_sub(1);
-                        }
+                    if is_skip_tag(close_name) {
+                        skip_depth = skip_depth.saturating_sub(1);
                     }
-                } else {
-                    for &stag in SKIP_TAGS {
-                        if tag_lower == stag {
-                            skip_depth += 1;
-                        }
-                    }
+                } else if is_skip_tag(tag_lower) {
+                    skip_depth += 1;
                 }
 
                 // Insert space around block-level elements for readability.
@@ -372,7 +350,7 @@ fn strip_impl(html: &str) -> String {
     // resulting double spaces.
     let text = strip_wiki_ref_markers(&text);
 
-    cleanup_whitespace(&text)
+    cleanup_whitespace(&text).into_owned()
 }
 
 /// Collapse whitespace, strip invisible characters, and trim.
@@ -380,17 +358,17 @@ fn strip_impl(html: &str) -> String {
 /// Uses byte-level scanning with ASCII fast path: printable ASCII (0x21-0x7E)
 /// is bulk-copied in runs; whitespace and multi-byte sequences are handled per-char.
 /// For pure ASCII text that is already trimmed, has no double spaces, and no
-/// control characters, returns a zero-copy result.
+/// control characters, returns a zero-copy `Cow::Borrowed`.
 #[inline]
-fn cleanup_whitespace(text: &str) -> String {
+fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
     let text_bytes = text.as_bytes();
     let text_len = text_bytes.len();
 
-    // Ultra-fast path: if the text is pure ASCII and already clean, just clone it.
+    // Ultra-fast path: if the text is pure ASCII and already clean, zero-copy return.
     // "Clean" = trimmed, no double spaces, no control chars (< 0x20 except nothing).
     // This avoids the character-by-character scan for already-processed text.
     if text_len > 0 && is_clean_ascii(text_bytes) {
-        return text.to_string();
+        return Cow::Borrowed(text);
     }
     let mut cleaned = String::with_capacity(text_len);
     let mut last_was_space = true;
@@ -444,13 +422,15 @@ fn cleanup_whitespace(text: &str) -> String {
         }
     }
 
-    cleaned.trim().to_string()
+    // Trim the result. If trimming changes nothing, return owned as-is.
+    let trimmed = cleaned.trim_matches(' ');
+    if trimmed.len() == cleaned.len() {
+        Cow::Owned(cleaned)
+    } else {
+        Cow::Owned(trimmed.to_string())
+    }
 }
 
-/// Strip Wikipedia reference markers from text.
-///
-/// Matches: `[1]`, `[42]`, `[edit]`, `[citation needed]`, and bare `edit]`
-/// preceded by a word boundary.  Uses `memchr` for `[` scanning -- no regex.
 /// Check if a byte slice represents "clean" ASCII text: no leading/trailing
 /// whitespace, no double spaces, no control chars, no multi-byte UTF-8.
 /// When true, `cleanup_whitespace` can skip the character-by-character pass.
@@ -477,6 +457,10 @@ fn is_clean_ascii(bytes: &[u8]) -> bool {
     true
 }
 
+/// Strip Wikipedia reference markers from text.
+///
+/// Matches: `[1]`, `[42]`, `[edit]`, `[citation needed]`, and bare `edit]`
+/// preceded by a word boundary.  Uses `memchr` for `[` scanning -- no regex.
 fn strip_wiki_ref_markers(s: &str) -> Cow<'_, str> {
     let bytes = s.as_bytes();
     let len = bytes.len();
@@ -579,6 +563,30 @@ fn strip_wiki_ref_markers(s: &str) -> Cow<'_, str> {
     }
 
     Cow::Owned(result)
+}
+
+/// Returns true if the tag name is a semantic skip element whose content
+/// should be excluded from text output.
+fn is_skip_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "head"
+            | "nav"
+            | "header"
+            | "footer"
+            | "aside"
+            | "menu"
+            | "noscript"
+            | "form"
+            | "select"
+            | "figcaption"
+            | "template"
+            | "svg"
+            | "textarea"
+            | "iframe"
+            | "rt"
+            | "rp"
+    )
 }
 
 /// Returns true if the tag name is a block-level element that should get
@@ -2719,5 +2727,89 @@ mod tests {
         let html = "<p>D&inodot;yarbak&inodot;r is a city in Turkey</p>";
         let text = strip_to_text(html);
         assert!(text.contains("Dıyarbakır"), "inodot decoded: {text}");
+    }
+
+    // ===== Edge cases: malformed/unusual HTML =====
+
+    #[test]
+    fn unclosed_tag_no_panic() {
+        // Unclosed tag at end of input
+        assert_eq!(strip_to_text("<p>Hello <b"), "Hello");
+        assert_eq!(strip_to_text("Text <"), "Text");
+        assert_eq!(strip_to_text("<p>Text</p><"), "Text");
+    }
+
+    #[test]
+    fn triple_nested_skip_tags() {
+        // Three levels of skip nesting
+        let html = "<nav><aside><footer>hidden</footer></aside></nav><p>visible</p>";
+        let text = strip_to_text(html);
+        assert!(!text.contains("hidden"), "nested skip leaked: {text}");
+        assert!(text.contains("visible"), "visible missing: {text}");
+    }
+
+    #[test]
+    fn skip_tag_unclosed_no_hang() {
+        // Unclosed skip tag -- should not hang or include everything
+        let html = "<nav>hidden<p>also hidden";
+        let text = strip_to_text(html);
+        assert!(!text.contains("hidden"), "unclosed skip leaked: {text}");
+    }
+
+    #[test]
+    fn self_closing_in_skip_region() {
+        // Self-closing tags inside skip regions should not affect skip depth
+        let html = "<nav><br /><img src='x' /><hr /></nav><p>visible</p>";
+        let text = strip_to_text(html);
+        assert!(
+            text.contains("visible"),
+            "visible missing after skip: {text}"
+        );
+    }
+
+    #[test]
+    fn entity_trailing_no_text() {
+        // Entity right at the end, no trailing text
+        assert_eq!(strip_to_text("Caf&eacute;"), "Café");
+        assert_eq!(strip_to_text("A &amp;"), "A &");
+    }
+
+    #[test]
+    fn entity_no_semicolon_at_eof() {
+        // Semicolon-optional entity at end of input
+        assert_eq!(strip_to_text("A &amp"), "A &");
+    }
+
+    #[test]
+    fn consecutive_tags_get_spaces() {
+        // Block tags should insert spaces between content
+        let text = strip_to_text("<p>One</p><p>Two</p><p>Three</p>");
+        assert_eq!(text, "One Two Three");
+    }
+
+    #[test]
+    fn very_long_entity_name_no_panic() {
+        // Absurdly long "entity" name -- should pass through
+        let long = "&".to_string() + &"a".repeat(1000) + ";";
+        let text = strip_to_text(&long);
+        assert!(text.contains(&long), "long entity passed through");
+    }
+
+    #[test]
+    fn mixed_valid_invalid_entities() {
+        let text = strip_to_text("&amp; &bogus; &#999999999; &lt;");
+        assert!(text.contains('&'), "amp decoded");
+        assert!(text.contains("&bogus;"), "bogus preserved");
+        assert!(text.contains('<'), "lt decoded");
+    }
+
+    #[test]
+    fn only_whitespace_input() {
+        assert_eq!(strip_to_text("   \t\n   "), "");
+    }
+
+    #[test]
+    fn only_tags_no_text() {
+        assert_eq!(strip_to_text("<div><span></span></div>"), "");
     }
 }
