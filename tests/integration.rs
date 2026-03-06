@@ -21,7 +21,8 @@ fn extract_format_matches_detect() {
     for (input, expected) in &cases {
         let result = extract(input);
         assert_eq!(
-            result.format, *expected,
+            result.format,
+            *expected,
             "format mismatch for {:?}",
             &input[..input.len().min(40)]
         );
@@ -62,7 +63,10 @@ fn extract_as_unknown_passthrough() {
 fn extract_as_pdf_returns_error_metadata() {
     let r = extract_as("fake pdf content", Format::Pdf);
     assert!(r.text.is_empty(), "PDF str extraction should be empty");
-    assert!(r.metadata.contains_key("error"), "should have error metadata");
+    assert!(
+        r.metadata.contains_key("error"),
+        "should have error metadata"
+    );
 }
 
 // =============================================================================
@@ -109,7 +113,10 @@ fn realistic_wikipedia_article() {
     // Article content preserved
     assert!(text.contains("CRISPR"), "article title: {text}");
     assert!(text.contains("Jennifer Doudna"), "person name: {text}");
-    assert!(text.contains("Emmanuelle Charpentier"), "person name: {text}");
+    assert!(
+        text.contains("Emmanuelle Charpentier"),
+        "person name: {text}"
+    );
     assert!(text.contains("Feng Zhang"), "person name: {text}");
     assert!(text.contains("Nobel Prize"), "event: {text}");
     assert!(text.contains("Broad Institute"), "org: {text}");
@@ -119,7 +126,10 @@ fn realistic_wikipedia_article() {
     assert!(!text.contains("Random article"), "nav stripped: {text}");
     assert!(!text.contains("Contents"), "TOC stripped: {text}");
     assert!(!text.contains("Mojica"), "references stripped: {text}");
-    assert!(!text.contains("Gene editing topics"), "navbox stripped: {text}");
+    assert!(
+        !text.contains("Gene editing topics"),
+        "navbox stripped: {text}"
+    );
     assert!(!text.contains("Wikipedia"), "footer stripped: {text}");
     assert!(!text.contains("tracking"), "script stripped: {text}");
     assert!(!text.contains("style.css"), "head stripped: {text}");
@@ -180,7 +190,10 @@ fn realistic_news_article() {
     assert!(!text.contains("Reuters"), "header nav stripped: {text}");
     assert!(!text.contains("Related Stories"), "aside stripped: {text}");
     assert!(!text.contains("Climate protests"), "aside stripped: {text}");
-    assert!(!text.contains("All rights reserved"), "footer stripped: {text}");
+    assert!(
+        !text.contains("All rights reserved"),
+        "footer stripped: {text}"
+    );
 }
 
 // =============================================================================
@@ -269,14 +282,8 @@ fn wikipedia_infobox_cells_not_fused() {
     let text = deformat::html::strip_to_text(html);
 
     // Key invariant: no cell fusion
-    assert!(
-        !text.contains("BornJune"),
-        "th-td fusion: {text}"
-    );
-    assert!(
-        !text.contains("EnglandDied"),
-        "cross-row fusion: {text}"
-    );
+    assert!(!text.contains("BornJune"), "th-td fusion: {text}");
+    assert!(!text.contains("EnglandDied"), "cross-row fusion: {text}");
     assert!(
         !text.contains("BritishArticle"),
         "table-paragraph fusion: {text}"
@@ -297,9 +304,15 @@ fn attribute_gt_does_not_break_extraction() {
         </div>
     </body></html>"#;
     let text = deformat::html::strip_to_text(html);
-    assert!(text.contains("Visible content"), "content preserved: {text}");
+    assert!(
+        text.contains("Visible content"),
+        "content preserved: {text}"
+    );
     assert!(!text.contains("age > 18"), "attr not leaked: {text}");
-    assert!(!text.contains("data-filter"), "attr name not leaked: {text}");
+    assert!(
+        !text.contains("data-filter"),
+        "attr name not leaked: {text}"
+    );
 }
 
 // =============================================================================
@@ -348,10 +361,16 @@ fn japanese_article_with_furigana() {
     assert!(text.contains("晋三"), "Shinzo: {text}");
 
     // Furigana stripped
-    assert!(!text.contains("とうきょう"), "Tokyo reading stripped: {text}");
+    assert!(
+        !text.contains("とうきょう"),
+        "Tokyo reading stripped: {text}"
+    );
     assert!(!text.contains("にほん"), "Japan reading stripped: {text}");
     assert!(!text.contains("あべ"), "Abe reading stripped: {text}");
-    assert!(!text.contains("しんぞう"), "Shinzo reading stripped: {text}");
+    assert!(
+        !text.contains("しんぞう"),
+        "Shinzo reading stripped: {text}"
+    );
 
     // Boilerplate stripped
     assert!(!text.contains("メインページ"), "nav stripped: {text}");
@@ -389,8 +408,16 @@ fn extract_preserves_format_for_cjk_html() {
     let html = "<p><ruby>東京<rt>とうきょう</rt></ruby></p>";
     let result = extract(html);
     assert_eq!(result.format, Format::Html);
-    assert!(result.text.contains("東京"), "base text in extract: {}", result.text);
-    assert!(!result.text.contains("とうきょう"), "furigana stripped in extract: {}", result.text);
+    assert!(
+        result.text.contains("東京"),
+        "base text in extract: {}",
+        result.text
+    );
+    assert!(
+        !result.text.contains("とうきょう"),
+        "furigana stripped in extract: {}",
+        result.text
+    );
 }
 
 // =============================================================================
@@ -537,7 +564,10 @@ fn kitchen_sink_all_features() {
     assert!(text.contains("Łódź"), "Latin Extended-A entities: {text}");
     assert!(text.contains("Erdoğan"), "Turkish gbreve: {text}");
     assert!(text.contains("Český"), "Czech Ccaron: {text}");
-    assert!(text.contains("Laurent Freixe at podium"), "img alt text: {text}");
+    assert!(
+        text.contains("Laurent Freixe at podium"),
+        "img alt text: {text}"
+    );
 
     // Win-1252 entity: &#146; = right single quote
     assert!(text.contains('\u{2019}'), "Win1252 right quote: {text}");
@@ -546,9 +576,15 @@ fn kitchen_sink_all_features() {
     assert!(text.contains('\u{201D}'), "hex right curly quote: {text}");
 
     // Furigana stripped
-    assert!(!text.contains("とうきょう"), "Tokyo furigana stripped: {text}");
+    assert!(
+        !text.contains("とうきょう"),
+        "Tokyo furigana stripped: {text}"
+    );
     assert!(!text.contains("あべ"), "Abe furigana stripped: {text}");
-    assert!(!text.contains("しんぞう"), "Shinzo furigana stripped: {text}");
+    assert!(
+        !text.contains("しんぞう"),
+        "Shinzo furigana stripped: {text}"
+    );
 
     // Boilerplate stripped
     assert!(!text.contains("Home"), "nav stripped: {text}");
@@ -556,7 +592,10 @@ fn kitchen_sink_all_features() {
     assert!(!text.contains("TestWiki"), "footer stripped: {text}");
     assert!(!text.contains("Contents"), "TOC stripped: {text}");
     assert!(!text.contains("Reuters"), "references stripped: {text}");
-    assert!(!text.contains("Related articles"), "navbox stripped: {text}");
+    assert!(
+        !text.contains("Related articles"),
+        "navbox stripped: {text}"
+    );
     assert!(!text.contains("Trending"), "aside stripped: {text}");
     assert!(!text.contains("Other news"), "aside stripped: {text}");
     assert!(!text.contains("color: black"), "style stripped: {text}");

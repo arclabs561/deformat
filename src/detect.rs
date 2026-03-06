@@ -130,8 +130,7 @@ pub fn is_html(content: &str) -> bool {
 /// Rules out `<3`, `<=`, `<script>` comparisons in code, etc.
 fn starts_with_tag(s: &str) -> bool {
     let mut chars = s.chars();
-    matches!(chars.next(), Some('<'))
-        && matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+    matches!(chars.next(), Some('<')) && matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
 }
 
 /// Detect whether raw bytes start with the PDF magic number.
@@ -153,7 +152,10 @@ mod tests {
 
     #[test]
     fn detect_str_html_tag() {
-        assert_eq!(detect_str("<html><head><body>text</body></html>"), Format::Html);
+        assert_eq!(
+            detect_str("<html><head><body>text</body></html>"),
+            Format::Html
+        );
     }
 
     #[test]
@@ -195,7 +197,10 @@ mod tests {
 
     #[test]
     fn detect_bytes_html() {
-        assert_eq!(detect_bytes(b"<html><body>text</body></html>"), Format::Html);
+        assert_eq!(
+            detect_bytes(b"<html><body>text</body></html>"),
+            Format::Html
+        );
     }
 
     #[test]

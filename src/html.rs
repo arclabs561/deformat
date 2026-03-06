@@ -13,8 +13,9 @@
 //!    Readability algorithm that extracts the main article content, stripping
 //!    navigation, sidebars, and boilerplate.
 
-use memchr::memchr2;
+use std::borrow::Cow;
 
+use memchr::memchr2;
 
 /// Strip HTML tags and decode entities, returning clean plain text.
 ///
@@ -80,6 +81,15 @@ pub fn extract_with_html2text(html: &str, width: usize) -> Result<String, String
 fn strip_impl(html: &str) -> String {
     let bytes = html.as_bytes();
     let len = bytes.len();
+
+    // Fast path: no '<' means no HTML tags at all.
+    // Skip the entire tag-processing loop; just decode entities + cleanup.
+    if memchr::memchr(b'<', bytes).is_none() {
+        let decoded = decode_entities_in_str(html);
+        let stripped = strip_wiki_ref_markers(&decoded);
+        return cleanup_whitespace(&stripped);
+    }
+
     let mut pos = 0;
     let mut text = String::with_capacity(html.len());
     let mut in_script = false;
@@ -220,20 +230,46 @@ fn strip_impl(html: &str) -> String {
 
                 // Semantic skip tags
                 const SKIP_TAGS: &[&str] = &[
-                    "head", "nav", "header", "footer", "aside", "menu",
-                    "noscript", "form", "select", "figcaption",
-                    "template", "svg", "textarea", "iframe",
-                    "rt", "rp",
+                    "head",
+                    "nav",
+                    "header",
+                    "footer",
+                    "aside",
+                    "menu",
+                    "noscript",
+                    "form",
+                    "select",
+                    "figcaption",
+                    "template",
+                    "svg",
+                    "textarea",
+                    "iframe",
+                    "rt",
+                    "rp",
                 ];
 
                 // Wikipedia/MediaWiki structural skip.
                 // Only check opening container tags that have attributes.
                 const WIKI_SKIP_IDS: &[&str] = &[
-                    "toc", "references", "reflist", "catlinks",
-                    "mw-panel", "mw-navigation", "sidebar", "sitesub",
-                    "contentsub", "jump-to-nav", "navbox", "external",
-                    "see-also", "further-reading", "mw-head",
-                    "mw-page-base", "mw-head-base", "footer", "printfooter",
+                    "toc",
+                    "references",
+                    "reflist",
+                    "catlinks",
+                    "mw-panel",
+                    "mw-navigation",
+                    "sidebar",
+                    "sitesub",
+                    "contentsub",
+                    "jump-to-nav",
+                    "navbox",
+                    "external",
+                    "see-also",
+                    "further-reading",
+                    "mw-head",
+                    "mw-page-base",
+                    "mw-head-base",
+                    "footer",
+                    "printfooter",
                 ];
                 let tag_content_end = if pos > 0 && bytes[pos - 1] == b'>' {
                     pos - 1
@@ -246,14 +282,12 @@ fn strip_impl(html: &str) -> String {
                 ) && tag_content_end > tag_name_end
                 {
                     // Only allocate lowercase when the tag has attributes
-                    let tag_full_lower =
-                        html[tag_start..tag_content_end].to_ascii_lowercase();
+                    let tag_full_lower = html[tag_start..tag_content_end].to_ascii_lowercase();
                     let has_class = tag_full_lower.contains("class=");
                     let has_id = tag_full_lower.contains("id=");
                     if has_class || has_id {
-                        let is_wiki_skip = WIKI_SKIP_IDS.iter().any(|id| {
-                            tag_full_lower.contains(id)
-                        });
+                        let is_wiki_skip =
+                            WIKI_SKIP_IDS.iter().any(|id| tag_full_lower.contains(id));
                         if is_wiki_skip {
                             wiki_skip_depth += 1;
                             skip_depth += 1;
@@ -306,17 +340,13 @@ fn strip_impl(html: &str) -> String {
                 }
 
                 // Extract alt text from <img> tags
-                if !in_script
-                    && !in_style
-                    && skip_depth == 0
-                    && tag_lower == "img"
-                {
+                if !in_script && !in_style && skip_depth == 0 && tag_lower == "img" {
                     // Reconstruct tag buffer for attr extraction: <...>
                     let tag_buf_start = tag_start.saturating_sub(1); // include '<'
                     let tag_buffer = &html[tag_buf_start..pos.min(len)];
                     if let Some(alt) = extract_attr_value(tag_buffer, "alt") {
                         if !alt.is_empty() {
-                            let decoded = decode_entities_in_str(&alt);
+                            let decoded = decode_entities_in_str(alt);
                             if !text.ends_with(' ') && !text.is_empty() {
                                 text.push(' ');
                             }
@@ -353,8 +383,9 @@ fn strip_impl(html: &str) -> String {
                         text.push(ch);
                     } else if entity_str.starts_with("&#") && entity_str.len() > 3 {
                         let num_str = &entity_str[2..entity_str.len() - 1];
-                        let parsed = if let Some(hex) =
-                            num_str.strip_prefix('x').or_else(|| num_str.strip_prefix('X'))
+                        let parsed = if let Some(hex) = num_str
+                            .strip_prefix('x')
+                            .or_else(|| num_str.strip_prefix('X'))
                         {
                             u32::from_str_radix(hex, 16).ok()
                         } else {
@@ -380,8 +411,7 @@ fn strip_impl(html: &str) -> String {
                             let mut buf = [0u8; 32];
                             buf[..eb.len()].copy_from_slice(eb);
                             buf[eb.len()] = b';';
-                            let with_semi =
-                                std::str::from_utf8(&buf[..eb.len() + 1]).unwrap();
+                            let with_semi = std::str::from_utf8(&buf[..eb.len() + 1]).unwrap();
                             if let Some(ch) = decode_named_entity(with_semi) {
                                 text.push(ch);
                                 continue;
@@ -402,11 +432,26 @@ fn strip_impl(html: &str) -> String {
     // resulting double spaces.
     let text = strip_wiki_ref_markers(&text);
 
-    // Collapse whitespace and strip invisible characters.
-    // Uses byte-level scanning with ASCII fast path: printable ASCII (0x21-0x7E)
-    // is bulk-copied; whitespace and multi-byte sequences are handled per-char.
+    cleanup_whitespace(&text)
+}
+
+/// Collapse whitespace, strip invisible characters, and trim.
+///
+/// Uses byte-level scanning with ASCII fast path: printable ASCII (0x21-0x7E)
+/// is bulk-copied in runs; whitespace and multi-byte sequences are handled per-char.
+/// For pure ASCII text that is already trimmed, has no double spaces, and no
+/// control characters, returns a zero-copy result.
+#[inline]
+fn cleanup_whitespace(text: &str) -> String {
     let text_bytes = text.as_bytes();
     let text_len = text_bytes.len();
+
+    // Ultra-fast path: if the text is pure ASCII and already clean, just clone it.
+    // "Clean" = trimmed, no double spaces, no control chars (< 0x20 except nothing).
+    // This avoids the character-by-character scan for already-processed text.
+    if text_len > 0 && is_clean_ascii(text_bytes) {
+        return text.to_string();
+    }
     let mut cleaned = String::with_capacity(text_len);
     let mut last_was_space = true;
     let mut i = 0;
@@ -429,9 +474,7 @@ fn strip_impl(html: &str) -> String {
             last_was_space = false;
         } else if b <= 0x20 {
             // ASCII whitespace or control character
-            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r')
-                && !last_was_space
-            {
+            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
                 cleaned.push(' ');
                 last_was_space = true;
             }
@@ -468,13 +511,39 @@ fn strip_impl(html: &str) -> String {
 ///
 /// Matches: `[1]`, `[42]`, `[edit]`, `[citation needed]`, and bare `edit]`
 /// preceded by a word boundary.  Uses `memchr` for `[` scanning -- no regex.
-fn strip_wiki_ref_markers(s: &str) -> std::borrow::Cow<'_, str> {
+/// Check if a byte slice represents "clean" ASCII text: no leading/trailing
+/// whitespace, no double spaces, no control chars, no multi-byte UTF-8.
+/// When true, `cleanup_whitespace` can skip the character-by-character pass.
+#[inline]
+fn is_clean_ascii(bytes: &[u8]) -> bool {
+    // Not trimmed?
+    if bytes[0] <= b' ' || bytes[bytes.len() - 1] <= b' ' {
+        return false;
+    }
+    let mut prev_space = false;
+    for &b in bytes {
+        if b == b' ' {
+            if prev_space {
+                return false; // double space
+            }
+            prev_space = true;
+        } else if b <= 0x20 || b >= 0x7F {
+            // Control char or multi-byte UTF-8 -- need full cleanup
+            return false;
+        } else {
+            prev_space = false;
+        }
+    }
+    true
+}
+
+fn strip_wiki_ref_markers(s: &str) -> Cow<'_, str> {
     let bytes = s.as_bytes();
     let len = bytes.len();
 
     // Fast path: no '[' and no "edit]" means nothing to strip -- zero-copy return.
     if memchr::memchr(b'[', bytes).is_none() && !s.contains("edit]") {
-        return std::borrow::Cow::Borrowed(s);
+        return Cow::Borrowed(s);
     }
 
     let mut result = String::with_capacity(len);
@@ -569,7 +638,7 @@ fn strip_wiki_ref_markers(s: &str) -> std::borrow::Cow<'_, str> {
         result.push('[');
     }
 
-    std::borrow::Cow::Owned(result)
+    Cow::Owned(result)
 }
 
 /// Returns true if the tag name is a block-level element that should get
@@ -577,15 +646,43 @@ fn strip_wiki_ref_markers(s: &str) -> std::borrow::Cow<'_, str> {
 fn is_block_tag(tag: &str) -> bool {
     matches!(
         tag,
-        "p" | "div" | "br" | "wbr" | "hr"
-            | "li" | "ul" | "ol"
-            | "td" | "th" | "tr" | "dt" | "dd"
-            | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-            | "section" | "article" | "header" | "footer"
-            | "aside" | "main" | "blockquote" | "figcaption"
-            | "figure" | "details" | "summary"
-            | "caption" | "thead" | "tbody" | "tfoot"
-            | "address" | "pre" | "fieldset" | "legend"
+        "p" | "div"
+            | "br"
+            | "wbr"
+            | "hr"
+            | "li"
+            | "ul"
+            | "ol"
+            | "td"
+            | "th"
+            | "tr"
+            | "dt"
+            | "dd"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "section"
+            | "article"
+            | "header"
+            | "footer"
+            | "aside"
+            | "main"
+            | "blockquote"
+            | "figcaption"
+            | "figure"
+            | "details"
+            | "summary"
+            | "caption"
+            | "thead"
+            | "tbody"
+            | "tfoot"
+            | "address"
+            | "pre"
+            | "fieldset"
+            | "legend"
     )
 }
 
@@ -619,53 +716,53 @@ fn numeric_entity_to_char(n: u32) -> Option<char> {
 static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&AElig;", '\u{00C6}'),
     ("&Aacute;", '\u{00C1}'),
-    ("&Abreve;", '\u{0102}'),   // Romanian Ă
+    ("&Abreve;", '\u{0102}'), // Romanian Ă
     ("&Acirc;", '\u{00C2}'),
     ("&Agrave;", '\u{00C0}'),
     ("&Alpha;", '\u{0391}'),
-    ("&Aogonek;", '\u{0104}'),  // Polish Ą
+    ("&Aogonek;", '\u{0104}'), // Polish Ą
     ("&Aring;", '\u{00C5}'),
     ("&Atilde;", '\u{00C3}'),
     ("&Auml;", '\u{00C4}'),
     ("&Beta;", '\u{0392}'),
-    ("&Cacute;", '\u{0106}'),   // Polish Ć
-    ("&Ccaron;", '\u{010C}'),   // Czech Č
+    ("&Cacute;", '\u{0106}'), // Polish Ć
+    ("&Ccaron;", '\u{010C}'), // Czech Č
     ("&Ccedil;", '\u{00C7}'),
     ("&Chi;", '\u{03A7}'),
     ("&Dagger;", '\u{2021}'),
-    ("&Dcaron;", '\u{010E}'),   // Czech Ď
+    ("&Dcaron;", '\u{010E}'), // Czech Ď
     ("&Delta;", '\u{0394}'),
-    ("&Dstrok;", '\u{0110}'),   // Croatian Đ
+    ("&Dstrok;", '\u{0110}'), // Croatian Đ
     ("&ETH;", '\u{00D0}'),
     ("&Eacute;", '\u{00C9}'),
-    ("&Ecaron;", '\u{011A}'),   // Czech Ě
+    ("&Ecaron;", '\u{011A}'), // Czech Ě
     ("&Ecirc;", '\u{00CA}'),
     ("&Egrave;", '\u{00C8}'),
-    ("&Eogonek;", '\u{0118}'),  // Polish Ę
+    ("&Eogonek;", '\u{0118}'), // Polish Ę
     ("&Epsilon;", '\u{0395}'),
     ("&Eta;", '\u{0397}'),
     ("&Euml;", '\u{00CB}'),
     ("&Gamma;", '\u{0393}'),
-    ("&Gbreve;", '\u{011E}'),   // Turkish Ğ
+    ("&Gbreve;", '\u{011E}'), // Turkish Ğ
     ("&Iacute;", '\u{00CD}'),
     ("&Icirc;", '\u{00CE}'),
-    ("&Idot;", '\u{0130}'),     // Turkish İ
+    ("&Idot;", '\u{0130}'), // Turkish İ
     ("&Igrave;", '\u{00CC}'),
     ("&Iota;", '\u{0399}'),
     ("&Iuml;", '\u{00CF}'),
     ("&Kappa;", '\u{039A}'),
     ("&Lambda;", '\u{039B}'),
-    ("&Lcaron;", '\u{013D}'),   // Slovak Ľ
-    ("&Lstrok;", '\u{0141}'),   // Polish Ł
+    ("&Lcaron;", '\u{013D}'), // Slovak Ľ
+    ("&Lstrok;", '\u{0141}'), // Polish Ł
     ("&Mu;", '\u{039C}'),
-    ("&Nacute;", '\u{0143}'),   // Polish Ń
-    ("&Ncaron;", '\u{0147}'),   // Czech Ň
+    ("&Nacute;", '\u{0143}'), // Polish Ń
+    ("&Ncaron;", '\u{0147}'), // Czech Ň
     ("&Ntilde;", '\u{00D1}'),
     ("&Nu;", '\u{039D}'),
     ("&OElig;", '\u{0152}'),
     ("&Oacute;", '\u{00D3}'),
     ("&Ocirc;", '\u{00D4}'),
-    ("&Odblac;", '\u{0150}'),   // Hungarian Ő
+    ("&Odblac;", '\u{0150}'), // Hungarian Ő
     ("&Ograve;", '\u{00D2}'),
     ("&Omega;", '\u{03A9}'),
     ("&Omicron;", '\u{039F}'),
@@ -676,33 +773,33 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Pi;", '\u{03A0}'),
     ("&Prime;", '\u{2033}'),
     ("&Psi;", '\u{03A8}'),
-    ("&Racute;", '\u{0154}'),   // Slovak Ŕ
-    ("&Rcaron;", '\u{0158}'),   // Czech Ř
+    ("&Racute;", '\u{0154}'), // Slovak Ŕ
+    ("&Rcaron;", '\u{0158}'), // Czech Ř
     ("&Rho;", '\u{03A1}'),
-    ("&Sacute;", '\u{015A}'),   // Polish Ś
+    ("&Sacute;", '\u{015A}'), // Polish Ś
     ("&Scaron;", '\u{0160}'),
-    ("&Scedil;", '\u{015E}'),   // Turkish Ş
+    ("&Scedil;", '\u{015E}'), // Turkish Ş
     ("&Sigma;", '\u{03A3}'),
     ("&THORN;", '\u{00DE}'),
     ("&Tau;", '\u{03A4}'),
-    ("&Tcaron;", '\u{0164}'),   // Slovak Ť
-    ("&Tcedil;", '\u{0162}'),   // Romanian Ţ
+    ("&Tcaron;", '\u{0164}'), // Slovak Ť
+    ("&Tcedil;", '\u{0162}'), // Romanian Ţ
     ("&Theta;", '\u{0398}'),
     ("&Uacute;", '\u{00DA}'),
     ("&Ucirc;", '\u{00DB}'),
-    ("&Udblac;", '\u{0170}'),   // Hungarian Ű
+    ("&Udblac;", '\u{0170}'), // Hungarian Ű
     ("&Ugrave;", '\u{00D9}'),
     ("&Upsilon;", '\u{03A5}'),
     ("&Uuml;", '\u{00DC}'),
     ("&Xi;", '\u{039E}'),
     ("&Yacute;", '\u{00DD}'),
     ("&Yuml;", '\u{0178}'),
-    ("&Zacute;", '\u{0179}'),   // Polish Ź
-    ("&Zcaron;", '\u{017D}'),   // Czech Ž
-    ("&Zdot;", '\u{017B}'),     // Polish Ż
+    ("&Zacute;", '\u{0179}'), // Polish Ź
+    ("&Zcaron;", '\u{017D}'), // Czech Ž
+    ("&Zdot;", '\u{017B}'),   // Polish Ż
     ("&Zeta;", '\u{0396}'),
     ("&aacute;", '\u{00E1}'),
-    ("&abreve;", '\u{0103}'),   // Romanian ă
+    ("&abreve;", '\u{0103}'), // Romanian ă
     ("&acirc;", '\u{00E2}'),
     ("&acute;", '\u{00B4}'),
     ("&aelig;", '\u{00E6}'),
@@ -712,7 +809,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&amp;", '&'),
     ("&and;", '\u{2227}'),
     ("&ang;", '\u{2220}'),
-    ("&aogonek;", '\u{0105}'),  // Polish ą
+    ("&aogonek;", '\u{0105}'), // Polish ą
     ("&apos;", '\''),
     ("&aring;", '\u{00E5}'),
     ("&asymp;", '\u{2248}'),
@@ -722,9 +819,9 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&beta;", '\u{03B2}'),
     ("&brvbar;", '\u{00A6}'),
     ("&bull;", '\u{2022}'),
-    ("&cacute;", '\u{0107}'),   // Polish ć
+    ("&cacute;", '\u{0107}'), // Polish ć
     ("&cap;", '\u{2229}'),
-    ("&ccaron;", '\u{010D}'),   // Czech č
+    ("&ccaron;", '\u{010D}'), // Czech č
     ("&ccedil;", '\u{00E7}'),
     ("&cedil;", '\u{00B8}'),
     ("&cent;", '\u{00A2}'),
@@ -739,20 +836,20 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&dArr;", '\u{21D3}'),
     ("&dagger;", '\u{2020}'),
     ("&darr;", '\u{2193}'),
-    ("&dcaron;", '\u{010F}'),   // Czech ď
+    ("&dcaron;", '\u{010F}'), // Czech ď
     ("&deg;", '\u{00B0}'),
     ("&delta;", '\u{03B4}'),
     ("&diams;", '\u{2666}'),
     ("&divide;", '\u{00F7}'),
-    ("&dstrok;", '\u{0111}'),   // Croatian đ
+    ("&dstrok;", '\u{0111}'), // Croatian đ
     ("&eacute;", '\u{00E9}'),
-    ("&ecaron;", '\u{011B}'),   // Czech ě
+    ("&ecaron;", '\u{011B}'), // Czech ě
     ("&ecirc;", '\u{00EA}'),
     ("&egrave;", '\u{00E8}'),
     ("&empty;", '\u{2205}'),
     ("&emsp;", '\u{2003}'),
     ("&ensp;", '\u{2002}'),
-    ("&eogonek;", '\u{0119}'),  // Polish ę
+    ("&eogonek;", '\u{0119}'), // Polish ę
     ("&epsilon;", '\u{03B5}'),
     ("&equiv;", '\u{2261}'),
     ("&eta;", '\u{03B7}'),
@@ -767,7 +864,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&frac34;", '\u{00BE}'),
     ("&frasl;", '\u{2044}'),
     ("&gamma;", '\u{03B3}'),
-    ("&gbreve;", '\u{011F}'),   // Turkish ğ
+    ("&gbreve;", '\u{011F}'), // Turkish ğ
     ("&ge;", '\u{2265}'),
     ("&gt;", '>'),
     ("&hArr;", '\u{21D4}'),
@@ -780,7 +877,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&igrave;", '\u{00EC}'),
     ("&image;", '\u{2111}'),
     ("&infin;", '\u{221E}'),
-    ("&inodot;", '\u{0131}'),   // Turkish ı (dotless i)
+    ("&inodot;", '\u{0131}'), // Turkish ı (dotless i)
     ("&int;", '\u{222B}'),
     ("&iota;", '\u{03B9}'),
     ("&iquest;", '\u{00BF}'),
@@ -792,7 +889,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&lang;", '\u{2329}'),
     ("&laquo;", '\u{00AB}'),
     ("&larr;", '\u{2190}'),
-    ("&lcaron;", '\u{013E}'),   // Slovak ľ
+    ("&lcaron;", '\u{013E}'), // Slovak ľ
     ("&lceil;", '\u{2308}'),
     ("&ldquo;", '\u{201C}'),
     ("&le;", '\u{2264}'),
@@ -802,7 +899,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&lrm;", '\u{200E}'),
     ("&lsaquo;", '\u{2039}'),
     ("&lsquo;", '\u{2018}'),
-    ("&lstrok;", '\u{0142}'),   // Polish ł
+    ("&lstrok;", '\u{0142}'), // Polish ł
     ("&lt;", '<'),
     ("&macr;", '\u{00AF}'),
     ("&mdash;", '\u{2014}'),
@@ -811,9 +908,9 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&minus;", '\u{2212}'),
     ("&mu;", '\u{03BC}'),
     ("&nabla;", '\u{2207}'),
-    ("&nacute;", '\u{0144}'),   // Polish ń
+    ("&nacute;", '\u{0144}'), // Polish ń
     ("&nbsp;", ' '),
-    ("&ncaron;", '\u{0148}'),   // Czech ň
+    ("&ncaron;", '\u{0148}'), // Czech ň
     ("&ndash;", '\u{2013}'),
     ("&ne;", '\u{2260}'),
     ("&ni;", '\u{220B}'),
@@ -824,7 +921,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&nu;", '\u{03BD}'),
     ("&oacute;", '\u{00F3}'),
     ("&ocirc;", '\u{00F4}'),
-    ("&odblac;", '\u{0151}'),   // Hungarian ő
+    ("&odblac;", '\u{0151}'), // Hungarian ő
     ("&oelig;", '\u{0153}'),
     ("&ograve;", '\u{00F2}'),
     ("&oline;", '\u{203E}'),
@@ -853,12 +950,12 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&psi;", '\u{03C8}'),
     ("&quot;", '"'),
     ("&rArr;", '\u{21D2}'),
-    ("&racute;", '\u{0155}'),   // Slovak ŕ
+    ("&racute;", '\u{0155}'), // Slovak ŕ
     ("&radic;", '\u{221A}'),
     ("&rang;", '\u{232A}'),
     ("&raquo;", '\u{00BB}'),
     ("&rarr;", '\u{2192}'),
-    ("&rcaron;", '\u{0159}'),   // Czech ř
+    ("&rcaron;", '\u{0159}'), // Czech ř
     ("&rceil;", '\u{2309}'),
     ("&rdquo;", '\u{201D}'),
     ("&real;", '\u{211C}'),
@@ -868,10 +965,10 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&rlm;", '\u{200F}'),
     ("&rsaquo;", '\u{203A}'),
     ("&rsquo;", '\u{2019}'),
-    ("&sacute;", '\u{015B}'),   // Polish ś
+    ("&sacute;", '\u{015B}'), // Polish ś
     ("&sbquo;", '\u{201A}'),
     ("&scaron;", '\u{0161}'),
-    ("&scedil;", '\u{015F}'),   // Turkish ş
+    ("&scedil;", '\u{015F}'), // Turkish ş
     ("&sdot;", '\u{22C5}'),
     ("&sect;", '\u{00A7}'),
     ("&shy;", '\u{00AD}'),
@@ -889,8 +986,8 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&supe;", '\u{2287}'),
     ("&szlig;", '\u{00DF}'),
     ("&tau;", '\u{03C4}'),
-    ("&tcaron;", '\u{0165}'),   // Slovak ť
-    ("&tcedil;", '\u{0163}'),   // Romanian ţ
+    ("&tcaron;", '\u{0165}'), // Slovak ť
+    ("&tcedil;", '\u{0163}'), // Romanian ţ
     ("&there4;", '\u{2234}'),
     ("&theta;", '\u{03B8}'),
     ("&thetasym;", '\u{03D1}'),
@@ -903,7 +1000,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&uacute;", '\u{00FA}'),
     ("&uarr;", '\u{2191}'),
     ("&ucirc;", '\u{00FB}'),
-    ("&udblac;", '\u{0171}'),   // Hungarian ű
+    ("&udblac;", '\u{0171}'), // Hungarian ű
     ("&ugrave;", '\u{00F9}'),
     ("&uml;", '\u{00A8}'),
     ("&upsih;", '\u{03D2}'),
@@ -914,9 +1011,9 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&yacute;", '\u{00FD}'),
     ("&yen;", '\u{00A5}'),
     ("&yuml;", '\u{00FF}'),
-    ("&zacute;", '\u{017A}'),   // Polish ź
-    ("&zcaron;", '\u{017E}'),   // Czech ž
-    ("&zdot;", '\u{017C}'),     // Polish ż
+    ("&zacute;", '\u{017A}'), // Polish ź
+    ("&zcaron;", '\u{017E}'), // Czech ž
+    ("&zdot;", '\u{017C}'),   // Polish ż
     ("&zeta;", '\u{03B6}'),
     ("&zwj;", '\u{200D}'),
     ("&zwnj;", '\u{200C}'),
@@ -932,31 +1029,44 @@ fn decode_named_entity(entity: &str) -> Option<char> {
 /// Extract the value of an HTML attribute from a tag buffer.
 ///
 /// Handles both `attr="value"` and `attr='value'` formats.
+/// Uses byte-level case-insensitive search to avoid heap allocations.
 /// Returns `None` if the attribute is not found.
-fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
-    let tag_lower = tag.to_lowercase();
-    // Look for attr_name= (with optional whitespace around =)
-    let needle = format!("{}=", attr_name);
-    let pos = tag_lower.find(&needle)?;
-    let after_eq = pos + needle.len();
-    let rest = &tag[after_eq..];
-    let rest = rest.trim_start();
+fn extract_attr_value<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
+    let tag_bytes = tag.as_bytes();
+    let name_bytes = attr_name.as_bytes();
+    let name_len = name_bytes.len();
 
-    if let Some(inner) = rest.strip_prefix('"') {
-        // Double-quoted value
-        let end = inner.find('"')?;
-        Some(inner[..end].to_string())
-    } else if let Some(inner) = rest.strip_prefix('\'') {
-        // Single-quoted value
-        let end = inner.find('\'')?;
-        Some(inner[..end].to_string())
-    } else {
-        // Unquoted value (ends at whitespace or >)
-        let end = rest
-            .find(|c: char| c.is_whitespace() || c == '>')
-            .unwrap_or(rest.len());
-        Some(rest[..end].to_string())
+    // Find attr_name= case-insensitively
+    let mut pos = 0;
+    while pos + name_len < tag_bytes.len() {
+        if tag_bytes[pos + name_len] == b'='
+            && tag_bytes[pos..pos + name_len].eq_ignore_ascii_case(name_bytes)
+        {
+            let after_eq = pos + name_len + 1;
+            // Skip whitespace after =
+            let rest = &tag[after_eq..];
+            let rest = rest.trim_start();
+            let rest_bytes = rest.as_bytes();
+
+            return if rest_bytes.first() == Some(&b'"') {
+                let inner = &rest[1..];
+                let end = memchr::memchr(b'"', inner.as_bytes())?;
+                Some(&inner[..end])
+            } else if rest_bytes.first() == Some(&b'\'') {
+                let inner = &rest[1..];
+                let end = memchr::memchr(b'\'', inner.as_bytes())?;
+                Some(&inner[..end])
+            } else {
+                // Unquoted value (ends at whitespace or >)
+                let end = rest
+                    .find(|c: char| c.is_whitespace() || c == '>')
+                    .unwrap_or(rest.len());
+                Some(&rest[..end])
+            };
+        }
+        pos += 1;
     }
+    None
 }
 
 /// Map Windows-1252 codepoints 128–159 to their correct Unicode equivalents.
@@ -1043,17 +1153,17 @@ fn is_nbsp(ch: char) -> bool {
 /// assert_eq!(deformat::html::decode_entities("&#169; 2026"), "\u{00A9} 2026");
 /// ```
 pub fn decode_entities(s: &str) -> String {
-    decode_entities_in_str(s)
+    decode_entities_in_str(s).into_owned()
 }
 
-fn decode_entities_in_str(s: &str) -> String {
+fn decode_entities_in_str(s: &str) -> Cow<'_, str> {
     let bytes = s.as_bytes();
     let len = bytes.len();
 
-    // Fast path: no '&' means no entities to decode — avoid allocation + copy
+    // Fast path: no '&' means no entities to decode — zero-copy return
     let first_amp = match memchr::memchr(b'&', bytes) {
         Some(offset) => offset,
-        None => return s.to_owned(),
+        None => return Cow::Borrowed(s),
     };
 
     let mut result = String::with_capacity(len);
@@ -1076,7 +1186,7 @@ fn decode_entities_in_str(s: &str) -> String {
             }
         }
     }
-    result
+    Cow::Owned(result)
 }
 
 /// Decode an HTML entity starting at `pos` (which points to '&').
@@ -1109,8 +1219,9 @@ fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -
             text.push(ch);
         } else if entity_str.starts_with("&#") && entity_str.len() > 3 {
             let num_str = &entity_str[2..entity_str.len() - 1];
-            let parsed = if let Some(hex) =
-                num_str.strip_prefix('x').or_else(|| num_str.strip_prefix('X'))
+            let parsed = if let Some(hex) = num_str
+                .strip_prefix('x')
+                .or_else(|| num_str.strip_prefix('X'))
             {
                 u32::from_str_radix(hex, 16).ok()
             } else {
@@ -1160,6 +1271,25 @@ mod tests {
     #[test]
     fn strip_basic() {
         assert_eq!(strip_to_text("<p>Hello <b>world</b>!</p>"), "Hello world!");
+    }
+
+    #[test]
+    fn strip_plain_text_passthrough() {
+        // No HTML at all -- exercises the no-'<' fast path
+        let text = "Tim Cook met with Sundar Pichai in Seattle.";
+        assert_eq!(strip_to_text(text), text);
+    }
+
+    #[test]
+    fn strip_plain_text_with_entities() {
+        // No tags but has entities -- fast path decodes them
+        assert_eq!(strip_to_text("Caf&eacute; au lait"), "Caf\u{e9} au lait");
+    }
+
+    #[test]
+    fn strip_plain_text_with_whitespace() {
+        // No tags, extra whitespace -- fast path normalizes it
+        assert_eq!(strip_to_text("  hello   world  "), "hello world");
     }
 
     #[test]
@@ -1458,9 +1588,8 @@ mod tests {
     #[test]
     fn entity_accented_names() {
         // Common in European news: accented names must survive extraction
-        let text = strip_to_text(
-            "<p>&Uuml;ber M&uuml;ller traf Garc&iacute;a in S&atilde;o Paulo.</p>",
-        );
+        let text =
+            strip_to_text("<p>&Uuml;ber M&uuml;ller traf Garc&iacute;a in S&atilde;o Paulo.</p>");
         assert!(text.contains("Über"), "Uuml: {text}");
         assert!(text.contains("Müller"), "uuml: {text}");
         assert!(text.contains("García"), "iacute: {text}");
@@ -1479,15 +1608,24 @@ mod tests {
     fn entity_unknown_passes_through() {
         // Unknown named entities should pass through unchanged
         let text = strip_to_text("<p>&foobar; text</p>");
-        assert!(text.contains("&foobar;"), "unknown entity preserved: {text}");
+        assert!(
+            text.contains("&foobar;"),
+            "unknown entity preserved: {text}"
+        );
     }
 
     #[test]
     fn entity_unterminated_passes_through() {
         // Unterminated entity (no semicolon) should not eat subsequent text
         let text = strip_to_text("<p>AT&T is a company.</p>");
-        assert!(text.contains("AT&T"), "unterminated entity preserved: {text}");
-        assert!(text.contains("company"), "subsequent text preserved: {text}");
+        assert!(
+            text.contains("AT&T"),
+            "unterminated entity preserved: {text}"
+        );
+        assert!(
+            text.contains("company"),
+            "subsequent text preserved: {text}"
+        );
     }
 
     // ===== Edge cases =====
@@ -1584,7 +1722,10 @@ mod tests {
         let html = r#"<a title='He said "hello"'>Link</a>"#;
         let text = strip_to_text(html);
         assert!(text.contains("Link"), "content preserved: {text}");
-        assert!(!text.contains("hello"), "nested quote attr not leaked: {text}");
+        assert!(
+            !text.contains("hello"),
+            "nested quote attr not leaked: {text}"
+        );
     }
 
     #[test]
@@ -1592,7 +1733,10 @@ mod tests {
         let text = strip_to_text("<p>Before&#0;After</p>");
         assert!(text.contains("Before"), "before null: {text}");
         assert!(text.contains("After"), "after null: {text}");
-        assert!(text.contains('\u{FFFD}'), "null becomes replacement char: {text}");
+        assert!(
+            text.contains('\u{FFFD}'),
+            "null becomes replacement char: {text}"
+        );
     }
 
     #[test]
@@ -1689,10 +1833,7 @@ mod tests {
     fn zero_width_space_stripped() {
         // ZWSP inside a name should be removed for clean NER tokenization
         let text = strip_to_text("<p>Albert\u{200B}Einstein</p>");
-        assert!(
-            text.contains("AlbertEinstein"),
-            "ZWSP stripped: {text}"
-        );
+        assert!(text.contains("AlbertEinstein"), "ZWSP stripped: {text}");
     }
 
     #[test]
@@ -1865,8 +2006,14 @@ mod tests {
             <div class="navbox"><table><tr><td>Related articles</td></tr></table></div>
         </body></html>"#;
         let text = strip_to_text(html);
-        assert!(text.contains("Article content"), "content preserved: {text}");
-        assert!(!text.contains("Related articles"), "navbox stripped: {text}");
+        assert!(
+            text.contains("Article content"),
+            "content preserved: {text}"
+        );
+        assert!(
+            !text.contains("Related articles"),
+            "navbox stripped: {text}"
+        );
     }
 
     // ===== Semicolon-optional entity decoding =====
@@ -1875,7 +2022,10 @@ mod tests {
     fn entity_without_semicolon_amp() {
         // &amp without ; should decode to &
         let text = strip_to_text("<p>AT&amp T</p>");
-        assert!(text.contains("AT& T") || text.contains("AT&"), "amp without semi: {text}");
+        assert!(
+            text.contains("AT& T") || text.contains("AT&"),
+            "amp without semi: {text}"
+        );
     }
 
     #[test]
@@ -1889,7 +2039,10 @@ mod tests {
     fn entity_without_semicolon_nbsp() {
         // &nbsp without ; -> non-breaking space (collapsed to regular space)
         let text = strip_to_text("<p>Hello&nbsp world</p>");
-        assert!(text.contains("Hello"), "nbsp without semi preserved text: {text}");
+        assert!(
+            text.contains("Hello"),
+            "nbsp without semi preserved text: {text}"
+        );
     }
 
     #[test]
@@ -1904,14 +2057,20 @@ mod tests {
         // Very short &X patterns should pass through, not try entity decode
         let text = strip_to_text("<p>if x &lt 10</p>");
         // &lt without ; should still decode (it's a known entity)
-        assert!(text.contains('<') || text.contains("lt"), "lt without semi: {text}");
+        assert!(
+            text.contains('<') || text.contains("lt"),
+            "lt without semi: {text}"
+        );
     }
 
     #[test]
     fn entity_without_semicolon_unknown_passthrough() {
         // Unknown entity-like strings without ; should pass through as-is
         let text = strip_to_text("<p>&xyzzy content</p>");
-        assert!(text.contains("&xyzzy"), "unknown entity passes through: {text}");
+        assert!(
+            text.contains("&xyzzy"),
+            "unknown entity passes through: {text}"
+        );
     }
 
     #[test]
@@ -2101,7 +2260,10 @@ mod tests {
         <p>Visible text.</p>"#;
         let text = strip_to_text(html);
         assert!(text.contains("Visible text"), "visible preserved: {text}");
-        assert!(!text.contains("Deep hidden"), "deeply nested skipped: {text}");
+        assert!(
+            !text.contains("Deep hidden"),
+            "deeply nested skipped: {text}"
+        );
     }
 
     #[test]
@@ -2211,7 +2373,10 @@ mod tests {
         let text = strip_to_text(html);
         assert!(text.contains("東京"), "Tokyo preserved: {text}");
         assert!(text.contains("安倍"), "Abe preserved: {text}");
-        assert!(!text.contains("とうきょう"), "Tokyo furigana stripped: {text}");
+        assert!(
+            !text.contains("とうきょう"),
+            "Tokyo furigana stripped: {text}"
+        );
         assert!(!text.contains("あべ"), "Abe furigana stripped: {text}");
     }
 
@@ -2318,7 +2483,10 @@ mod tests {
         // U+10FFFF is the last valid Unicode codepoint
         let text = strip_to_text("<p>&#x10FFFF;</p>");
         // char::from_u32(0x10FFFF) returns Some (it's a noncharacter but valid)
-        assert!(!text.contains("&#x10FFFF;"), "large codepoint decoded: {text}");
+        assert!(
+            !text.contains("&#x10FFFF;"),
+            "large codepoint decoded: {text}"
+        );
     }
 
     // ===== JSON-LD script tag =====
@@ -2334,7 +2502,10 @@ mod tests {
         let text = strip_to_text(html);
         assert!(text.contains("Actual article"), "content preserved: {text}");
         assert!(!text.contains("NewsArticle"), "json-ld stripped: {text}");
-        assert!(!text.contains("John Smith"), "json-ld author stripped: {text}");
+        assert!(
+            !text.contains("John Smith"),
+            "json-ld author stripped: {text}"
+        );
     }
 
     // ===== details/summary pattern =====
@@ -2350,7 +2521,10 @@ mod tests {
         assert!(text.contains("Regular content"), "main content: {text}");
         // details/summary content is included (it's visible in the DOM)
         assert!(text.contains("Click to expand"), "summary: {text}");
-        assert!(!text.contains("expandHidden"), "summary/content separated: {text}");
+        assert!(
+            !text.contains("expandHidden"),
+            "summary/content separated: {text}"
+        );
     }
 
     // ===== CDATA handling =====
@@ -2362,7 +2536,10 @@ mod tests {
         let text = strip_to_text("<p>Before</p><![CDATA[hidden data]]><p>After</p>");
         assert!(text.contains("Before"), "before CDATA: {text}");
         assert!(text.contains("After"), "after CDATA: {text}");
-        assert!(!text.contains("hidden data"), "CDATA content stripped: {text}");
+        assert!(
+            !text.contains("hidden data"),
+            "CDATA content stripped: {text}"
+        );
     }
 
     #[test]
@@ -2407,7 +2584,10 @@ mod tests {
     fn entity_overflow_passthrough() {
         // Huge numeric entity that exceeds u32 -- should pass through as-is
         let text = strip_to_text("<p>&#99999999999;</p>");
-        assert!(text.contains("&#99999999999;"), "overflow entity passes through: {text}");
+        assert!(
+            text.contains("&#99999999999;"),
+            "overflow entity passes through: {text}"
+        );
     }
 
     // ===== Whitespace between inline and block elements =====
@@ -2422,8 +2602,14 @@ mod tests {
     #[test]
     fn list_items_separated() {
         let text = strip_to_text("<ul><li>Apple</li><li>Banana</li><li>Cherry</li></ul>");
-        assert!(!text.contains("AppleBanana"), "list items separated: {text}");
-        assert!(!text.contains("BananaCherry"), "list items separated: {text}");
+        assert!(
+            !text.contains("AppleBanana"),
+            "list items separated: {text}"
+        );
+        assert!(
+            !text.contains("BananaCherry"),
+            "list items separated: {text}"
+        );
         assert!(text.contains("Apple"), "item 1: {text}");
         assert!(text.contains("Banana"), "item 2: {text}");
         assert!(text.contains("Cherry"), "item 3: {text}");
@@ -2438,7 +2624,10 @@ mod tests {
         let text = strip_to_text(html);
         assert!(text.contains("Jarosław"), "lstrok decoded: {text}");
         assert!(text.contains("Kaczyński"), "nacute decoded: {text}");
-        assert!(text.contains("Łódź"), "Lstrok+oacute+zacute decoded: {text}");
+        assert!(
+            text.contains("Łódź"),
+            "Lstrok+oacute+zacute decoded: {text}"
+        );
     }
 
     #[test]

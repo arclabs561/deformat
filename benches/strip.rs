@@ -74,11 +74,18 @@ fn entity_heavy() -> String {
     html
 }
 
+fn plain_text() -> &'static str {
+    "Tim Cook announced that Apple Inc would acquire the German startup DeepL, \
+     founded by Jaroslaw Kutylowski in Cologne. The deal, worth EUR 3.2 billion, \
+     closes on March 15, 2026. Cook told Reuters he expects 500 new hires."
+}
+
 fn bench_strip(c: &mut Criterion) {
     let small = small_fragment();
     let medium = medium_article();
     let large = large_wikipedia();
     let entities = entity_heavy();
+    let plain = plain_text();
 
     let mut group = c.benchmark_group("strip_to_text");
 
@@ -100,6 +107,12 @@ fn bench_strip(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(entities.len() as u64));
     group.bench_function("entity_heavy", |b| {
         b.iter(|| deformat::html::strip_to_text(black_box(&entities)))
+    });
+
+    // Plain text (no HTML): measures the fast-path early exit
+    group.throughput(Throughput::Bytes(plain.len() as u64));
+    group.bench_function("plain_text", |b| {
+        b.iter(|| deformat::html::strip_to_text(black_box(plain)))
     });
 
     group.finish();

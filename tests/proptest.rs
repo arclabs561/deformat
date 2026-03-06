@@ -12,16 +12,54 @@ use proptest::prelude::*;
 /// Generate arbitrary HTML-like strings with tags, entities, and text.
 fn arb_html_fragment() -> impl Strategy<Value = String> {
     let tag_names = prop::sample::select(vec![
-        "p", "div", "span", "b", "i", "a", "h1", "h2", "h3", "li", "ul", "ol", "td", "th", "tr",
-        "table", "article", "section", "main", "blockquote", "em", "strong", "code", "pre",
+        "p",
+        "div",
+        "span",
+        "b",
+        "i",
+        "a",
+        "h1",
+        "h2",
+        "h3",
+        "li",
+        "ul",
+        "ol",
+        "td",
+        "th",
+        "tr",
+        "table",
+        "article",
+        "section",
+        "main",
+        "blockquote",
+        "em",
+        "strong",
+        "code",
+        "pre",
     ]);
     let skip_tag_names = prop::sample::select(vec![
         "script", "style", "nav", "header", "footer", "aside", "noscript", "template", "svg",
     ]);
     let entities = prop::sample::select(vec![
-        "&amp;", "&lt;", "&gt;", "&quot;", "&apos;", "&nbsp;", "&eacute;", "&mdash;", "&ndash;",
-        "&copy;", "&reg;", "&euro;", "&hellip;", "&ldquo;", "&rdquo;", "&#169;", "&#x1F4A9;",
-        "&#0;", "&#8212;",
+        "&amp;",
+        "&lt;",
+        "&gt;",
+        "&quot;",
+        "&apos;",
+        "&nbsp;",
+        "&eacute;",
+        "&mdash;",
+        "&ndash;",
+        "&copy;",
+        "&reg;",
+        "&euro;",
+        "&hellip;",
+        "&ldquo;",
+        "&rdquo;",
+        "&#169;",
+        "&#x1F4A9;",
+        "&#0;",
+        "&#8212;",
     ]);
 
     prop::collection::vec(
@@ -29,13 +67,11 @@ fn arb_html_fragment() -> impl Strategy<Value = String> {
             // Plain text words
             "[a-zA-Z0-9 .,!?'-]{1,30}".prop_map(|s| s),
             // Opening + closing tag around text
-            (tag_names.clone(), "[a-zA-Z0-9 .,]{0,20}").prop_map(|(tag, text)| {
-                format!("<{tag}>{text}</{tag}>")
-            }),
+            (tag_names.clone(), "[a-zA-Z0-9 .,]{0,20}")
+                .prop_map(|(tag, text)| { format!("<{tag}>{text}</{tag}>") }),
             // Skip tag with hidden content
-            (skip_tag_names, "[a-zA-Z0-9 .,]{0,20}").prop_map(|(tag, text)| {
-                format!("<{tag}>{text}</{tag}>")
-            }),
+            (skip_tag_names, "[a-zA-Z0-9 .,]{0,20}")
+                .prop_map(|(tag, text)| { format!("<{tag}>{text}</{tag}>") }),
             // Entity
             entities.prop_map(|s| s.to_string()),
             // Self-closing tag
@@ -382,6 +418,84 @@ proptest! {
             twice,
             "decode_entities not idempotent on input: {:?}",
             &html[..html.len().min(80)]
+        );
+    }
+}
+
+// =============================================================================
+// Invariant: wiki ref markers ([1], [edit], [citation needed]) never in output
+// =============================================================================
+
+proptest! {
+    #[test]
+    fn wiki_ref_markers_stripped(
+        num in 1u32..999,
+        text_before in "[a-zA-Z]{3,10}",
+        text_after in "[a-zA-Z]{3,10}",
+    ) {
+        // Numeric refs [N]
+        let html = format!("<p>{text_before}[{num}]{text_after}</p>");
+        let result = deformat::html::strip_to_text(&html);
+        let marker = format!("[{num}]");
+        prop_assert!(
+            !result.contains(&marker),
+            "Wiki ref marker {:?} found in output: {:?}",
+            marker,
+            result
+        );
+        prop_assert!(result.contains(&text_before));
+        prop_assert!(result.contains(&text_after));
+    }
+
+    #[test]
+    fn wiki_edit_markers_stripped(
+        text_before in "[a-zA-Z]{3,10}",
+        text_after in "[a-zA-Z]{3,10}",
+    ) {
+        let html = format!("<p>{text_before} [edit] {text_after}</p>");
+        let result = deformat::html::strip_to_text(&html);
+        prop_assert!(
+            !result.contains("[edit]"),
+            "Wiki edit marker found in output: {:?}",
+            result
+        );
+        prop_assert!(result.contains(&text_before));
+        prop_assert!(result.contains(&text_after));
+    }
+
+    #[test]
+    fn wiki_citation_needed_stripped(
+        text_before in "[a-zA-Z]{3,10}",
+        text_after in "[a-zA-Z]{3,10}",
+    ) {
+        let html = format!("<p>{text_before} [citation needed] {text_after}</p>");
+        let result = deformat::html::strip_to_text(&html);
+        prop_assert!(
+            !result.contains("[citation needed]"),
+            "Citation needed marker found in output: {:?}",
+            result
+        );
+        prop_assert!(result.contains(&text_before));
+        prop_assert!(result.contains(&text_after));
+    }
+}
+
+// =============================================================================
+// Invariant: plain text without HTML passes through strip_to_text unchanged
+// (modulo whitespace normalization)
+// =============================================================================
+
+proptest! {
+    #[test]
+    fn plain_text_passthrough(text in "[a-zA-Z0-9,.!? ]{1,100}") {
+        let result = deformat::html::strip_to_text(&text);
+        // The text has no HTML markers, so content should be preserved
+        // (only whitespace normalization and trimming may differ)
+        let normalized: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        prop_assert_eq!(
+            result,
+            normalized,
+            "Plain text not preserved through strip_to_text"
         );
     }
 }
