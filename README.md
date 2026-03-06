@@ -23,8 +23,7 @@ assert_eq!(result.text, "Just plain text.");
 
 ## Feature flags
 
-All features are opt-in. The default build has zero heavy dependencies
-(only `once_cell` and `regex`).
+All features are opt-in. The default build has one dependency: `memchr`.
 
 | Feature | Crate | What it adds |
 |---------|-------|-------------|
@@ -41,7 +40,7 @@ deformat = { version = "0.3", features = ["readability", "html2text"] }
 
 Three strategies, from simplest to most capable:
 
-1. **`html::strip_to_text`** (always available) -- fast char-based tag stripping
+1. **`html::strip_to_text`** (always available) -- fast byte-level tag stripping
    with ~300 named HTML entities (ISO-8859-1, Latin Extended-A for Central/Eastern
    European names, Greek, math, typography), Windows-1252 C1 range mapping,
    CJK ruby annotation stripping, semantic element filtering, image alt text

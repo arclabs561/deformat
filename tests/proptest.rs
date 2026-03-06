@@ -89,15 +89,25 @@ proptest! {
             // Entity-decoded '<' can form tag-like patterns -- not a bug
             return Ok(());
         }
-        let tag_re = regex::Regex::new(
-            r"<(script|style|div|span|p|a|b|i|em|strong|h[1-6]|table|tr|td|th|ul|ol|li|nav|header|footer|aside|form|img|br|hr|section|article|main|blockquote|code|pre)\b[^>]*>"
-        ).unwrap();
-        prop_assert!(
-            !tag_re.is_match(&text),
-            "HTML tag found in output: {:?}\nInput: {:?}",
-            text,
-            html
-        );
+        const TAG_NAMES: &[&str] = &[
+            "<script", "<style", "<div", "<span", "<p ", "<p>",
+            "<a ", "<a>", "<b>", "<b ", "<i>", "<i ",
+            "<em>", "<em ", "<strong", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6",
+            "<table", "<tr", "<td", "<th", "<ul", "<ol", "<li",
+            "<nav", "<header", "<footer", "<aside", "<form", "<img",
+            "<br", "<hr", "<section", "<article", "<main", "<blockquote",
+            "<code", "<pre",
+        ];
+        let text_lower = text.to_lowercase();
+        for tag in TAG_NAMES {
+            prop_assert!(
+                !text_lower.contains(tag),
+                "HTML tag {:?} found in output: {:?}\nInput: {:?}",
+                tag,
+                text,
+                html
+            );
+        }
     }
 }
 

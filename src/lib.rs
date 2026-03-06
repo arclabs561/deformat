@@ -22,9 +22,8 @@
 //!
 //! # Feature flags
 //!
-//! All features are opt-in. The default build has zero non-core dependencies
-//! beyond `once_cell` and `regex` (used for HTML entity decoding and
-//! boilerplate removal).
+//! All features are opt-in. The default build has one dependency: `memchr`
+//! (SIMD-accelerated byte scanning).
 //!
 //! | Feature | Crate | What it adds |
 //! |---------|-------|-------------|

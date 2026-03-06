@@ -14,14 +14,6 @@
 //!    navigation, sidebars, and boilerplate.
 
 use memchr::memchr2;
-use once_cell::sync::Lazy;
-use regex::Regex;
-
-/// Matches Wikipedia-style reference markers: [1], [2], [edit], [citation needed], etc.
-/// Also matches bare `edit]` fragments (without opening bracket) that survive
-/// HTML `<span>` tag processing on some Wikipedia pages.
-static WIKI_REF_BRACKET: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\[(\d+|edit|citation needed)\]|\bedit\]").unwrap());
 
 
 /// Strip HTML tags and decode entities, returning clean plain text.
@@ -407,8 +399,8 @@ fn strip_impl(html: &str) -> String {
 
     // Strip Wikipedia reference markers [1], [edit], [citation needed] etc.
     // Do this before whitespace cleanup so the cleanup pass collapses any
-    // resulting double spaces (no need for a separate DOUBLE_SPACE regex).
-    let text = WIKI_REF_BRACKET.replace_all(&text, "");
+    // resulting double spaces.
+    let text = strip_wiki_ref_markers(&text);
 
     // Collapse whitespace and strip invisible characters.
     // Uses byte-level scanning with ASCII fast path: printable ASCII (0x21-0x7E)
@@ -470,6 +462,114 @@ fn strip_impl(html: &str) -> String {
     }
 
     cleaned.trim().to_string()
+}
+
+/// Strip Wikipedia reference markers from text.
+///
+/// Matches: `[1]`, `[42]`, `[edit]`, `[citation needed]`, and bare `edit]`
+/// preceded by a word boundary.  Uses `memchr` for `[` scanning -- no regex.
+fn strip_wiki_ref_markers(s: &str) -> std::borrow::Cow<'_, str> {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+
+    // Fast path: no '[' and no "edit]" means nothing to strip -- zero-copy return.
+    if memchr::memchr(b'[', bytes).is_none() && !s.contains("edit]") {
+        return std::borrow::Cow::Borrowed(s);
+    }
+
+    let mut result = String::with_capacity(len);
+    let mut pos = 0;
+
+    while pos < len {
+        // Check for bare "edit]" at word boundary (not preceded by alphanumeric)
+        if pos + 5 <= len
+            && &bytes[pos..pos + 5] == b"edit]"
+            && (pos == 0 || !bytes[pos - 1].is_ascii_alphanumeric())
+        {
+            pos += 5;
+            continue;
+        }
+
+        if bytes[pos] != b'[' {
+            // Find next '[' using memchr for bulk copy
+            match memchr::memchr(b'[', &bytes[pos..]) {
+                Some(offset) => {
+                    // Before copying, check for "edit]" in the gap
+                    let chunk = &s[pos..pos + offset];
+                    // We need to handle "edit]" within this chunk too,
+                    // but it's simpler to just copy byte-by-byte and
+                    // check at the top of the loop. For efficiency,
+                    // search for "edit]" in the chunk first.
+                    if let Some(edit_pos) = chunk.find("edit]") {
+                        // Check word boundary
+                        let abs_pos = pos + edit_pos;
+                        if abs_pos == 0 || !bytes[abs_pos - 1].is_ascii_alphanumeric() {
+                            result.push_str(&s[pos..abs_pos]);
+                            pos = abs_pos + 5;
+                            continue;
+                        }
+                    }
+                    result.push_str(&s[pos..pos + offset]);
+                    pos += offset;
+                }
+                None => {
+                    // Check remainder for "edit]"
+                    let chunk = &s[pos..];
+                    if let Some(edit_pos) = chunk.find("edit]") {
+                        let abs_pos = pos + edit_pos;
+                        if abs_pos == 0 || !bytes[abs_pos - 1].is_ascii_alphanumeric() {
+                            result.push_str(&s[pos..abs_pos]);
+                            pos = abs_pos + 5;
+                            continue;
+                        }
+                    }
+                    result.push_str(&s[pos..]);
+                    break;
+                }
+            }
+            continue;
+        }
+
+        // We're at '[' -- check what follows
+        let bracket_start = pos;
+        pos += 1;
+
+        if pos >= len {
+            result.push('[');
+            break;
+        }
+
+        // [digits] -- one or more ASCII digits followed by ]
+        if bytes[pos].is_ascii_digit() {
+            while pos < len && bytes[pos].is_ascii_digit() {
+                pos += 1;
+            }
+            if pos < len && bytes[pos] == b']' {
+                pos += 1; // skip the entire [N] marker
+                continue;
+            }
+            // Not a valid [N] -- emit what we've seen
+            result.push_str(&s[bracket_start..pos]);
+            continue;
+        }
+
+        // [edit]
+        if pos + 5 <= len && &bytes[pos..pos + 5] == b"edit]" {
+            pos += 5;
+            continue;
+        }
+
+        // [citation needed]
+        if pos + 16 <= len && &bytes[pos..pos + 16] == b"citation needed]" {
+            pos += 16;
+            continue;
+        }
+
+        // Not a wiki marker -- emit the '['
+        result.push('[');
+    }
+
+    std::borrow::Cow::Owned(result)
 }
 
 /// Returns true if the tag name is a block-level element that should get
