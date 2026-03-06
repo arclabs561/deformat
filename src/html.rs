@@ -934,22 +934,28 @@ pub fn decode_entities(s: &str) -> String {
 fn decode_entities_in_str(s: &str) -> String {
     let bytes = s.as_bytes();
     let len = bytes.len();
-    let mut result = String::with_capacity(len);
-    let mut pos = 0;
 
-    while pos < len {
-        // Find next '&' using memchr; bulk-copy everything before it
+    // Fast path: no '&' means no entities to decode — avoid allocation + copy
+    let first_amp = match memchr::memchr(b'&', bytes) {
+        Some(offset) => offset,
+        None => return s.to_owned(),
+    };
+
+    let mut result = String::with_capacity(len);
+    // Copy the prefix before the first '&'
+    result.push_str(&s[..first_amp]);
+    let mut pos = first_amp;
+
+    loop {
+        // pos points to '&'
+        pos = decode_entity_bytes(s, bytes, pos, &mut result);
+        // Find next '&'
         match memchr::memchr(b'&', &bytes[pos..]) {
             Some(offset) => {
-                if offset > 0 {
-                    result.push_str(&s[pos..pos + offset]);
-                }
+                result.push_str(&s[pos..pos + offset]);
                 pos += offset;
-                // Parse the entity starting at '&'
-                pos = decode_entity_bytes(s, bytes, pos, &mut result);
             }
             None => {
-                // No more '&' -- copy remainder and done
                 result.push_str(&s[pos..]);
                 break;
             }

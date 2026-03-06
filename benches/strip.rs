@@ -121,6 +121,13 @@ fn bench_decode_entities(c: &mut Criterion) {
         b.iter(|| deformat::html::decode_entities(black_box(&heavy)))
     });
 
+    // No-entity fast path: should be near-zero (just memchr scan + to_owned)
+    let plain = "The quick brown fox jumps over the lazy dog. No entities here at all.";
+    group.throughput(Throughput::Bytes(plain.len() as u64));
+    group.bench_function("no_entities", |b| {
+        b.iter(|| deformat::html::decode_entities(black_box(plain)))
+    });
+
     group.finish();
 }
 

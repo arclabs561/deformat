@@ -357,3 +357,21 @@ proptest! {
         );
     }
 }
+
+// =============================================================================
+// Invariant: decode_entities is idempotent (single pass = double pass)
+// =============================================================================
+
+proptest! {
+    #[test]
+    fn decode_entities_idempotent(html in arb_html_fragment()) {
+        let once = deformat::html::decode_entities(&html);
+        let twice = deformat::html::decode_entities(&once);
+        prop_assert_eq!(
+            once,
+            twice,
+            "decode_entities not idempotent on input: {:?}",
+            &html[..html.len().min(80)]
+        );
+    }
+}
