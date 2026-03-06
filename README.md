@@ -33,7 +33,7 @@ All features are opt-in. The default build has one dependency: `memchr`.
 
 ```toml
 [dependencies]
-deformat = { version = "0.3", features = ["readability", "html2text"] }
+deformat = { version = "0.4", features = ["readability", "html2text"] }
 ```
 
 ## HTML extraction
