@@ -144,5 +144,24 @@ fn bench_decode_entities(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_strip, bench_decode_entities);
+fn bench_detect(c: &mut Criterion) {
+    let html_doc = medium_article();
+    let plain = plain_text();
+
+    let mut group = c.benchmark_group("detect_str");
+
+    group.throughput(Throughput::Bytes(html_doc.len() as u64));
+    group.bench_function("html_document", |b| {
+        b.iter(|| deformat::detect::detect_str(black_box(&html_doc)))
+    });
+
+    group.throughput(Throughput::Bytes(plain.len() as u64));
+    group.bench_function("plain_text", |b| {
+        b.iter(|| deformat::detect::detect_str(black_box(plain)))
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_strip, bench_decode_entities, bench_detect);
 criterion_main!(benches);

@@ -398,13 +398,12 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
         }
     }
 
-    // Trim the result. If trimming changes nothing, return owned as-is.
-    let trimmed = cleaned.trim_matches(' ');
-    if trimmed.len() == cleaned.len() {
-        Cow::Owned(cleaned)
-    } else {
-        Cow::Owned(trimmed.to_string())
+    // Trim trailing spaces in-place (leading spaces are already suppressed
+    // because last_was_space starts as true).
+    while cleaned.ends_with(' ') {
+        cleaned.pop();
     }
+    Cow::Owned(cleaned)
 }
 
 /// Check if a byte slice represents "clean" ASCII text: no leading/trailing
@@ -568,12 +567,19 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
         "footer",
         "printfooter",
     ];
-    // Check class and id attribute values (case-insensitive via lowercase comparison)
+    // Check class and id attribute values.
+    // Fast path: try matching as-is first (values are almost always lowercase).
+    // Only allocate a lowercase copy when the value contains uppercase chars.
     for attr in &["class", "id"] {
         if let Some(val) = extract_attr_value(tag_buffer, attr) {
-            let val_lower = val.to_ascii_lowercase();
-            if WIKI_SKIP_IDS.iter().any(|id| val_lower.contains(id)) {
+            if WIKI_SKIP_IDS.iter().any(|id| val.contains(id)) {
                 return true;
+            }
+            if val.bytes().any(|b| b.is_ascii_uppercase()) {
+                let val_lower = val.to_ascii_lowercase();
+                if WIKI_SKIP_IDS.iter().any(|id| val_lower.contains(id)) {
+                    return true;
+                }
             }
         }
     }
