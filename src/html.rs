@@ -1303,6 +1303,54 @@ mod tests {
     }
 
     #[test]
+    fn entity_fast_path_matches_table() {
+        // Verify every fast-path entity in decode_named_entity matches
+        // the corresponding entry in NAMED_ENTITIES. Catches drift.
+        let fast_path_entities = [
+            ("&amp;", '&'),
+            ("&lt;", '<'),
+            ("&gt;", '>'),
+            ("&quot;", '"'),
+            ("&nbsp;", ' '),
+            ("&apos;", '\''),
+            ("&eacute;", '\u{E9}'),
+            ("&Eacute;", '\u{C9}'),
+            ("&mdash;", '\u{2014}'),
+            ("&ndash;", '\u{2013}'),
+            ("&rsquo;", '\u{2019}'),
+            ("&lsquo;", '\u{2018}'),
+            ("&ldquo;", '\u{201C}'),
+            ("&rdquo;", '\u{201D}'),
+            ("&hellip;", '\u{2026}'),
+            ("&copy;", '\u{A9}'),
+            ("&reg;", '\u{AE}'),
+            ("&euro;", '\u{20AC}'),
+            ("&ouml;", '\u{F6}'),
+            ("&uuml;", '\u{FC}'),
+            ("&auml;", '\u{E4}'),
+            ("&oacute;", '\u{F3}'),
+        ];
+        for (entity, expected_char) in fast_path_entities {
+            // Verify it exists in the table with the same value
+            let table_result = NAMED_ENTITIES
+                .binary_search_by_key(&entity, |(name, _)| name)
+                .ok()
+                .map(|idx| NAMED_ENTITIES[idx].1);
+            assert_eq!(
+                table_result,
+                Some(expected_char),
+                "Fast-path entity {entity} doesn't match NAMED_ENTITIES table"
+            );
+            // Verify decode_named_entity returns the same value
+            assert_eq!(
+                decode_named_entity(entity),
+                Some(expected_char),
+                "decode_named_entity({entity}) mismatch"
+            );
+        }
+    }
+
+    #[test]
     fn entity_decimal() {
         let text = strip_to_text("<p>It&#39;s a test</p>");
         assert!(text.contains("It's"));
@@ -1631,6 +1679,16 @@ mod tests {
         assert!(text.contains("Before"), "before comment: {text}");
         assert!(text.contains("After"), "after comment: {text}");
         assert!(!text.contains("comment"), "comment stripped: {text}");
+    }
+
+    #[test]
+    fn cdata_section_stripped() {
+        // CDATA is treated like a <! directive -- content is stripped
+        let text = strip_to_text("<p>Before</p><![CDATA[some data]]><p>After</p>");
+        assert!(text.contains("Before"));
+        assert!(text.contains("After"));
+        assert!(!text.contains("CDATA"));
+        assert!(!text.contains("some data"));
     }
 
     #[test]
