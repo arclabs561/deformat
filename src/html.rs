@@ -249,23 +249,29 @@ fn strip_impl(html: &str) -> String {
                 }
 
                 // Insert space around block-level elements for readability.
-                // Strip leading "/" from closing tags so </td> matches "td".
+                // Strip leading "/" from closing tags (</td>) and trailing "/"
+                // from self-closing tags (<br/>) so both match "td" / "br".
                 let effective_tag = tag_name.to_lowercase();
                 let effective_tag = effective_tag
                     .strip_prefix('/')
                     .unwrap_or(&effective_tag);
+                let effective_tag = effective_tag
+                    .strip_suffix('/')
+                    .unwrap_or(effective_tag);
                 if !in_script
                     && !in_style
                     && skip_depth == 0
                     && matches!(
                         effective_tag,
-                        "p" | "div" | "br" | "li" | "ul" | "ol"
+                        "p" | "div" | "br" | "wbr" | "hr"
+                            | "li" | "ul" | "ol"
                             | "td" | "th" | "tr" | "dt" | "dd"
                             | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
                             | "section" | "article" | "header" | "footer"
                             | "aside" | "main" | "blockquote" | "figcaption"
                             | "figure" | "details" | "summary"
                             | "caption" | "thead" | "tbody" | "tfoot"
+                            | "address" | "pre" | "fieldset" | "legend"
                     )
                     && !text.ends_with(' ')
                     && !text.is_empty()
@@ -1568,5 +1574,43 @@ mod tests {
         let text = strip_to_text("<p>A &rarr; B &larr; C</p>");
         assert!(text.contains('→'), "rarr: {text}");
         assert!(text.contains('←'), "larr: {text}");
+    }
+
+    // ===== Line break and separator elements =====
+
+    #[test]
+    fn br_prevents_word_fusion() {
+        let text = strip_to_text("<p>John Smith<br>CEO of Acme</p>");
+        assert!(!text.contains("SmithCEO"), "br prevents fusion: {text}");
+        assert!(text.contains("John Smith"), "name preserved: {text}");
+        assert!(text.contains("CEO"), "title preserved: {text}");
+    }
+
+    #[test]
+    fn br_self_closing() {
+        let text = strip_to_text("<p>Line one<br/>Line two</p>");
+        assert!(!text.contains("oneLine"), "br/ prevents fusion: {text}");
+    }
+
+    #[test]
+    fn wbr_prevents_fusion() {
+        let text = strip_to_text("<p>Super<wbr>cali<wbr>fragilistic</p>");
+        // wbr inserts space, preventing weird tokenization
+        assert!(!text.contains("Supercali"), "wbr inserts space: {text}");
+    }
+
+    #[test]
+    fn hr_separates_sections() {
+        let text = strip_to_text("<p>Section one</p><hr><p>Section two</p>");
+        assert!(!text.contains("oneSection"), "hr prevents fusion: {text}");
+    }
+
+    #[test]
+    fn definition_list_separated() {
+        let html = "<dl><dt>Term</dt><dd>Definition here</dd></dl>";
+        let text = strip_to_text(html);
+        assert!(!text.contains("TermDefinition"), "dt/dd separated: {text}");
+        assert!(text.contains("Term"), "dt preserved: {text}");
+        assert!(text.contains("Definition"), "dd preserved: {text}");
     }
 }
