@@ -171,7 +171,7 @@ fn strip_impl(html: &str) -> String {
                         let skip_tags: &[&str] = &[
                             "head", "nav", "header", "footer", "aside", "menu",
                             "noscript", "form", "select", "figcaption",
-                            "template", "svg",
+                            "template", "svg", "textarea", "iframe",
                         ];
 
                         // Wikipedia/MediaWiki structural skip
@@ -1425,6 +1425,28 @@ mod tests {
         assert!(text.contains("Article text"), "content preserved: {text}");
         assert!(!text.contains("Search"), "form stripped: {text}");
         assert!(!text.contains("Option 1"), "select stripped: {text}");
+    }
+
+    #[test]
+    fn textarea_content_stripped() {
+        let html = r#"<html><body>
+            <p>Article text.</p>
+            <textarea>Draft comment text here</textarea>
+        </body></html>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Article text"), "body preserved: {text}");
+        assert!(!text.contains("Draft comment"), "textarea stripped: {text}");
+    }
+
+    #[test]
+    fn iframe_content_stripped() {
+        let html = r#"<html><body>
+            <p>Main content.</p>
+            <iframe src="ad.html">Fallback ad text</iframe>
+        </body></html>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Main content"), "body preserved: {text}");
+        assert!(!text.contains("Fallback"), "iframe stripped: {text}");
     }
 
     #[test]
