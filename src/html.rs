@@ -355,44 +355,59 @@ fn strip_impl(html: &str) -> String {
 /// especially those important for NER (accented names, currency symbols,
 /// punctuation). Not exhaustive -- rare entities pass through as-is.
 /// Sorted table of named HTML entities -> Unicode codepoint.
-/// Covers the ~250 most commonly encountered entities in web content,
-/// including all of ISO-8859-1/Latin-1, Greek letters, math symbols,
-/// arrows, and typographic punctuation.
+/// Covers ~300 entities: ISO-8859-1/Latin-1, Latin Extended-A (Central/Eastern
+/// European names: Polish, Czech, Slovak, Turkish, Hungarian, Romanian, Croatian),
+/// Greek letters, math symbols, arrows, and typographic punctuation.
 static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&AElig;", '\u{00C6}'),
     ("&Aacute;", '\u{00C1}'),
+    ("&Abreve;", '\u{0102}'),   // Romanian Ă
     ("&Acirc;", '\u{00C2}'),
     ("&Agrave;", '\u{00C0}'),
     ("&Alpha;", '\u{0391}'),
+    ("&Aogonek;", '\u{0104}'),  // Polish Ą
     ("&Aring;", '\u{00C5}'),
     ("&Atilde;", '\u{00C3}'),
     ("&Auml;", '\u{00C4}'),
     ("&Beta;", '\u{0392}'),
+    ("&Cacute;", '\u{0106}'),   // Polish Ć
+    ("&Ccaron;", '\u{010C}'),   // Czech Č
     ("&Ccedil;", '\u{00C7}'),
     ("&Chi;", '\u{03A7}'),
     ("&Dagger;", '\u{2021}'),
+    ("&Dcaron;", '\u{010E}'),   // Czech Ď
     ("&Delta;", '\u{0394}'),
+    ("&Dstrok;", '\u{0110}'),   // Croatian Đ
     ("&ETH;", '\u{00D0}'),
     ("&Eacute;", '\u{00C9}'),
+    ("&Ecaron;", '\u{011A}'),   // Czech Ě
     ("&Ecirc;", '\u{00CA}'),
     ("&Egrave;", '\u{00C8}'),
+    ("&Eogonek;", '\u{0118}'),  // Polish Ę
     ("&Epsilon;", '\u{0395}'),
     ("&Eta;", '\u{0397}'),
     ("&Euml;", '\u{00CB}'),
     ("&Gamma;", '\u{0393}'),
+    ("&Gbreve;", '\u{011E}'),   // Turkish Ğ
     ("&Iacute;", '\u{00CD}'),
     ("&Icirc;", '\u{00CE}'),
+    ("&Idot;", '\u{0130}'),     // Turkish İ
     ("&Igrave;", '\u{00CC}'),
     ("&Iota;", '\u{0399}'),
     ("&Iuml;", '\u{00CF}'),
     ("&Kappa;", '\u{039A}'),
     ("&Lambda;", '\u{039B}'),
+    ("&Lcaron;", '\u{013D}'),   // Slovak Ľ
+    ("&Lstrok;", '\u{0141}'),   // Polish Ł
     ("&Mu;", '\u{039C}'),
+    ("&Nacute;", '\u{0143}'),   // Polish Ń
+    ("&Ncaron;", '\u{0147}'),   // Czech Ň
     ("&Ntilde;", '\u{00D1}'),
     ("&Nu;", '\u{039D}'),
     ("&OElig;", '\u{0152}'),
     ("&Oacute;", '\u{00D3}'),
     ("&Ocirc;", '\u{00D4}'),
+    ("&Odblac;", '\u{0150}'),   // Hungarian Ő
     ("&Ograve;", '\u{00D2}'),
     ("&Omega;", '\u{03A9}'),
     ("&Omicron;", '\u{039F}'),
@@ -403,22 +418,33 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Pi;", '\u{03A0}'),
     ("&Prime;", '\u{2033}'),
     ("&Psi;", '\u{03A8}'),
+    ("&Racute;", '\u{0154}'),   // Slovak Ŕ
+    ("&Rcaron;", '\u{0158}'),   // Czech Ř
     ("&Rho;", '\u{03A1}'),
+    ("&Sacute;", '\u{015A}'),   // Polish Ś
     ("&Scaron;", '\u{0160}'),
+    ("&Scedil;", '\u{015E}'),   // Turkish Ş
     ("&Sigma;", '\u{03A3}'),
     ("&THORN;", '\u{00DE}'),
     ("&Tau;", '\u{03A4}'),
+    ("&Tcaron;", '\u{0164}'),   // Slovak Ť
+    ("&Tcedil;", '\u{0162}'),   // Romanian Ţ
     ("&Theta;", '\u{0398}'),
     ("&Uacute;", '\u{00DA}'),
     ("&Ucirc;", '\u{00DB}'),
+    ("&Udblac;", '\u{0170}'),   // Hungarian Ű
     ("&Ugrave;", '\u{00D9}'),
     ("&Upsilon;", '\u{03A5}'),
     ("&Uuml;", '\u{00DC}'),
     ("&Xi;", '\u{039E}'),
     ("&Yacute;", '\u{00DD}'),
     ("&Yuml;", '\u{0178}'),
+    ("&Zacute;", '\u{0179}'),   // Polish Ź
+    ("&Zcaron;", '\u{017D}'),   // Czech Ž
+    ("&Zdot;", '\u{017B}'),     // Polish Ż
     ("&Zeta;", '\u{0396}'),
     ("&aacute;", '\u{00E1}'),
+    ("&abreve;", '\u{0103}'),   // Romanian ă
     ("&acirc;", '\u{00E2}'),
     ("&acute;", '\u{00B4}'),
     ("&aelig;", '\u{00E6}'),
@@ -428,6 +454,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&amp;", '&'),
     ("&and;", '\u{2227}'),
     ("&ang;", '\u{2220}'),
+    ("&aogonek;", '\u{0105}'),  // Polish ą
     ("&apos;", '\''),
     ("&aring;", '\u{00E5}'),
     ("&asymp;", '\u{2248}'),
@@ -437,7 +464,9 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&beta;", '\u{03B2}'),
     ("&brvbar;", '\u{00A6}'),
     ("&bull;", '\u{2022}'),
+    ("&cacute;", '\u{0107}'),   // Polish ć
     ("&cap;", '\u{2229}'),
+    ("&ccaron;", '\u{010D}'),   // Czech č
     ("&ccedil;", '\u{00E7}'),
     ("&cedil;", '\u{00B8}'),
     ("&cent;", '\u{00A2}'),
@@ -452,16 +481,20 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&dArr;", '\u{21D3}'),
     ("&dagger;", '\u{2020}'),
     ("&darr;", '\u{2193}'),
+    ("&dcaron;", '\u{010F}'),   // Czech ď
     ("&deg;", '\u{00B0}'),
     ("&delta;", '\u{03B4}'),
     ("&diams;", '\u{2666}'),
     ("&divide;", '\u{00F7}'),
+    ("&dstrok;", '\u{0111}'),   // Croatian đ
     ("&eacute;", '\u{00E9}'),
+    ("&ecaron;", '\u{011B}'),   // Czech ě
     ("&ecirc;", '\u{00EA}'),
     ("&egrave;", '\u{00E8}'),
     ("&empty;", '\u{2205}'),
     ("&emsp;", '\u{2003}'),
     ("&ensp;", '\u{2002}'),
+    ("&eogonek;", '\u{0119}'),  // Polish ę
     ("&epsilon;", '\u{03B5}'),
     ("&equiv;", '\u{2261}'),
     ("&eta;", '\u{03B7}'),
@@ -476,6 +509,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&frac34;", '\u{00BE}'),
     ("&frasl;", '\u{2044}'),
     ("&gamma;", '\u{03B3}'),
+    ("&gbreve;", '\u{011F}'),   // Turkish ğ
     ("&ge;", '\u{2265}'),
     ("&gt;", '>'),
     ("&hArr;", '\u{21D4}'),
@@ -488,6 +522,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&igrave;", '\u{00EC}'),
     ("&image;", '\u{2111}'),
     ("&infin;", '\u{221E}'),
+    ("&inodot;", '\u{0131}'),   // Turkish ı (dotless i)
     ("&int;", '\u{222B}'),
     ("&iota;", '\u{03B9}'),
     ("&iquest;", '\u{00BF}'),
@@ -499,6 +534,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&lang;", '\u{2329}'),
     ("&laquo;", '\u{00AB}'),
     ("&larr;", '\u{2190}'),
+    ("&lcaron;", '\u{013E}'),   // Slovak ľ
     ("&lceil;", '\u{2308}'),
     ("&ldquo;", '\u{201C}'),
     ("&le;", '\u{2264}'),
@@ -508,6 +544,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&lrm;", '\u{200E}'),
     ("&lsaquo;", '\u{2039}'),
     ("&lsquo;", '\u{2018}'),
+    ("&lstrok;", '\u{0142}'),   // Polish ł
     ("&lt;", '<'),
     ("&macr;", '\u{00AF}'),
     ("&mdash;", '\u{2014}'),
@@ -516,7 +553,9 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&minus;", '\u{2212}'),
     ("&mu;", '\u{03BC}'),
     ("&nabla;", '\u{2207}'),
+    ("&nacute;", '\u{0144}'),   // Polish ń
     ("&nbsp;", ' '),
+    ("&ncaron;", '\u{0148}'),   // Czech ň
     ("&ndash;", '\u{2013}'),
     ("&ne;", '\u{2260}'),
     ("&ni;", '\u{220B}'),
@@ -527,6 +566,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&nu;", '\u{03BD}'),
     ("&oacute;", '\u{00F3}'),
     ("&ocirc;", '\u{00F4}'),
+    ("&odblac;", '\u{0151}'),   // Hungarian ő
     ("&oelig;", '\u{0153}'),
     ("&ograve;", '\u{00F2}'),
     ("&oline;", '\u{203E}'),
@@ -555,10 +595,12 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&psi;", '\u{03C8}'),
     ("&quot;", '"'),
     ("&rArr;", '\u{21D2}'),
+    ("&racute;", '\u{0155}'),   // Slovak ŕ
     ("&radic;", '\u{221A}'),
     ("&rang;", '\u{232A}'),
     ("&raquo;", '\u{00BB}'),
     ("&rarr;", '\u{2192}'),
+    ("&rcaron;", '\u{0159}'),   // Czech ř
     ("&rceil;", '\u{2309}'),
     ("&rdquo;", '\u{201D}'),
     ("&real;", '\u{211C}'),
@@ -568,8 +610,10 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&rlm;", '\u{200F}'),
     ("&rsaquo;", '\u{203A}'),
     ("&rsquo;", '\u{2019}'),
+    ("&sacute;", '\u{015B}'),   // Polish ś
     ("&sbquo;", '\u{201A}'),
     ("&scaron;", '\u{0161}'),
+    ("&scedil;", '\u{015F}'),   // Turkish ş
     ("&sdot;", '\u{22C5}'),
     ("&sect;", '\u{00A7}'),
     ("&shy;", '\u{00AD}'),
@@ -587,6 +631,8 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&supe;", '\u{2287}'),
     ("&szlig;", '\u{00DF}'),
     ("&tau;", '\u{03C4}'),
+    ("&tcaron;", '\u{0165}'),   // Slovak ť
+    ("&tcedil;", '\u{0163}'),   // Romanian ţ
     ("&there4;", '\u{2234}'),
     ("&theta;", '\u{03B8}'),
     ("&thetasym;", '\u{03D1}'),
@@ -599,6 +645,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&uacute;", '\u{00FA}'),
     ("&uarr;", '\u{2191}'),
     ("&ucirc;", '\u{00FB}'),
+    ("&udblac;", '\u{0171}'),   // Hungarian ű
     ("&ugrave;", '\u{00F9}'),
     ("&uml;", '\u{00A8}'),
     ("&upsih;", '\u{03D2}'),
@@ -609,6 +656,9 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&yacute;", '\u{00FD}'),
     ("&yen;", '\u{00A5}'),
     ("&yuml;", '\u{00FF}'),
+    ("&zacute;", '\u{017A}'),   // Polish ź
+    ("&zcaron;", '\u{017E}'),   // Czech ž
+    ("&zdot;", '\u{017C}'),     // Polish ż
     ("&zeta;", '\u{03B6}'),
     ("&zwj;", '\u{200D}'),
     ("&zwnj;", '\u{200C}'),
@@ -1963,5 +2013,224 @@ mod tests {
         // &#127; (DEL) should be stripped
         let text = strip_to_text("<p>Hello&#127;World</p>");
         assert!(text.contains("HelloWorld"), "DEL stripped: {text}");
+    }
+
+    // ===== Whitespace entity normalization =====
+
+    #[test]
+    fn ensp_emsp_thinsp_normalized_to_space() {
+        // Unicode whitespace entities should collapse to regular space
+        let text = strip_to_text("<p>Hello&ensp;World&emsp;Foo&thinsp;Bar</p>");
+        assert!(text.contains("Hello World"), "ensp normalized: {text}");
+        assert!(text.contains("World Foo"), "emsp normalized: {text}");
+        assert!(text.contains("Foo Bar"), "thinsp normalized: {text}");
+        assert!(!text.contains("  "), "no double spaces: {text}");
+    }
+
+    // ===== High Unicode / emoji entities =====
+
+    #[test]
+    fn emoji_entity_decoded() {
+        let text = strip_to_text("<p>Star &#x2B50; emoji</p>");
+        assert!(text.contains('\u{2B50}'), "star emoji: {text}");
+    }
+
+    #[test]
+    fn emoji_supplementary_plane() {
+        // Emoji from supplementary plane (above U+FFFF)
+        let text = strip_to_text("<p>Rocket &#x1F680; launch</p>");
+        assert!(text.contains('\u{1F680}'), "rocket emoji: {text}");
+    }
+
+    #[test]
+    fn large_valid_codepoint() {
+        // U+10FFFF is the last valid Unicode codepoint
+        let text = strip_to_text("<p>&#x10FFFF;</p>");
+        // char::from_u32(0x10FFFF) returns Some (it's a noncharacter but valid)
+        assert!(!text.contains("&#x10FFFF;"), "large codepoint decoded: {text}");
+    }
+
+    // ===== JSON-LD script tag =====
+
+    #[test]
+    fn json_ld_script_stripped() {
+        let html = r#"<html><body>
+            <script type="application/ld+json">
+            {"@type": "NewsArticle", "headline": "Test Headline", "author": "John Smith"}
+            </script>
+            <p>Actual article content here.</p>
+        </body></html>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Actual article"), "content preserved: {text}");
+        assert!(!text.contains("NewsArticle"), "json-ld stripped: {text}");
+        assert!(!text.contains("John Smith"), "json-ld author stripped: {text}");
+    }
+
+    // ===== details/summary pattern =====
+
+    #[test]
+    fn details_summary_separated() {
+        let html = r#"<details>
+            <summary>Click to expand</summary>
+            <p>Hidden content revealed on click.</p>
+        </details>
+        <p>Regular content.</p>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("Regular content"), "main content: {text}");
+        // details/summary content is included (it's visible in the DOM)
+        assert!(text.contains("Click to expand"), "summary: {text}");
+        assert!(!text.contains("expandHidden"), "summary/content separated: {text}");
+    }
+
+    // ===== CDATA handling =====
+
+    #[test]
+    fn cdata_section_content_dropped() {
+        // CDATA sections: content should not appear in output
+        // (our parser treats <![CDATA[...]]> as a non-comment <! directive)
+        let text = strip_to_text("<p>Before</p><![CDATA[hidden data]]><p>After</p>");
+        assert!(text.contains("Before"), "before CDATA: {text}");
+        assert!(text.contains("After"), "after CDATA: {text}");
+        assert!(!text.contains("hidden data"), "CDATA content stripped: {text}");
+    }
+
+    #[test]
+    fn cdata_with_gt_inside() {
+        // CDATA containing '>' -- our parser fast-forwards to first '>' in
+        // the <! handler, so inner content up to the first '>' is consumed
+        // and the rest leaks as text. This is acceptable since CDATA is
+        // only valid inside SVG/MathML in HTML5, and SVG is already skipped.
+        let text = strip_to_text("<p>Before</p><![CDATA[a > b]]><p>After</p>");
+        assert!(text.contains("Before"), "before: {text}");
+        assert!(text.contains("After"), "after: {text}");
+        // Note: " b]]" may leak due to first-'>' termination. This is a
+        // known limitation for the rare CDATA-in-body case.
+    }
+
+    // ===== Malformed HTML resilience =====
+
+    #[test]
+    fn mismatched_close_tags_no_panic() {
+        // Close tags that don't match opens -- should not panic or corrupt output
+        let text = strip_to_text("<p>Hello</div></span>World</p>");
+        assert!(text.contains("Hello"), "before mismatched: {text}");
+        assert!(text.contains("World"), "after mismatched: {text}");
+    }
+
+    #[test]
+    fn deeply_nested_100_levels() {
+        // 100+ levels of tag nesting
+        let mut html = String::new();
+        for _ in 0..100 {
+            html.push_str("<div>");
+        }
+        html.push_str("Deep content");
+        for _ in 0..100 {
+            html.push_str("</div>");
+        }
+        let text = strip_to_text(&html);
+        assert!(text.contains("Deep content"), "deep nesting works: {text}");
+    }
+
+    #[test]
+    fn entity_overflow_passthrough() {
+        // Huge numeric entity that exceeds u32 -- should pass through as-is
+        let text = strip_to_text("<p>&#99999999999;</p>");
+        assert!(text.contains("&#99999999999;"), "overflow entity passes through: {text}");
+    }
+
+    // ===== Whitespace between inline and block elements =====
+
+    #[test]
+    fn inline_tags_no_extra_space() {
+        // Inline tags (b, i, span, a) should NOT insert spaces
+        let text = strip_to_text("<p>Hello <b>bold</b> and <i>italic</i> text</p>");
+        assert_eq!(text, "Hello bold and italic text");
+    }
+
+    #[test]
+    fn list_items_separated() {
+        let text = strip_to_text("<ul><li>Apple</li><li>Banana</li><li>Cherry</li></ul>");
+        assert!(!text.contains("AppleBanana"), "list items separated: {text}");
+        assert!(!text.contains("BananaCherry"), "list items separated: {text}");
+        assert!(text.contains("Apple"), "item 1: {text}");
+        assert!(text.contains("Banana"), "item 2: {text}");
+        assert!(text.contains("Cherry"), "item 3: {text}");
+    }
+
+    // ===== Central/Eastern European entity decoding (Latin Extended-A) =====
+
+    #[test]
+    fn entity_polish_names() {
+        // Polish characters critical for NER: Ł, ą, ć, ę, ł, ń, ś, ź, ż
+        let html = "<p>Jaros&lstrok;aw Kaczy&nacute;ski and &Lstrok;&oacute;d&zacute;</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Jarosław"), "lstrok decoded: {text}");
+        assert!(text.contains("Kaczyński"), "nacute decoded: {text}");
+        assert!(text.contains("Łódź"), "Lstrok+oacute+zacute decoded: {text}");
+    }
+
+    #[test]
+    fn entity_czech_names() {
+        // Czech characters: Č, č, Ď, ď, Ě, ě, Ň, ň, Ř, ř, Š, š, Ť, ť, Ž, ž
+        let html = "<p>&Ccaron;esk&aacute; republika: Alena &Scaron;eredov&aacute; from Pra&zcaron;sk&yacute;</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Česká"), "Ccaron decoded: {text}");
+        assert!(text.contains("Šeredová"), "Scaron decoded: {text}");
+        assert!(text.contains("Pražský"), "zcaron decoded: {text}");
+    }
+
+    #[test]
+    fn entity_turkish_names() {
+        // Turkish characters: Ğ, ğ, İ, ı, Ş, ş
+        let html = "<p>Recep Tayyip Erdo&gbreve;an visited &Idot;stanbul and Mu&gbreve;la</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Erdoğan"), "gbreve decoded: {text}");
+        assert!(text.contains("İstanbul"), "Idot decoded: {text}");
+        assert!(text.contains("Muğla"), "gbreve lowercase decoded: {text}");
+    }
+
+    #[test]
+    fn entity_hungarian_names() {
+        // Hungarian characters: Ő, ő, Ű, ű
+        let html = "<p>The Hungarian city of Gy&odblac;r and Sz&udblac;cs</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Győr"), "odblac decoded: {text}");
+        assert!(text.contains("Szűcs"), "udblac decoded: {text}");
+    }
+
+    #[test]
+    fn entity_romanian_names() {
+        // Romanian characters: Ă, ă, Ş/Ț (Ţ cedilla form)
+        let html = "<p>&Abreve;r&abreve;d in Romania; &Tcedil;ucureanu is a surname</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Ărăd"), "Abreve decoded: {text}");
+        assert!(text.contains("Ţucureanu"), "Tcedil decoded: {text}");
+    }
+
+    #[test]
+    fn entity_croatian_names() {
+        // Croatian characters: Đ, đ
+        let html = "<p>Novak &Dstrok;okovi&cacute; (Serbian) and &Dstrok;ur&dstrok;a</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Đoković"), "Dstrok+cacute decoded: {text}");
+        assert!(text.contains("Đurđa"), "Dstrok+dstrok decoded: {text}");
+    }
+
+    #[test]
+    fn entity_slovak_names() {
+        // Slovak characters: Ľ, ľ, Ŕ, ŕ, Ť, ť
+        let html = "<p>&Lcaron;ubom&iacute;r and the city of Bansk&aacute; Bystrica with &tcaron;a&rcaron;</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Ľubomír"), "Lcaron+iacute decoded: {text}");
+        assert!(text.contains("ťař"), "tcaron+rcaron decoded: {text}");
+    }
+
+    #[test]
+    fn entity_dotless_i_turkish() {
+        // Turkish dotless i (ı) is distinct from Latin i -- critical for NER
+        let html = "<p>D&inodot;yarbak&inodot;r is a city in Turkey</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("Dıyarbakır"), "inodot decoded: {text}");
     }
 }
