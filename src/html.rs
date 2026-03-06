@@ -357,69 +357,9 @@ fn strip_impl(html: &str) -> String {
                 }
             }
             b'&' => {
-                pos += 1;
-                // Parse entity: scan bytes until ';', whitespace, or '<'
-                let entity_start = pos - 1; // includes '&'
-                let mut entity_end = pos;
-                let mut found_semicolon = false;
-
-                while entity_end < len {
-                    match bytes[entity_end] {
-                        b';' => {
-                            entity_end += 1;
-                            found_semicolon = true;
-                            break;
-                        }
-                        b' ' | b'\t' | b'\n' | b'\r' | b'<' => break,
-                        _ => entity_end += 1,
-                    }
-                }
-
-                let entity_str = &html[entity_start..entity_end];
-                pos = entity_end;
-
-                if found_semicolon {
-                    if let Some(ch) = decode_named_entity(entity_str) {
-                        text.push(ch);
-                    } else if entity_str.starts_with("&#") && entity_str.len() > 3 {
-                        let num_str = &entity_str[2..entity_str.len() - 1];
-                        let parsed = if let Some(hex) = num_str
-                            .strip_prefix('x')
-                            .or_else(|| num_str.strip_prefix('X'))
-                        {
-                            u32::from_str_radix(hex, 16).ok()
-                        } else {
-                            num_str.parse::<u32>().ok()
-                        };
-                        if let Some(ch) = parsed.and_then(numeric_entity_to_char) {
-                            text.push(ch);
-                        } else {
-                            text.push_str(entity_str);
-                        }
-                    } else {
-                        text.push_str(entity_str);
-                    }
-                } else {
-                    // Semicolon-optional entities (e.g. &amp without trailing ;)
-                    if entity_str.len() > 2
-                        && entity_str.as_bytes()[1].is_ascii_alphabetic()
-                        && entity_str[1..].bytes().all(|b| b.is_ascii_alphanumeric())
-                    {
-                        // Stack buffer to avoid format! allocation
-                        let eb = entity_str.as_bytes();
-                        if eb.len() < 32 {
-                            let mut buf = [0u8; 32];
-                            buf[..eb.len()].copy_from_slice(eb);
-                            buf[eb.len()] = b';';
-                            let with_semi = std::str::from_utf8(&buf[..eb.len() + 1]).unwrap();
-                            if let Some(ch) = decode_named_entity(with_semi) {
-                                text.push(ch);
-                                continue;
-                            }
-                        }
-                    }
-                    text.push_str(entity_str);
-                }
+                // Reuse decode_entity_bytes for all entity handling
+                // (named, numeric, semicolon-optional). pos points to '&'.
+                pos = decode_entity_bytes(html, bytes, pos, &mut text);
             }
             _ => {
                 pos += 1;
@@ -1219,6 +1159,7 @@ fn decode_entities_in_str(s: &str) -> Cow<'_, str> {
 
 /// Decode an HTML entity starting at `pos` (which points to '&').
 /// Returns the new position after the entity.
+#[inline(always)]
 fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -> usize {
     let len = bytes.len();
     debug_assert!(bytes[start] == b'&');
