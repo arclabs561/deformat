@@ -1,0 +1,31 @@
+[package]
+name = "deformat"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80.0"
+license = "MIT OR Apache-2.0"
+description = "Extract plain text from HTML, PDF, and other document formats"
+repository = "https://github.com/arclabs561/deformat"
+keywords = ["text-extraction", "html", "pdf", "document", "nlp"]
+categories = ["text-processing", "parser-implementations"]
+
+[dependencies]
+once_cell = "1"
+regex = "1"
+
+# Optional: DOM-based HTML-to-text conversion
+html2text = { version = "0.16", optional = true }
+
+# Optional: readability-style article extraction
+dom_smoothie = { version = "0.15", optional = true }
+
+# Optional: PDF text extraction
+pdf-extract = { version = "0.10", optional = true }
+
+[features]
+default = []
+html2text = ["dep:html2text"]
+readability = ["dep:dom_smoothie"]
+pdf = ["dep:pdf-extract"]
+
+[dev-dependencies]
