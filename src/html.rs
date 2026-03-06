@@ -1020,6 +1020,34 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
 ];
 
 fn decode_named_entity(entity: &str) -> Option<char> {
+    // Fast path: the ~20 most common HTML entities in web content.
+    // The compiler turns this into efficient dispatch (length + byte checks).
+    match entity {
+        "&amp;" => return Some('&'),
+        "&lt;" => return Some('<'),
+        "&gt;" => return Some('>'),
+        "&quot;" => return Some('"'),
+        "&nbsp;" => return Some(' '),
+        "&apos;" => return Some('\''),
+        "&eacute;" => return Some('\u{E9}'),
+        "&Eacute;" => return Some('\u{C9}'),
+        "&mdash;" => return Some('\u{2014}'),
+        "&ndash;" => return Some('\u{2013}'),
+        "&rsquo;" => return Some('\u{2019}'),
+        "&lsquo;" => return Some('\u{2018}'),
+        "&ldquo;" => return Some('\u{201C}'),
+        "&rdquo;" => return Some('\u{201D}'),
+        "&hellip;" => return Some('\u{2026}'),
+        "&copy;" => return Some('\u{A9}'),
+        "&reg;" => return Some('\u{AE}'),
+        "&euro;" => return Some('\u{20AC}'),
+        "&ouml;" => return Some('\u{F6}'),
+        "&uuml;" => return Some('\u{FC}'),
+        "&auml;" => return Some('\u{E4}'),
+        "&oacute;" => return Some('\u{F3}'),
+        _ => {}
+    }
+    // Binary search for the full 303-entity table
     NAMED_ENTITIES
         .binary_search_by_key(&entity, |(name, _)| name)
         .ok()
