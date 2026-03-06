@@ -315,3 +315,80 @@ fn extracted_clone_and_debug() {
     let debug = format!("{:?}", result);
     assert!(debug.contains("Extracted"), "debug impl works");
 }
+
+// =============================================================================
+// CJK ruby annotation handling
+// =============================================================================
+
+#[test]
+fn japanese_article_with_furigana() {
+    // Realistic Japanese Wikipedia-style article with ruby annotations
+    let html = r#"<!DOCTYPE html>
+    <html><head><title>東京 - Wikipedia</title></head>
+    <body>
+        <nav><a href="/">メインページ</a></nav>
+        <article>
+            <h1><ruby>東京<rt>とうきょう</rt></ruby></h1>
+            <p><ruby>東京都<rt>とうきょうと</rt></ruby>は<ruby>日本<rt>にほん</rt></ruby>の
+               <ruby>首都<rt>しゅと</rt></ruby>であり、
+               <ruby>人口<rt>じんこう</rt></ruby>は約1400<ruby>万人<rt>まんにん</rt></ruby>。
+               <ruby>安倍<rt>あべ</rt></ruby><ruby>晋三<rt>しんぞう</rt></ruby>
+               <ruby>元首相<rt>もとしゅしょう</rt></ruby>は<ruby>東京<rt>とうきょう</rt></ruby>で
+               <ruby>記者会見<rt>きしゃかいけん</rt></ruby>を<ruby>行<rt>おこな</rt></ruby>った。</p>
+        </article>
+        <footer><p>&copy; Wikipedia</p></footer>
+    </body></html>"#;
+
+    let text = deformat::html::strip_to_text(html);
+
+    // Base text preserved
+    assert!(text.contains("東京都"), "Tokyo-to: {text}");
+    assert!(text.contains("日本"), "Japan: {text}");
+    assert!(text.contains("安倍"), "Abe: {text}");
+    assert!(text.contains("晋三"), "Shinzo: {text}");
+
+    // Furigana stripped
+    assert!(!text.contains("とうきょう"), "Tokyo reading stripped: {text}");
+    assert!(!text.contains("にほん"), "Japan reading stripped: {text}");
+    assert!(!text.contains("あべ"), "Abe reading stripped: {text}");
+    assert!(!text.contains("しんぞう"), "Shinzo reading stripped: {text}");
+
+    // Boilerplate stripped
+    assert!(!text.contains("メインページ"), "nav stripped: {text}");
+    assert!(!text.contains("Wikipedia"), "footer stripped: {text}");
+}
+
+// =============================================================================
+// Unicode cleanup in realistic content
+// =============================================================================
+
+#[test]
+fn rtl_mixed_text_bidi_controls_stripped() {
+    // Arabic/Hebrew mixed with Latin text containing bidi marks
+    let html = "<p>\u{202B}محمد\u{202C} met \u{202B}David\u{202C} in \u{202B}القاهرة\u{202C}.</p>";
+    let text = deformat::html::strip_to_text(html);
+    assert!(text.contains("محمد"), "Arabic name: {text}");
+    assert!(text.contains("David"), "Latin name: {text}");
+    assert!(text.contains("القاهرة"), "Arabic location: {text}");
+    // No bidi controls
+    assert!(!text.contains('\u{202B}'), "no RLE: {text}");
+    assert!(!text.contains('\u{202C}'), "no PDF: {text}");
+}
+
+#[test]
+fn nbsp_in_entity_names() {
+    // French names with NBSP (common in French typography: space before colon/semicolon)
+    let html = "<p>Le pr\u{00E9}sident Macron\u{00A0}: discours \u{00E0} l'Elys\u{00E9}e.</p>";
+    let text = deformat::html::strip_to_text(html);
+    assert!(text.contains("Macron"), "name preserved: {text}");
+    assert!(!text.contains('\u{00A0}'), "NBSP normalized: {text}");
+}
+
+#[test]
+fn extract_preserves_format_for_cjk_html() {
+    let html = "<p><ruby>東京<rt>とうきょう</rt></ruby></p>";
+    let result = extract(html);
+    assert_eq!(result.format, Format::Html);
+    assert!(result.text.contains("東京"), "base text in extract: {}", result.text);
+    assert!(!result.text.contains("とうきょう"), "furigana stripped in extract: {}", result.text);
+}
