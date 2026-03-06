@@ -172,6 +172,7 @@ fn strip_impl(html: &str) -> String {
                             "head", "nav", "header", "footer", "aside", "menu",
                             "noscript", "form", "select", "figcaption",
                             "template", "svg", "textarea", "iframe",
+                            "rt", "rp", // Ruby annotations (CJK pronunciation guides)
                         ];
 
                         // Wikipedia/MediaWiki structural skip
@@ -320,10 +321,18 @@ fn strip_impl(html: &str) -> String {
     let mut last_was_space = true;
     for ch in text.chars() {
         if is_invisible_char(ch) {
-            // Strip zero-width chars that break NER tokenization
+            // Strip zero-width/formatting chars that break NER tokenization
             continue;
         }
-        if ch.is_whitespace() {
+        // Strip C0 control characters (U+0001-U+0008, U+000B, U+000E-U+001F, U+007F)
+        // that can sneak in via numeric entities like &#13; or &#1;
+        if (ch as u32) < 0x20 && ch != '\n' && ch != '\r' && ch != '\t' {
+            continue;
+        }
+        if ch == '\u{7F}' {
+            continue; // DEL
+        }
+        if ch.is_whitespace() || is_nbsp(ch) {
             if !last_was_space {
                 cleaned.push(' ');
                 last_was_space = true;
@@ -680,20 +689,40 @@ fn win1252_to_unicode(cp: u32) -> Option<char> {
     }
 }
 
-/// Returns true if the character is a zero-width or invisible Unicode character
-/// that should be stripped for clean NER tokenization.
+/// Returns true if the character is a zero-width, invisible, or formatting
+/// Unicode character that should be stripped for clean NER tokenization.
 fn is_invisible_char(ch: char) -> bool {
     matches!(
         ch,
         '\u{200B}'  // Zero-width space
         | '\u{200C}' // Zero-width non-joiner
         | '\u{200D}' // Zero-width joiner
-        | '\u{200E}' // Left-to-right mark (bidi control)
-        | '\u{200F}' // Right-to-left mark (bidi control)
+        | '\u{200E}' // Left-to-right mark
+        | '\u{200F}' // Right-to-left mark
         | '\u{00AD}' // Soft hyphen
         | '\u{2060}' // Word joiner
         | '\u{FEFF}' // BOM / zero-width no-break space (mid-text)
+        // Bidi embedding/override controls (common in RTL-mixed text)
+        | '\u{202A}' // Left-to-right embedding
+        | '\u{202B}' // Right-to-left embedding
+        | '\u{202C}' // Pop directional formatting
+        | '\u{202D}' // Left-to-right override
+        | '\u{202E}' // Right-to-left override
+        // Bidi isolate controls (HTML5 bidi algorithm)
+        | '\u{2066}' // Left-to-right isolate
+        | '\u{2067}' // Right-to-left isolate
+        | '\u{2068}' // First strong isolate
+        | '\u{2069}' // Pop directional isolate
+        // Other invisible formatting
+        | '\u{180E}' // Mongolian vowel separator
+        | '\u{FE0F}' // Variation selector-16 (emoji modifier)
     )
+}
+
+/// Returns true if the character is a non-breaking space that should be
+/// normalized to a regular ASCII space for NER tokenization.
+fn is_nbsp(ch: char) -> bool {
+    ch == '\u{00A0}' // No-break space (raw, not from &nbsp; which already maps to ' ')
 }
 
 /// Decode all HTML entities in a string.
@@ -764,8 +793,16 @@ fn decode_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, text: &mu
                     // C1 control range: use Win-1252 mapping, or U+FFFD for
                     // unmapped codepoints (0x81, 0x8D, 0x8F, 0x90) per HTML5 spec
                     win1252_to_unicode(n).or(Some('\u{FFFD}'))
+                } else if (0xD800..=0xDFFF).contains(&n) {
+                    // Surrogate codepoints: always U+FFFD per HTML5 spec
+                    Some('\u{FFFD}')
+                } else if n > 0x10FFFF {
+                    // Beyond Unicode range: U+FFFD
+                    Some('\u{FFFD}')
                 } else {
-                    char::from_u32(n)
+                    // char::from_u32 returns None for noncharacters (U+FDD0-U+FDEF,
+                    // last two of each plane); fall through to emit U+FFFD
+                    char::from_u32(n).or(Some('\u{FFFD}'))
                 }
             }) {
                 text.push(ch);
@@ -1818,5 +1855,113 @@ mod tests {
             decode_entities("&copy; &#8212; &#x2019;"),
             "\u{00A9} \u{2014} \u{2019}"
         );
+    }
+
+    // ===== Ruby annotation skipping (CJK) =====
+
+    #[test]
+    fn ruby_annotation_stripped() {
+        // Japanese furigana: base text preserved, pronunciation stripped
+        let html = "<p><ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>を学ぶ</p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("漢"), "base char 1: {text}");
+        assert!(text.contains("字"), "base char 2: {text}");
+        assert!(!text.contains("かん"), "rt annotation stripped: {text}");
+        assert!(!text.contains("じ"), "rt annotation stripped: {text}");
+    }
+
+    #[test]
+    fn ruby_rp_stripped() {
+        // <rp> provides fallback parentheses for non-ruby browsers
+        let html = "<p><ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp>字</ruby></p>";
+        let text = strip_to_text(html);
+        assert!(text.contains("漢"), "base text: {text}");
+        assert!(text.contains("字"), "base text: {text}");
+        assert!(!text.contains("かん"), "annotation stripped: {text}");
+        assert!(!text.contains('('), "rp parens stripped: {text}");
+    }
+
+    #[test]
+    fn ruby_in_article_context() {
+        // Ruby annotations in a real article-like context
+        let html = r#"<article>
+            <p><ruby>東京<rt>とうきょう</rt></ruby>で<ruby>安倍<rt>あべ</rt></ruby>首相が会見した。</p>
+        </article>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("東京"), "Tokyo preserved: {text}");
+        assert!(text.contains("安倍"), "Abe preserved: {text}");
+        assert!(!text.contains("とうきょう"), "Tokyo furigana stripped: {text}");
+        assert!(!text.contains("あべ"), "Abe furigana stripped: {text}");
+    }
+
+    // ===== Expanded bidi control stripping =====
+
+    #[test]
+    fn bidi_embedding_controls_stripped() {
+        // U+202A-U+202E bidi controls that appear in RTL-mixed content
+        let text = strip_to_text("<p>Name\u{202A}\u{202B}\u{202C}Here</p>");
+        assert!(text.contains("NameHere"), "bidi embedding stripped: {text}");
+    }
+
+    #[test]
+    fn bidi_isolate_controls_stripped() {
+        // U+2066-U+2069 bidi isolate controls (HTML5)
+        let text = strip_to_text("<p>Hello\u{2066}\u{2067}\u{2068}\u{2069}World</p>");
+        assert!(text.contains("HelloWorld"), "bidi isolate stripped: {text}");
+    }
+
+    #[test]
+    fn nbsp_normalized_to_space() {
+        // Raw U+00A0 (NBSP) in text should become regular space
+        let text = strip_to_text("<p>Hello\u{00A0}World</p>");
+        assert!(text.contains("Hello World"), "NBSP normalized: {text}");
+        assert!(!text.contains('\u{00A0}'), "no raw NBSP: {text}");
+    }
+
+    // ===== Surrogate and noncharacter entity handling =====
+
+    #[test]
+    fn surrogate_entity_becomes_replacement() {
+        let text = strip_to_text("<p>Before&#xD800;After</p>");
+        assert!(text.contains('\u{FFFD}'), "surrogate -> FFFD: {text}");
+        assert!(text.contains("Before"), "text preserved: {text}");
+        assert!(text.contains("After"), "text preserved: {text}");
+    }
+
+    #[test]
+    fn high_surrogate_entity_becomes_replacement() {
+        let text = strip_to_text("<p>&#xDFFF;</p>");
+        assert!(text.contains('\u{FFFD}'), "high surrogate -> FFFD: {text}");
+    }
+
+    #[test]
+    fn beyond_unicode_entity_becomes_replacement() {
+        let text = strip_to_text("<p>&#x110000;</p>");
+        assert!(text.contains('\u{FFFD}'), "beyond Unicode -> FFFD: {text}");
+    }
+
+    // ===== C0 control character stripping =====
+
+    #[test]
+    fn c0_control_chars_stripped() {
+        // &#1; through &#8; should not appear in output
+        let text = strip_to_text("<p>A&#1;B&#8;C</p>");
+        assert!(text.contains("ABC"), "control chars stripped: {text}");
+    }
+
+    #[test]
+    fn cr_entity_normalized() {
+        // &#13; (CR) should be collapsed as whitespace
+        let text = strip_to_text("<p>Line1&#13;Line2</p>");
+        assert!(text.contains("Line1"), "before CR: {text}");
+        assert!(text.contains("Line2"), "after CR: {text}");
+        assert!(!text.contains('\r'), "no raw CR: {text}");
+    }
+
+    #[test]
+    fn del_character_stripped() {
+        // &#127; (DEL) should be stripped
+        let text = strip_to_text("<p>Hello&#127;World</p>");
+        assert!(text.contains("HelloWorld"), "DEL stripped: {text}");
     }
 }

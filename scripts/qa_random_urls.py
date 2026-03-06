@@ -150,10 +150,13 @@ def check_invariants(text: str, html: str) -> list[CheckResult]:
         results.append(CheckResult("no_control_chars", True))
 
     # 7. No invisible Unicode characters (bidi marks, ZWSP, soft hyphen, etc.)
-    invisible = [
-        c for c in text
-        if ord(c) in (0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x00AD, 0x2060, 0xFEFF)
-    ]
+    _invisible_cps = {
+        0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x00AD, 0x2060, 0xFEFF,
+        0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi embedding/override
+        0x2066, 0x2067, 0x2068, 0x2069,  # bidi isolate
+        0x180E, 0xFE0F, 0x00A0,  # mongolian, variation selector, NBSP
+    }
+    invisible = [c for c in text if ord(c) in _invisible_cps]
     if invisible:
         codes = [f"U+{ord(c):04X}" for c in invisible[:5]]
         results.append(CheckResult("no_invisible_chars", False, f"found: {codes}"))
