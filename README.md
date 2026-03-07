@@ -1,5 +1,8 @@
 # deformat
 
+[![crates.io](https://img.shields.io/crates/v/deformat.svg)](https://crates.io/crates/deformat)
+[![Documentation](https://docs.rs/deformat/badge.svg)](https://docs.rs/deformat)
+
 Extract plain text from HTML, PDF, and other document formats.
 
 NER engines, LLM pipelines, and search indexers need plain text. `deformat`
