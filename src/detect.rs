@@ -88,9 +88,13 @@ pub fn detect_bytes(bytes: &[u8]) -> Format {
 ///
 /// Uses the file extension as a hint. Does not read the file.
 /// Combine with [`detect_bytes`] for content-based detection.
+///
+/// Accepts any type that can be referenced as a path (`&str`, `&Path`,
+/// `&PathBuf`, etc.).
 #[must_use]
-pub fn detect_path(path: &Path) -> Format {
+pub fn detect_path(path: impl AsRef<Path>) -> Format {
     match path
+        .as_ref()
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
