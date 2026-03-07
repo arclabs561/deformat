@@ -27,9 +27,9 @@
 //!
 //! | Feature | Crate | What it adds |
 //! |---------|-------|-------------|
-//! | `readability` | [`dom_smoothie`] | Mozilla Readability article extraction |
-//! | `html2text` | [`html2text`] | DOM-based HTML-to-text with layout awareness |
-//! | `pdf` | [`pdf-extract`] | PDF text extraction from file paths |
+//! | `readability` | `dom_smoothie` | Mozilla Readability article extraction |
+//! | `html2text` | `html2text` | DOM-based HTML-to-text with layout awareness |
+//! | `pdf` | `pdf-extract` | PDF text extraction from file paths |
 
 pub mod detect;
 pub mod error;
@@ -60,8 +60,7 @@ pub struct Extracted {
 /// then applies the appropriate extraction strategy. Plain text and
 /// markdown pass through unchanged.
 ///
-/// For PDF extraction, use [`extract_bytes`] or the [`pdf`] module
-/// (requires the `pdf` feature).
+/// For PDF extraction, use the `pdf` module (requires the `pdf` feature).
 ///
 /// # Examples
 ///
