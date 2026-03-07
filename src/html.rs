@@ -51,7 +51,12 @@ pub fn extract_with_readability(
     let cfg = dom_smoothie::Config::default();
     let mut r = dom_smoothie::Readability::new(html, Some(url), Some(cfg)).ok()?;
     let article = r.parse().ok()?;
-    let text = article.text_content.trim().to_string();
+    // Use strip_to_text on the readability HTML (article.content) rather than
+    // article.text_content. text_content concatenates DOM text nodes without
+    // whitespace between block elements (table cells, paragraphs), causing
+    // "Albert EinsteinBorn14 March 1879" in infoboxes. strip_to_text inserts
+    // proper whitespace at block boundaries.
+    let text = strip_to_text(&article.content).trim().to_string();
     if text.is_empty() || text.len() < 50 {
         return None;
     }
