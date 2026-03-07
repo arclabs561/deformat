@@ -65,12 +65,13 @@ assert_eq!(deformat::html::decode_entities("&#169; 2026"), "\u{00A9} 2026");
 ## Format detection
 
 ```rust
+use std::path::Path;
 use deformat::detect::{is_html, is_pdf, detect_str, detect_bytes, detect_path};
 use deformat::Format;
 
 assert!(is_html("<!DOCTYPE html><html>..."));
 assert_eq!(detect_str("<html><body>Hello</body></html>"), Format::Html);
-assert_eq!(detect_path("report.pdf"), Format::Pdf);
+assert_eq!(detect_path(Path::new("report.pdf")), Format::Pdf);
 ```
 
 ## License
