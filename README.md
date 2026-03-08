@@ -1,20 +1,43 @@
 # deformat
 
 [![crates.io](https://img.shields.io/crates/v/deformat.svg)](https://crates.io/crates/deformat)
-[![Documentation](https://docs.rs/deformat/badge.svg)](https://docs.rs/deformat)
+[![docs.rs](https://docs.rs/deformat/badge.svg)](https://docs.rs/deformat)
 
-Extract plain text from HTML, PDF, and other document formats.
+Extracts plain text from HTML, PDF, and other document formats. Operates on
+`&str` and `&[u8]` inputs -- no network I/O, no filesystem access (except
+PDF file extraction).
 
-NER engines, LLM pipelines, and search indexers need plain text. `deformat`
-sits upstream: it takes formatted documents and returns clean text. No network
-I/O -- it operates on `&str` and `&[u8]` inputs.
+## Supported formats
 
-## Quick start
+| Format | Input | Feature flag | Extractor |
+|--------|-------|--------------|-----------|
+| HTML (tag strip) | `&str` | *(none -- always available)* | `html::strip_to_text` |
+| HTML (layout-aware) | `&str` | `html2text` | `extract_html2text` |
+| HTML (article) | `&str` | `readability` | `extract_readable` |
+| PDF | `&Path` or `&[u8]` | `pdf` | `pdf::extract_file`, `pdf::extract_bytes` |
+| Plain text / Markdown | `&str` | *(none)* | passthrough |
+
+The default build depends only on [`memchr`](https://crates.io/crates/memchr).
+
+## Install
+
+```sh
+cargo add deformat                                        # minimal
+cargo add deformat --features readability,html2text,pdf   # all extractors
+```
+
+```toml
+[dependencies]
+deformat = { version = "0.4.1", features = ["readability", "html2text"] }
+```
+
+## Usage
+
+### Auto-detect and extract
 
 ```rust
 use deformat::{extract, Format};
 
-// Auto-detect format and extract text
 let result = extract("<p>Hello <b>world</b>!</p>");
 assert_eq!(result.text, "Hello world!");
 assert_eq!(result.format, Format::Html);
@@ -22,50 +45,52 @@ assert_eq!(result.format, Format::Html);
 // Plain text passes through unchanged
 let result = extract("Just plain text.");
 assert_eq!(result.text, "Just plain text.");
+assert_eq!(result.format, Format::PlainText);
 ```
 
-## Feature flags
-
-All features are opt-in. The default build has one dependency: `memchr`.
-
-| Feature | Crate | What it adds |
-|---------|-------|-------------|
-| `readability` | `dom_smoothie` | Mozilla Readability article extraction |
-| `html2text` | `html2text` | DOM-based HTML-to-text with layout awareness |
-| `pdf` | `pdf-extract` | PDF text extraction |
-
-```toml
-[dependencies]
-deformat = { version = "0.4", features = ["readability", "html2text"] }
-```
-
-## HTML extraction
-
-Three strategies, from simplest to most capable:
-
-1. **`html::strip_to_text`** (always available) -- fast byte-level tag stripping
-   with ~300 named HTML entities (ISO-8859-1, Latin Extended-A for Central/Eastern
-   European names, Greek, math, typography), Windows-1252 C1 range mapping,
-   CJK ruby annotation stripping, semantic element filtering, image alt text
-   extraction, and Wikipedia boilerplate removal.
-
-2. **`extract_html2text`** (feature `html2text`) -- DOM-based conversion that
-   preserves layout structure (tables, lists, indentation).
-
-3. **`extract_readable`** (feature `readability`) -- Mozilla Readability
-   algorithm that extracts the main article content, stripping navigation,
-   sidebars, and boilerplate. Falls back to `strip_to_text` if extraction
-   produces insufficient content.
-
-### Entity decoding
+All extraction functions return an `Extracted` struct:
 
 ```rust
-// Standalone entity decoding (useful for attribute values, etc.)
-assert_eq!(deformat::html::decode_entities("Caf&eacute;"), "Café");
-assert_eq!(deformat::html::decode_entities("&#169; 2026"), "\u{00A9} 2026");
+pub struct Extracted {
+    pub text: String,
+    pub format: Format,
+    pub metadata: HashMap<String, String>,  // e.g. "extractor", "title", "excerpt"
+}
 ```
 
-## Format detection
+### HTML strategies
+
+```rust
+// 1. Tag stripping (always available, fast)
+let text = deformat::html::strip_to_text("<p>Hello <b>world</b>!</p>");
+assert_eq!(text, "Hello world!");
+
+// Standalone entity decoding
+assert_eq!(deformat::html::decode_entities("Caf&eacute;"), "Cafe\u{0301}");
+```
+
+```rust
+// 2. Layout-aware DOM conversion (feature: html2text)
+let result = deformat::extract_html2text("<table><tr><td>A</td></tr></table>", 80);
+```
+
+```rust
+// 3. Article extraction via Mozilla Readability (feature: readability)
+//    Falls back to tag stripping if content is too short (< 50 chars).
+let result = deformat::extract_readable(html, Some("https://example.com/article"));
+```
+
+### PDF extraction
+
+```rust
+// From file path (feature: pdf)
+let result = deformat::pdf::extract_file(std::path::Path::new("report.pdf"))?;
+
+// From bytes in memory
+let result = deformat::pdf::extract_bytes(&pdf_bytes)?;
+```
+
+### Format detection
 
 ```rust
 use deformat::detect::{is_html, is_pdf, detect_str, detect_bytes, detect_path};
@@ -73,8 +98,18 @@ use deformat::Format;
 
 assert!(is_html("<!DOCTYPE html><html>..."));
 assert_eq!(detect_str("<html><body>Hello</body></html>"), Format::Html);
+assert_eq!(detect_bytes(b"%PDF-1.4 ..."), Format::Pdf);
 assert_eq!(detect_path("report.pdf"), Format::Pdf);
 ```
+
+## HTML tag stripping details
+
+`html::strip_to_text` handles: tag removal, script/style/noscript content removal,
+semantic element filtering (`<nav>`, `<header>`, `<footer>`, `<aside>`, `<form>`,
+etc.), ~300 named HTML entities (Latin, Greek, math, typography), numeric/hex character
+references, Windows-1252 C1 range mapping, CJK ruby annotation stripping, Wikipedia
+boilerplate removal, reference marker stripping (`[1]`, `[edit]`), image alt text
+extraction, and whitespace collapsing.
 
 ## License
 
