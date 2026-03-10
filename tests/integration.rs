@@ -3,7 +3,7 @@
 //! These test cross-module interactions and realistic content scenarios
 //! that go beyond individual unit tests.
 
-use deformat::{extract, extract_as, Format};
+use deformat::{extract, extract_as, Format, Error};
 
 // =============================================================================
 // Extract + detect consistency
@@ -19,7 +19,7 @@ fn extract_format_matches_detect() {
         ("# Heading", Format::PlainText),
     ];
     for (input, expected) in &cases {
-        let result = extract(input);
+        let result = extract(input).unwrap();
         assert_eq!(
             result.format,
             *expected,
@@ -35,38 +35,40 @@ fn extract_format_matches_detect() {
 
 #[test]
 fn extract_as_html_strips_tags() {
-    let r = extract_as("<b>bold</b>", Format::Html);
+    let r = extract_as("<b>bold</b>", Format::Html).unwrap();
     assert_eq!(r.text, "bold");
     assert_eq!(r.format, Format::Html);
 }
 
 #[test]
 fn extract_as_plaintext_passthrough() {
-    let r = extract_as("<b>not stripped</b>", Format::PlainText);
+    let r = extract_as("<b>not stripped</b>", Format::PlainText).unwrap();
     assert_eq!(r.text, "<b>not stripped</b>");
 }
 
 #[test]
 fn extract_as_markdown_passthrough() {
-    let r = extract_as("# Title\n\nParagraph.", Format::Markdown);
+    let r = extract_as("# Title\n\nParagraph.", Format::Markdown).unwrap();
     assert_eq!(r.text, "# Title\n\nParagraph.");
     assert_eq!(r.format, Format::Markdown);
 }
 
 #[test]
 fn extract_as_unknown_passthrough() {
-    let r = extract_as("mystery content", Format::Unknown);
+    let r = extract_as("mystery content", Format::Unknown).unwrap();
     assert_eq!(r.text, "mystery content");
 }
 
 #[test]
-fn extract_as_pdf_returns_error_metadata() {
+fn extract_as_pdf_returns_error() {
     let r = extract_as("fake pdf content", Format::Pdf);
-    assert!(r.text.is_empty(), "PDF str extraction should be empty");
-    assert!(
-        r.metadata.contains_key("error"),
-        "should have error metadata"
-    );
+    assert!(r.is_err(), "PDF str extraction should return Err");
+    match r.unwrap_err() {
+        Error::UnsupportedFormat(msg) => {
+            assert!(msg.contains("PDF"), "error mentions PDF: {msg}");
+        }
+        other => panic!("expected UnsupportedFormat, got: {other}"),
+    }
 }
 
 // =============================================================================
@@ -108,7 +110,8 @@ fn realistic_wikipedia_article() {
         <footer><p>Wikipedia &copy; 2026. Content under CC BY-SA.</p></footer>
     </body></html>"#;
 
-    let text = deformat::html::strip_to_text(html);
+    use deformat::html::{strip_to_text_with_options, StripOptions};
+    let text = strip_to_text_with_options(html, &StripOptions::wikipedia());
 
     // Article content preserved
     assert!(text.contains("CRISPR"), "article title: {text}");
@@ -134,12 +137,12 @@ fn realistic_wikipedia_article() {
     assert!(!text.contains("tracking"), "script stripped: {text}");
     assert!(!text.contains("style.css"), "head stripped: {text}");
 
-    // Reference markers stripped
+    // Reference markers stripped (with wikipedia options)
     assert!(!text.contains("[1]"), "ref markers stripped: {text}");
     assert!(!text.contains("[2]"), "ref markers stripped: {text}");
 
     // Copyright entity decoded
-    let full_result = extract(html);
+    let full_result = extract(html).unwrap();
     assert_eq!(full_result.format, Format::Html);
 }
 
@@ -321,7 +324,7 @@ fn attribute_gt_does_not_break_extraction() {
 
 #[test]
 fn extracted_clone_and_debug() {
-    let result = extract("<p>Hello</p>");
+    let result = extract("<p>Hello</p>").unwrap();
     let cloned = result.clone();
     assert_eq!(result.text, cloned.text);
     assert_eq!(result.format, cloned.format);
@@ -406,7 +409,7 @@ fn nbsp_in_entity_names() {
 #[test]
 fn extract_preserves_format_for_cjk_html() {
     let html = "<p><ruby>東京<rt>とうきょう</rt></ruby></p>";
-    let result = extract(html);
+    let result = extract(html).unwrap();
     assert_eq!(result.format, Format::Html);
     assert!(
         result.text.contains("東京"),
@@ -549,7 +552,8 @@ fn kitchen_sink_all_features() {
         <footer><p>&copy; 2026 TestWiki. Licensed under CC.</p></footer>
     </body></html>"#;
 
-    let text = deformat::html::strip_to_text(html);
+    use deformat::html::{strip_to_text_with_options, StripOptions};
+    let text = strip_to_text_with_options(html, &StripOptions::wikipedia());
 
     // Content preserved
     assert!(text.contains("東京"), "CJK base text: {text}");

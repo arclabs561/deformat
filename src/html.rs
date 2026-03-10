@@ -17,6 +17,30 @@ use std::borrow::Cow;
 
 use memchr::memchr2;
 
+/// Options for HTML-to-text stripping.
+#[derive(Debug, Clone, Default)]
+pub struct StripOptions {
+    /// Strip Wikipedia reference markers (`[1]`, `[edit]`, `[citation needed]`).
+    ///
+    /// Enable this when processing Wikipedia or MediaWiki content.
+    /// Disabled by default to avoid mangling non-Wikipedia text that uses
+    /// bracketed numbers or words (e.g., `[1]` as a footnote in plain text,
+    /// `[edit]` in documentation).
+    pub strip_wiki_ref_markers: bool,
+}
+
+impl StripOptions {
+    /// Preset for processing Wikipedia/MediaWiki HTML.
+    ///
+    /// Enables `strip_wiki_ref_markers`.
+    #[must_use]
+    pub fn wikipedia() -> Self {
+        Self {
+            strip_wiki_ref_markers: true,
+        }
+    }
+}
+
 /// Strip HTML tags and decode entities, returning clean plain text.
 ///
 /// This is the core built-in extractor. It handles:
@@ -27,7 +51,9 @@ use memchr::memchr2;
 /// - Wikipedia/MediaWiki boilerplate removal (TOC, references, navboxes)
 /// - HTML entity decoding (`&amp;`, `&#123;`, `&#x1F;`, etc.)
 /// - Whitespace collapsing (HTML rendering semantics)
-/// - Reference marker stripping (`[1]`, `[edit]`, `[citation needed]`)
+///
+/// Does **not** strip Wikipedia reference markers by default. Use
+/// [`strip_to_text_with_options`] with [`StripOptions::wikipedia()`] for that.
 ///
 /// # Examples
 ///
@@ -36,7 +62,25 @@ use memchr::memchr2;
 /// assert_eq!(text, "Hello world!");
 /// ```
 pub fn strip_to_text(html: &str) -> String {
-    strip_impl(html)
+    strip_impl(html, &StripOptions::default())
+}
+
+/// Strip HTML tags with explicit options.
+///
+/// Like [`strip_to_text`], but accepts [`StripOptions`] to control
+/// Wikipedia-specific behavior.
+///
+/// # Examples
+///
+/// ```
+/// use deformat::html::{strip_to_text_with_options, StripOptions};
+///
+/// let html = "<p>Einstein[1] was a physicist.</p>";
+/// let text = strip_to_text_with_options(html, &StripOptions::wikipedia());
+/// assert!(!text.contains("[1]"));
+/// ```
+pub fn strip_to_text_with_options(html: &str, options: &StripOptions) -> String {
+    strip_impl(html, options)
 }
 
 /// Try readability extraction. Returns `Some((text, title, excerpt))` on
@@ -83,7 +127,7 @@ pub fn extract_with_html2text(html: &str, width: usize) -> Result<String, String
 // Core strip implementation
 // ---------------------------------------------------------------------------
 
-fn strip_impl(html: &str) -> String {
+fn strip_impl(html: &str, options: &StripOptions) -> String {
     let bytes = html.as_bytes();
     let len = bytes.len();
 
@@ -91,8 +135,11 @@ fn strip_impl(html: &str) -> String {
     // Skip the entire tag-processing loop; just decode entities + cleanup.
     if memchr::memchr(b'<', bytes).is_none() {
         let decoded = decode_entities_in_str(html);
-        let stripped = strip_wiki_ref_markers(&decoded);
-        return cleanup_whitespace(&stripped).into_owned();
+        if options.strip_wiki_ref_markers {
+            let stripped = strip_wiki_ref_markers(&decoded);
+            return cleanup_whitespace(&stripped).into_owned();
+        }
+        return cleanup_whitespace(&decoded).into_owned();
     }
 
     let mut pos = 0;
@@ -326,12 +373,15 @@ fn strip_impl(html: &str) -> String {
         }
     }
 
-    // Strip Wikipedia reference markers [1], [edit], [citation needed] etc.
+    // Optionally strip Wikipedia reference markers [1], [edit], [citation needed].
     // Do this before whitespace cleanup so the cleanup pass collapses any
     // resulting double spaces.
-    let text = strip_wiki_ref_markers(&text);
-
-    cleanup_whitespace(&text).into_owned()
+    if options.strip_wiki_ref_markers {
+        let text = strip_wiki_ref_markers(&text);
+        cleanup_whitespace(&text).into_owned()
+    } else {
+        cleanup_whitespace(&text).into_owned()
+    }
 }
 
 /// Collapse whitespace, strip invisible characters, and trim.
@@ -1508,11 +1558,11 @@ mod tests {
     // ===== Wikipedia boilerplate =====
 
     #[test]
-    fn wiki_ref_brackets_stripped() {
+    fn wiki_ref_brackets_stripped_with_option() {
         let html = r#"<html><body>
             <p>Einstein[1] was a physicist.[2] See also[edit] quantum.</p>
         </body></html>"#;
-        let text = strip_to_text(html);
+        let text = strip_to_text_with_options(html, &StripOptions::wikipedia());
         assert!(!text.contains("[1]"));
         assert!(!text.contains("[edit]"));
         assert!(text.contains("Einstein"));
@@ -1520,8 +1570,21 @@ mod tests {
     }
 
     #[test]
-    fn wiki_citation_needed_stripped() {
-        let text = strip_to_text("<p>Claim[citation needed] here.</p>");
+    fn wiki_ref_brackets_preserved_by_default() {
+        let html = r#"<html><body>
+            <p>See reference [1] and section [edit] for details.</p>
+        </body></html>"#;
+        let text = strip_to_text(html);
+        assert!(text.contains("[1]"), "default preserves [1]: {text}");
+        assert!(text.contains("[edit]"), "default preserves [edit]: {text}");
+    }
+
+    #[test]
+    fn wiki_citation_needed_stripped_with_option() {
+        let text = strip_to_text_with_options(
+            "<p>Claim[citation needed] here.</p>",
+            &StripOptions::wikipedia(),
+        );
         assert!(!text.contains("[citation needed]"));
         assert!(text.contains("Claim"));
     }
@@ -2837,5 +2900,89 @@ mod tests {
     #[test]
     fn only_tags_no_text() {
         assert_eq!(strip_to_text("<div><span></span></div>"), "");
+    }
+
+    // ===== Priority 3: Tag name buffer overflow =====
+
+    #[test]
+    fn tag_name_31_chars_lowercased() {
+        // 31 chars fits in the 32-byte buffer (31 < 32), so it gets lowercased
+        let tag = "A".repeat(31);
+        let html = format!("<{tag}>content</{tag}>");
+        let text = strip_to_text(&html);
+        assert!(text.contains("content"), "content preserved for 31-char tag: {text}");
+        // Tag should be stripped regardless
+        assert!(!text.contains(&tag), "tag stripped: {text}");
+    }
+
+    #[test]
+    fn tag_name_32_chars_still_stripped() {
+        // 32 chars does NOT fit in the buffer (32 < 32 is false), so the tag
+        // name is not lowercased. The tag should still be stripped from output.
+        let tag = "A".repeat(32);
+        let html = format!("<{tag}>content</{tag}>");
+        let text = strip_to_text(&html);
+        assert!(text.contains("content"), "content preserved for 32-char tag: {text}");
+        assert!(!text.contains(&tag), "tag stripped even without lowercase: {text}");
+    }
+
+    #[test]
+    fn tag_name_100_chars_still_stripped() {
+        // Far exceeds the buffer; tag name is used as-is (no lowercase).
+        // Tag should still be stripped from output.
+        let tag = "X".repeat(100);
+        let html = format!("<{tag}>content</{tag}>");
+        let text = strip_to_text(&html);
+        assert!(text.contains("content"), "content preserved for 100-char tag: {text}");
+        assert!(!text.contains(&tag), "tag stripped even for huge name: {text}");
+    }
+
+    // ===== Priority 4: Nested script/style tags =====
+
+    #[test]
+    fn nested_script_tags_all_removed() {
+        // Nested <script> inside <script>: all content between the outermost
+        // <script> and its closing </script> must be removed.
+        let html = "<script><script>alert(1)</script></script><p>safe</p>";
+        let text = strip_to_text(html);
+        assert!(!text.contains("alert"), "nested script content removed: {text}");
+        assert!(text.contains("safe"), "text after scripts preserved: {text}");
+    }
+
+    #[test]
+    fn style_containing_script_tag() {
+        // <style> wrapping a <script> tag: both are skip-content tags.
+        // The inner <script> should not confuse the parser.
+        let html = "<style><script>alert(1)</script></style><p>safe</p>";
+        let text = strip_to_text(html);
+        assert!(!text.contains("alert"), "script inside style removed: {text}");
+        assert!(text.contains("safe"), "text after style preserved: {text}");
+    }
+
+    // ===== Priority 5: DEL character (0x7F) literal in input =====
+
+    #[test]
+    fn del_literal_byte_stripped() {
+        // DEL (0x7F) as a literal byte in the input (not via entity).
+        // cleanup_whitespace strips it (see the `b == 0x7F` branch).
+        let html = "<p>hello\x7Fworld</p>";
+        let text = strip_to_text(html);
+        // DEL is stripped, so "hello" and "world" are concatenated
+        assert!(
+            !text.contains('\x7F'),
+            "DEL character should be stripped: {text:?}"
+        );
+        assert!(text.contains("helloworld"), "adjacent text joined after DEL strip: {text}");
+    }
+
+    #[test]
+    fn del_literal_in_plain_text_fast_path() {
+        // DEL in text with no HTML tags (fast path through cleanup_whitespace)
+        let text = strip_to_text("before\x7Fafter");
+        assert!(
+            !text.contains('\x7F'),
+            "DEL stripped in fast path: {text:?}"
+        );
+        assert!(text.contains("beforeafter"), "text joined after DEL strip: {text}");
     }
 }

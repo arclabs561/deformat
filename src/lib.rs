@@ -10,12 +10,12 @@
 //! use deformat::{extract, Format};
 //!
 //! // Auto-detect format and extract text
-//! let result = extract("<p>Hello <b>world</b>!</p>");
+//! let result = extract("<p>Hello <b>world</b>!</p>").unwrap();
 //! assert_eq!(result.text, "Hello world!");
 //! assert_eq!(result.format, Format::Html);
 //!
 //! // Plain text passes through unchanged
-//! let result = extract("Just plain text.");
+//! let result = extract("Just plain text.").unwrap();
 //! assert_eq!(result.text, "Just plain text.");
 //! assert_eq!(result.format, Format::PlainText);
 //! ```
@@ -62,14 +62,19 @@ pub struct Extracted {
 ///
 /// For PDF extraction, use the `pdf` module (requires the `pdf` feature).
 ///
+/// # Errors
+///
+/// Returns [`Error::UnsupportedFormat`] if the detected format cannot be
+/// extracted from a string (e.g., PDF binary data passed as text).
+///
 /// # Examples
 ///
 /// ```
-/// let result = deformat::extract("<html><body><p>Hello</p></body></html>");
+/// let result = deformat::extract("<html><body><p>Hello</p></body></html>").unwrap();
 /// assert!(result.text.contains("Hello"));
 /// assert_eq!(result.format, deformat::Format::Html);
 /// ```
-pub fn extract(content: &str) -> Extracted {
+pub fn extract(content: &str) -> Result<Extracted, Error> {
     let format = detect::detect_str(content);
     extract_as(content, format)
 }
@@ -78,31 +83,38 @@ pub fn extract(content: &str) -> Extracted {
 ///
 /// Skips format detection and applies the specified extraction strategy
 /// directly.
-pub fn extract_as(content: &str, format: Format) -> Extracted {
+///
+/// # Errors
+///
+/// Returns [`Error::UnsupportedFormat`] if the format cannot be extracted
+/// from a `&str` input. Currently this only applies to [`Format::Pdf`],
+/// which requires binary file access -- use `deformat::pdf::extract_file()`
+/// or `deformat::pdf::extract_bytes()` instead.
+///
+/// # Breaking change (0.5)
+///
+/// Previously returned `Extracted` with an empty text and error metadata
+/// for PDF inputs. Now returns `Err(Error::UnsupportedFormat(...))`.
+pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
     match format {
         Format::Html => {
             let text = html::strip_to_text(content);
             let mut metadata = HashMap::new();
             metadata.insert("extractor".into(), "strip".into());
-            Extracted {
+            Ok(Extracted {
                 text,
                 format,
                 metadata,
-            }
+            })
         }
-        Format::PlainText | Format::Markdown | Format::Unknown => Extracted {
+        Format::PlainText | Format::Markdown | Format::Unknown => Ok(Extracted {
             text: content.to_string(),
             format,
             metadata: HashMap::new(),
-        },
-        Format::Pdf => Extracted {
-            text: String::new(),
-            format,
-            metadata: HashMap::from([(
-                "error".into(),
-                "PDF requires file path; use deformat::pdf::extract_file()".into(),
-            )]),
-        },
+        }),
+        Format::Pdf => Err(Error::UnsupportedFormat(
+            "PDF cannot be extracted from a string; use deformat::pdf::extract_file() or extract_bytes()".into(),
+        )),
     }
 }
 
@@ -194,7 +206,7 @@ mod tests {
 
     #[test]
     fn extract_html_auto() {
-        let result = extract("<p>Hello <b>world</b>!</p>");
+        let result = extract("<p>Hello <b>world</b>!</p>").unwrap();
         assert_eq!(result.text, "Hello world!");
         assert_eq!(result.format, Format::Html);
     }
@@ -203,7 +215,7 @@ mod tests {
     fn extract_full_html_doc() {
         let html = "<!DOCTYPE html><html><head><title>T</title></head>\
                      <body><p>Content here.</p></body></html>";
-        let result = extract(html);
+        let result = extract(html).unwrap();
         assert!(result.text.contains("Content here"));
         assert!(!result.text.contains("<title>"), "tags should be stripped");
         assert_eq!(result.format, Format::Html);
@@ -211,34 +223,45 @@ mod tests {
 
     #[test]
     fn extract_plain_text() {
-        let result = extract("Just plain text, no markup.");
+        let result = extract("Just plain text, no markup.").unwrap();
         assert_eq!(result.text, "Just plain text, no markup.");
         assert_eq!(result.format, Format::PlainText);
     }
 
     #[test]
     fn extract_as_html() {
-        let result = extract_as("<b>bold</b> text", Format::Html);
+        let result = extract_as("<b>bold</b> text", Format::Html).unwrap();
         assert_eq!(result.text, "bold text");
     }
 
     #[test]
     fn extract_as_plain() {
-        let result = extract_as("<b>not html</b>", Format::PlainText);
+        let result = extract_as("<b>not html</b>", Format::PlainText).unwrap();
         assert_eq!(result.text, "<b>not html</b>");
     }
 
     #[test]
     fn extract_metadata_has_extractor() {
-        let result = extract("<p>Hello</p>");
+        let result = extract("<p>Hello</p>").unwrap();
         assert_eq!(result.metadata.get("extractor").unwrap(), "strip");
     }
 
     #[test]
     fn extract_empty_string() {
-        let result = extract("");
+        let result = extract("").unwrap();
         assert_eq!(result.text, "");
         assert_eq!(result.format, Format::PlainText);
+    }
+
+    #[test]
+    fn extract_as_pdf_returns_error() {
+        let result = extract_as("fake pdf content", Format::Pdf);
+        assert!(result.is_err(), "PDF str extraction should return Err");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedFormat(_)),
+            "should be UnsupportedFormat, got: {err}"
+        );
     }
 
     #[cfg(feature = "readability")]
