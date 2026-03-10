@@ -276,7 +276,7 @@ proptest! {
 proptest! {
     #[test]
     fn extract_format_consistent(html in arb_html_fragment()) {
-        let result = deformat::extract(&html);
+        let result = deformat::extract(&html).unwrap();
         let detected = deformat::detect::detect_str(&html);
         prop_assert_eq!(
             result.format,
@@ -423,19 +423,20 @@ proptest! {
 }
 
 // =============================================================================
-// Invariant: wiki ref markers ([1], [edit], [citation needed]) never in output
+// Invariant: wiki ref markers stripped when StripOptions::wikipedia() is used
 // =============================================================================
 
 proptest! {
     #[test]
-    fn wiki_ref_markers_stripped(
+    fn wiki_ref_markers_stripped_with_option(
         num in 1u32..999,
         text_before in "[a-zA-Z]{3,10}",
         text_after in "[a-zA-Z]{3,10}",
     ) {
+        use deformat::html::{strip_to_text_with_options, StripOptions};
         // Numeric refs [N]
         let html = format!("<p>{text_before}[{num}]{text_after}</p>");
-        let result = deformat::html::strip_to_text(&html);
+        let result = strip_to_text_with_options(&html, &StripOptions::wikipedia());
         let marker = format!("[{num}]");
         prop_assert!(
             !result.contains(&marker),
@@ -448,12 +449,13 @@ proptest! {
     }
 
     #[test]
-    fn wiki_edit_markers_stripped(
+    fn wiki_edit_markers_stripped_with_option(
         text_before in "[a-zA-Z]{3,10}",
         text_after in "[a-zA-Z]{3,10}",
     ) {
+        use deformat::html::{strip_to_text_with_options, StripOptions};
         let html = format!("<p>{text_before} [edit] {text_after}</p>");
-        let result = deformat::html::strip_to_text(&html);
+        let result = strip_to_text_with_options(&html, &StripOptions::wikipedia());
         prop_assert!(
             !result.contains("[edit]"),
             "Wiki edit marker found in output: {:?}",
@@ -464,12 +466,13 @@ proptest! {
     }
 
     #[test]
-    fn wiki_citation_needed_stripped(
+    fn wiki_citation_needed_stripped_with_option(
         text_before in "[a-zA-Z]{3,10}",
         text_after in "[a-zA-Z]{3,10}",
     ) {
+        use deformat::html::{strip_to_text_with_options, StripOptions};
         let html = format!("<p>{text_before} [citation needed] {text_after}</p>");
-        let result = deformat::html::strip_to_text(&html);
+        let result = strip_to_text_with_options(&html, &StripOptions::wikipedia());
         prop_assert!(
             !result.contains("[citation needed]"),
             "Citation needed marker found in output: {:?}",
@@ -477,6 +480,29 @@ proptest! {
         );
         prop_assert!(result.contains(&text_before));
         prop_assert!(result.contains(&text_after));
+    }
+}
+
+// =============================================================================
+// Invariant: wiki ref markers preserved by default
+// =============================================================================
+
+proptest! {
+    #[test]
+    fn wiki_ref_markers_preserved_by_default(
+        num in 1u32..999,
+        text_before in "[a-zA-Z]{3,10}",
+        text_after in "[a-zA-Z]{3,10}",
+    ) {
+        let html = format!("<p>{text_before}[{num}]{text_after}</p>");
+        let result = deformat::html::strip_to_text(&html);
+        let marker = format!("[{num}]");
+        prop_assert!(
+            result.contains(&marker),
+            "Wiki ref marker {:?} should be preserved by default: {:?}",
+            marker,
+            result
+        );
     }
 }
 
