@@ -4,7 +4,6 @@
 //! the `pdf-extract` crate.
 
 use crate::{Error, Extracted, Format};
-use std::collections::HashMap;
 use std::path::Path;
 
 /// Extract text from a PDF file.
@@ -25,13 +24,13 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
         return Err(Error::EmptyResult);
     }
 
-    let mut metadata = HashMap::new();
-    metadata.insert("extractor".into(), "pdf-extract".into());
-
     Ok(Extracted {
         text,
         format: Format::Pdf,
-        metadata,
+        extractor: "pdf-extract".into(),
+        title: None,
+        excerpt: None,
+        fallback: false,
     })
 }
 
@@ -53,12 +52,12 @@ pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
         return Err(Error::EmptyResult);
     }
 
-    let mut metadata = HashMap::new();
-    metadata.insert("extractor".into(), "pdf-extract".into());
-
     Ok(Extracted {
         text,
         format: Format::Pdf,
-        metadata,
+        extractor: "pdf-extract".into(),
+        title: None,
+        excerpt: None,
+        fallback: false,
     })
 }

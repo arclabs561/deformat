@@ -7,6 +7,7 @@ use std::path::Path;
 
 /// Detected document format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Format {
     /// Plain text (no conversion needed).
     PlainText,

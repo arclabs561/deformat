@@ -1,15 +1,12 @@
 //! HTML-to-text extraction.
 //!
-//! Three extraction strategies, from simplest to most capable:
+//! Two extraction strategies:
 //!
 //! 1. **`strip_to_text`** (always available) -- fast tag stripping with
 //!    entity decoding, semantic element filtering, and Wikipedia boilerplate
 //!    removal. Uses `memchr` for SIMD-accelerated scanning.
 //!
-//! 2. **`extract_with_html2text`** (feature `html2text`) -- DOM-based
-//!    conversion that preserves layout structure (tables, lists, indentation).
-//!
-//! 3. **`extract_with_readability`** (feature `readability`) -- Mozilla
+//! 2. **`extract_with_readability`** (feature `readability`) -- Mozilla
 //!    Readability algorithm that extracts the main article content, stripping
 //!    navigation, sidebars, and boilerplate.
 
@@ -110,17 +107,6 @@ pub fn extract_with_readability(
         Some(article.title)
     };
     Some((text, title, article.excerpt))
-}
-
-/// Convert HTML to text using html2text's DOM-based renderer.
-///
-/// Preserves layout structure (tables, lists, indentation) with a
-/// configurable line width.
-///
-/// Requires the `html2text` feature.
-#[cfg(feature = "html2text")]
-pub fn extract_with_html2text(html: &str, width: usize) -> Result<String, String> {
-    html2text::from_read(html.as_bytes(), width).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,11 +1074,17 @@ fn extract_attr_value<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
     let name_bytes = attr_name.as_bytes();
     let name_len = name_bytes.len();
 
-    // Find attr_name= case-insensitively
+    // Find attr_name= case-insensitively, requiring a word boundary before the name.
+    // Without this check, searching for "class" would match "data-class".
     let mut pos = 0;
     while pos + name_len < tag_bytes.len() {
         if tag_bytes[pos + name_len] == b'='
             && tag_bytes[pos..pos + name_len].eq_ignore_ascii_case(name_bytes)
+            && (pos == 0
+                || matches!(
+                    tag_bytes[pos - 1],
+                    b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'<'
+                ))
         {
             let after_eq = pos + name_len + 1;
             // Skip whitespace after =
@@ -2910,7 +2902,10 @@ mod tests {
         let tag = "A".repeat(31);
         let html = format!("<{tag}>content</{tag}>");
         let text = strip_to_text(&html);
-        assert!(text.contains("content"), "content preserved for 31-char tag: {text}");
+        assert!(
+            text.contains("content"),
+            "content preserved for 31-char tag: {text}"
+        );
         // Tag should be stripped regardless
         assert!(!text.contains(&tag), "tag stripped: {text}");
     }
@@ -2922,8 +2917,14 @@ mod tests {
         let tag = "A".repeat(32);
         let html = format!("<{tag}>content</{tag}>");
         let text = strip_to_text(&html);
-        assert!(text.contains("content"), "content preserved for 32-char tag: {text}");
-        assert!(!text.contains(&tag), "tag stripped even without lowercase: {text}");
+        assert!(
+            text.contains("content"),
+            "content preserved for 32-char tag: {text}"
+        );
+        assert!(
+            !text.contains(&tag),
+            "tag stripped even without lowercase: {text}"
+        );
     }
 
     #[test]
@@ -2933,8 +2934,14 @@ mod tests {
         let tag = "X".repeat(100);
         let html = format!("<{tag}>content</{tag}>");
         let text = strip_to_text(&html);
-        assert!(text.contains("content"), "content preserved for 100-char tag: {text}");
-        assert!(!text.contains(&tag), "tag stripped even for huge name: {text}");
+        assert!(
+            text.contains("content"),
+            "content preserved for 100-char tag: {text}"
+        );
+        assert!(
+            !text.contains(&tag),
+            "tag stripped even for huge name: {text}"
+        );
     }
 
     // ===== Priority 4: Nested script/style tags =====
@@ -2945,8 +2952,14 @@ mod tests {
         // <script> and its closing </script> must be removed.
         let html = "<script><script>alert(1)</script></script><p>safe</p>";
         let text = strip_to_text(html);
-        assert!(!text.contains("alert"), "nested script content removed: {text}");
-        assert!(text.contains("safe"), "text after scripts preserved: {text}");
+        assert!(
+            !text.contains("alert"),
+            "nested script content removed: {text}"
+        );
+        assert!(
+            text.contains("safe"),
+            "text after scripts preserved: {text}"
+        );
     }
 
     #[test]
@@ -2955,7 +2968,10 @@ mod tests {
         // The inner <script> should not confuse the parser.
         let html = "<style><script>alert(1)</script></style><p>safe</p>";
         let text = strip_to_text(html);
-        assert!(!text.contains("alert"), "script inside style removed: {text}");
+        assert!(
+            !text.contains("alert"),
+            "script inside style removed: {text}"
+        );
         assert!(text.contains("safe"), "text after style preserved: {text}");
     }
 
@@ -2972,7 +2988,10 @@ mod tests {
             !text.contains('\x7F'),
             "DEL character should be stripped: {text:?}"
         );
-        assert!(text.contains("helloworld"), "adjacent text joined after DEL strip: {text}");
+        assert!(
+            text.contains("helloworld"),
+            "adjacent text joined after DEL strip: {text}"
+        );
     }
 
     #[test]
@@ -2983,6 +3002,87 @@ mod tests {
             !text.contains('\x7F'),
             "DEL stripped in fast path: {text:?}"
         );
-        assert!(text.contains("beforeafter"), "text joined after DEL strip: {text}");
+        assert!(
+            text.contains("beforeafter"),
+            "text joined after DEL strip: {text}"
+        );
+    }
+
+    // ===== extract_attr_value word-boundary fix =====
+
+    #[test]
+    fn extract_attr_value_exact_match() {
+        assert_eq!(
+            extract_attr_value("div class=\"toc\"", "class"),
+            Some("toc")
+        );
+    }
+
+    #[test]
+    fn extract_attr_value_no_substring_match() {
+        // "class" must NOT match "data-class"
+        assert_ne!(
+            extract_attr_value("div data-class=\"toc\" class=\"article\"", "class"),
+            Some("toc"),
+            "must not match data-class"
+        );
+        assert_eq!(
+            extract_attr_value("div data-class=\"toc\" class=\"article\"", "class"),
+            Some("article"),
+        );
+    }
+
+    #[test]
+    fn extract_attr_value_no_match() {
+        assert_eq!(extract_attr_value("div id=\"main\"", "class"), None);
+    }
+
+    #[test]
+    fn extract_attr_value_case_insensitive() {
+        assert_eq!(
+            extract_attr_value("div CLASS=\"foo\"", "class"),
+            Some("foo")
+        );
+    }
+
+    #[test]
+    fn extract_attr_value_single_quotes() {
+        assert_eq!(extract_attr_value("div class='bar'", "class"), Some("bar"));
+    }
+
+    #[test]
+    fn extract_attr_value_data_class_only() {
+        // Only data-class, no plain class -- should return None for "class"
+        assert_eq!(extract_attr_value("div data-class=\"toc\"", "class"), None,);
+    }
+
+    #[test]
+    fn data_class_does_not_trigger_wiki_skip() {
+        // Regression: data-class="toc" must not cause wiki-skip
+        let html = r#"<div data-class="toc"><p>This content should be visible.</p></div>"#;
+        let text = strip_to_text(html);
+        assert!(
+            text.contains("This content should be visible"),
+            "data-class must not trigger wiki-skip: {text}"
+        );
+    }
+
+    #[test]
+    fn data_id_does_not_trigger_wiki_skip() {
+        // Regression: data-id="toc" must not cause wiki-skip
+        let html = r#"<div data-id="toc"><p>Content here.</p></div>"#;
+        let text = strip_to_text(html);
+        assert!(
+            text.contains("Content here"),
+            "data-id must not trigger wiki-skip: {text}"
+        );
+    }
+
+    #[test]
+    fn real_class_toc_still_triggers_wiki_skip() {
+        let html = r#"<div class="toc"><h2>Contents</h2></div><p>Article text.</p>"#;
+        let text = strip_to_text(html);
+        assert!(!text.contains("Contents"), "real toc stripped: {text}");
+        assert!(text.contains("Article text"), "article preserved: {text}");
     }
 }
