@@ -4,6 +4,7 @@ use std::fmt;
 
 /// Errors that can occur during text extraction.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The input format is not supported for extraction.
     UnsupportedFormat(String),

@@ -3,7 +3,7 @@
 //! These test cross-module interactions and realistic content scenarios
 //! that go beyond individual unit tests.
 
-use deformat::{extract, extract_as, Format, Error};
+use deformat::{extract, extract_as, Error, Format};
 
 // =============================================================================
 // Extract + detect consistency
@@ -612,4 +612,61 @@ fn kitchen_sink_all_features() {
 
     // Table cells not fused
     assert!(!text.contains("LocationŁódź"), "th-td not fused: {text}");
+}
+
+// =============================================================================
+// extract_attr_value word-boundary regression
+// =============================================================================
+
+#[test]
+fn data_class_does_not_hide_content() {
+    // data-class="toc" must NOT trigger wiki-skip detection.
+    // Only a bare class="toc" should match.
+    let html = r#"<!DOCTYPE html>
+    <html><body>
+        <div data-class="toc" data-id="references">
+            <p>This paragraph has data-class but not class. It should be visible.</p>
+        </div>
+        <div class="article-content">
+            <p>Article body text.</p>
+        </div>
+    </body></html>"#;
+    let text = deformat::html::strip_to_text(html);
+    assert!(
+        text.contains("This paragraph has data-class"),
+        "data-class must not trigger wiki-skip: {text}"
+    );
+    assert!(text.contains("Article body"), "article preserved: {text}");
+}
+
+#[test]
+fn aria_class_does_not_hide_content() {
+    let html = r#"<div aria-class="navbox"><p>Visible content here.</p></div>"#;
+    let text = deformat::html::strip_to_text(html);
+    assert!(
+        text.contains("Visible content here"),
+        "aria-class must not trigger wiki-skip: {text}"
+    );
+}
+
+// =============================================================================
+// Extracted struct field access (non-HashMap)
+// =============================================================================
+
+#[test]
+fn extracted_fields_accessible() {
+    let result = extract("<p>Hello</p>").unwrap();
+    assert_eq!(result.extractor, "strip");
+    assert_eq!(result.format, Format::Html);
+    assert!(result.title.is_none());
+    assert!(result.excerpt.is_none());
+    assert!(!result.fallback);
+}
+
+#[test]
+fn extracted_passthrough_fields() {
+    let result = extract("plain text").unwrap();
+    assert_eq!(result.extractor, "passthrough");
+    assert_eq!(result.format, Format::PlainText);
+    assert!(!result.fallback);
 }

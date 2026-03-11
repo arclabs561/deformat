@@ -29,7 +29,7 @@
 //! |---------|-------|-------------|
 //! | `readability` | `dom_smoothie` | Mozilla Readability article extraction |
 //! | `html2text` | `html2text` | DOM-based HTML-to-text with layout awareness |
-//! | `pdf` | `pdf-extract` | PDF text extraction from file paths |
+//! | `pdf` | `pdf-extract` | PDF text extraction from file paths or bytes |
 
 pub mod detect;
 pub mod error;
@@ -38,20 +38,26 @@ pub mod html;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 
-use std::collections::HashMap;
-
 pub use detect::Format;
 pub use error::Error;
 
 /// Extracted text with metadata about the source document.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Extracted {
     /// The extracted plain text content.
     pub text: String,
     /// The detected (or specified) source format.
     pub format: Format,
-    /// Metadata from extraction (title, extractor used, language, etc.).
-    pub metadata: HashMap<String, String>,
+    /// Which extractor produced this result (e.g., `"strip"`, `"readability"`,
+    /// `"html2text"`, `"pdf-extract"`).
+    pub extractor: String,
+    /// Article title, if extracted (readability only).
+    pub title: Option<String>,
+    /// Article excerpt/description, if extracted (readability only).
+    pub excerpt: Option<String>,
+    /// `true` if a richer extractor failed and the result fell back to tag stripping.
+    pub fallback: bool,
 }
 
 /// Extract plain text from content, auto-detecting the format.
@@ -91,26 +97,26 @@ pub fn extract(content: &str) -> Result<Extracted, Error> {
 /// which requires binary file access -- use `deformat::pdf::extract_file()`
 /// or `deformat::pdf::extract_bytes()` instead.
 ///
-/// # Breaking change (0.5)
-///
-/// Previously returned `Extracted` with an empty text and error metadata
-/// for PDF inputs. Now returns `Err(Error::UnsupportedFormat(...))`.
 pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
     match format {
         Format::Html => {
             let text = html::strip_to_text(content);
-            let mut metadata = HashMap::new();
-            metadata.insert("extractor".into(), "strip".into());
             Ok(Extracted {
                 text,
                 format,
-                metadata,
+                extractor: "strip".into(),
+                title: None,
+                excerpt: None,
+                fallback: false,
             })
         }
         Format::PlainText | Format::Markdown | Format::Unknown => Ok(Extracted {
             text: content.to_string(),
             format,
-            metadata: HashMap::new(),
+            extractor: "passthrough".into(),
+            title: None,
+            excerpt: None,
+            fallback: false,
         }),
         Format::Pdf => Err(Error::UnsupportedFormat(
             "PDF cannot be extracted from a string; use deformat::pdf::extract_file() or extract_bytes()".into(),
@@ -133,30 +139,23 @@ pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
 #[cfg(feature = "readability")]
 pub fn extract_readable(html: &str, url: Option<&str>) -> Extracted {
     match html::extract_with_readability(html, url.unwrap_or("")) {
-        Some((text, title, excerpt)) => {
-            let mut metadata = HashMap::new();
-            metadata.insert("extractor".into(), "readability".into());
-            if let Some(t) = title {
-                metadata.insert("title".into(), t);
-            }
-            if let Some(e) = excerpt {
-                metadata.insert("excerpt".into(), e);
-            }
-            Extracted {
-                text,
-                format: Format::Html,
-                metadata,
-            }
-        }
+        Some((text, title, excerpt)) => Extracted {
+            text,
+            format: Format::Html,
+            extractor: "readability".into(),
+            title,
+            excerpt,
+            fallback: false,
+        },
         None => {
             let text = html::strip_to_text(html);
-            let mut metadata = HashMap::new();
-            metadata.insert("extractor".into(), "strip".into());
-            metadata.insert("readability_fallback".into(), "true".into());
             Extracted {
                 text,
                 format: Format::Html,
-                metadata,
+                extractor: "strip".into(),
+                title: None,
+                excerpt: None,
+                fallback: true,
             }
         }
     }
@@ -177,24 +176,23 @@ pub fn extract_readable(html: &str, url: Option<&str>) -> Extracted {
 #[cfg(feature = "html2text")]
 pub fn extract_html2text(html: &str, width: usize) -> Extracted {
     match ::html2text::from_read(html.as_bytes(), width) {
-        Ok(text) => {
-            let mut metadata = HashMap::new();
-            metadata.insert("extractor".into(), "html2text".into());
-            Extracted {
-                text,
-                format: Format::Html,
-                metadata,
-            }
-        }
+        Ok(text) => Extracted {
+            text,
+            format: Format::Html,
+            extractor: "html2text".into(),
+            title: None,
+            excerpt: None,
+            fallback: false,
+        },
         Err(_) => {
             let text = html::strip_to_text(html);
-            let mut metadata = HashMap::new();
-            metadata.insert("extractor".into(), "strip".into());
-            metadata.insert("html2text_fallback".into(), "true".into());
             Extracted {
                 text,
                 format: Format::Html,
-                metadata,
+                extractor: "strip".into(),
+                title: None,
+                excerpt: None,
+                fallback: true,
             }
         }
     }
@@ -243,7 +241,7 @@ mod tests {
     #[test]
     fn extract_metadata_has_extractor() {
         let result = extract("<p>Hello</p>").unwrap();
-        assert_eq!(result.metadata.get("extractor").unwrap(), "strip");
+        assert_eq!(result.extractor, "strip");
     }
 
     #[test]
@@ -294,14 +292,14 @@ mod tests {
         </body></html>"#;
         let result = extract_readable(html, Some("https://example.com/article"));
         assert!(result.text.contains("Dr. Sarah Chen"));
-        assert_eq!(result.metadata.get("extractor").unwrap(), "readability");
+        assert_eq!(result.extractor, "readability");
     }
 
     #[cfg(feature = "readability")]
     #[test]
     fn extract_readable_fallback_on_short() {
         let result = extract_readable("<p>Short</p>", None);
-        assert_eq!(result.metadata.get("readability_fallback").unwrap(), "true");
+        assert!(result.fallback);
     }
 
     #[cfg(feature = "html2text")]
@@ -310,6 +308,6 @@ mod tests {
         let result = extract_html2text("<p>Hello <b>world</b>!</p>", 80);
         assert!(result.text.contains("Hello"));
         assert!(result.text.contains("world"));
-        assert_eq!(result.metadata.get("extractor").unwrap(), "html2text");
+        assert_eq!(result.extractor, "html2text");
     }
 }

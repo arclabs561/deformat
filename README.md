@@ -28,7 +28,7 @@ cargo add deformat --features readability,html2text,pdf   # all extractors
 
 ```toml
 [dependencies]
-deformat = { version = "0.4.1", features = ["readability", "html2text"] }
+deformat = { version = "0.5.0", features = ["readability", "html2text"] }
 ```
 
 ## Usage
@@ -38,12 +38,12 @@ deformat = { version = "0.4.1", features = ["readability", "html2text"] }
 ```rust
 use deformat::{extract, Format};
 
-let result = extract("<p>Hello <b>world</b>!</p>");
+let result = extract("<p>Hello <b>world</b>!</p>").unwrap();
 assert_eq!(result.text, "Hello world!");
 assert_eq!(result.format, Format::Html);
 
 // Plain text passes through unchanged
-let result = extract("Just plain text.");
+let result = extract("Just plain text.").unwrap();
 assert_eq!(result.text, "Just plain text.");
 assert_eq!(result.format, Format::PlainText);
 ```
@@ -54,7 +54,10 @@ All extraction functions return an `Extracted` struct:
 pub struct Extracted {
     pub text: String,
     pub format: Format,
-    pub metadata: HashMap<String, String>,  // e.g. "extractor", "title", "excerpt"
+    pub extractor: String,       // e.g. "strip", "readability", "pdf-extract"
+    pub title: Option<String>,   // article title (readability only)
+    pub excerpt: Option<String>, // article excerpt (readability only)
+    pub fallback: bool,          // true if a richer extractor failed
 }
 ```
 
