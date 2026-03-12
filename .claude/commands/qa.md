@@ -1,6 +1,6 @@
 # /qa -- Quality audit of deformat
 
-Run a comprehensive quality pass: build, lint, test, property tests, doc coverage, benchmarks, domain-specific checks, and pre-publish hygiene. Produces a timestamped report in `.qa/reports/`.
+Run a comprehensive quality pass: build, lint, test, property tests, doc coverage, benchmarks, domain-specific checks, and pre-publish hygiene. Produces a timestamped report in `.claude/reports/`.
 
 ## Execution strategy
 
