@@ -12,7 +12,7 @@ Run a comprehensive quality pass: build, lint, test, property tests, doc coverag
 
 ## Report convention
 
-Reports go in `.qa/reports/qa-YYYY-MM-DD.md` (gitignored). Append a `-rN` suffix for multiple same-day reports.
+Write to `.claude/reports/qa-YYYY-MM-DD.md` (globally gitignored via `~/.gitignore_global`). For same-day reruns, append `-v2`, `-v3`.
 
 ## Severity hierarchy
 
@@ -31,8 +31,10 @@ Order findings by severity in the report.
 
 ### 0. Read prior QA reports
 
+Check for prior reports in order: `.claude/reports/`, `qa/reports/`, `.qa/reports/`, `.claude/` root (flat files like `audit-report.md`). Read the most recent found. If reports exist in old locations, move them to `.claude/reports/` with dated names before proceeding.
+
 ```bash
-eza --sort=modified -r .qa/reports/qa-*.md 2>/dev/null | head -3
+eza --sort=modified -r .claude/reports/qa-*.md .qa/reports/qa-*.md 2>/dev/null | head -3
 ```
 
 Read the most recent 1-2 reports if they exist. Note open issues to watch for.
@@ -229,7 +231,7 @@ Library code should minimize panics. Track count across audits.
 
 ### 15. Write the report
 
-Save to `.qa/reports/qa-YYYY-MM-DD.md`. Structure:
+Save to `.claude/reports/qa-YYYY-MM-DD.md`. Structure:
 
 1. **Test conditions**: date, commit SHA, rustc version, deformat version, feature matrix
 2. **Check results table**: pass/fail for each check

@@ -8,11 +8,11 @@ Audit deformat for structural integrity: module boundaries, type system coherenc
 - **Parallelize independent checks**: sections 2-7 are independent; run them concurrently where possible.
 - **Capture evidence**: for every finding, cite `file:line` and quote the relevant code. No vibes.
 - **Severity levels**: STRUCTURAL (module boundary / dep violation), COHERENCE (type misuse / invariant gap), SURFACE (public API wart), HYGIENE (dead code / feature gate issue), STYLE (convention drift). Order findings by severity.
-- **Previous reports**: read existing reports from `.qa/reports/arch-*.md` before running. Diff against prior findings.
+- **Previous reports**: check for prior reports in order: `.claude/reports/`, `qa/reports/`, `.qa/reports/`, `.claude/` root. Read the most recent found. If reports exist in old locations, move them to `.claude/reports/` with dated names before proceeding.
 
 ## Report convention
 
-Reports go in `.qa/reports/arch-YYYY-MM-DD.md` (gitignored). Append a `-suffix` for multiple same-day reports.
+Write to `.claude/reports/arch-YYYY-MM-DD.md` (globally gitignored via `~/.gitignore_global`). For same-day reruns, append `-v2`, `-v3`.
 
 ## Module layout
 
@@ -236,7 +236,7 @@ Note any significantly outdated dependencies.
 
 ### 11. Write the report
 
-Save to `.qa/reports/arch-YYYY-MM-DD.md`. Structure:
+Save to `.claude/reports/arch-YYYY-MM-DD.md`. Structure:
 
 1. **Audit scope**: commit SHA, version, deps, features
 2. **Module boundaries**: coupling analysis, size proportionality, split candidates
