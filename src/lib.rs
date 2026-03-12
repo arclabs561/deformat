@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! De-format: extract plain text from HTML, PDF, and other document formats.
 //!
 //! NER engines, LLM pipelines, and search indexers need plain text.
