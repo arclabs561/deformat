@@ -279,17 +279,21 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                 if matches!(
                     tag_lower,
                     "div" | "ol" | "ul" | "table" | "span" | "section"
-                ) && tag_content_end > tag_name_end
-                {
-                    // Zero-alloc wiki skip detection: extract class/id attr values
-                    // using the existing borrowed-return extract_attr_value, then
-                    // case-insensitively check for skip IDs.
-                    let tag_buf_start = tag_start.saturating_sub(1); // include '<'
-                    let tag_buffer = &html[tag_buf_start..pos.min(len)];
-                    let is_wiki_skip = is_wiki_skip_tag(tag_buffer);
-                    if is_wiki_skip {
+                ) {
+                    if wiki_skip_depth > 0 {
+                        // Already inside a wiki-skip container: track nesting so
+                        // inner </table> etc. don't end the skip prematurely.
                         wiki_skip_depth += 1;
                         skip_depth += 1;
+                    } else if tag_content_end > tag_name_end {
+                        // Check class/id for wiki-skip markers
+                        let tag_buf_start = tag_start.saturating_sub(1);
+                        let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                        let is_wiki_skip = is_wiki_skip_tag(tag_buffer);
+                        if is_wiki_skip {
+                            wiki_skip_depth += 1;
+                            skip_depth += 1;
+                        }
                     }
                 }
 
@@ -318,17 +322,23 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                     skip_depth += 1;
                 }
 
-                // Insert space around block-level elements for readability.
+                // Insert newline at block-level element boundaries.
+                // This gives downstream consumers (NER, summarizers) clear
+                // sentence boundaries between headings, paragraphs, table cells,
+                // and list items -- preventing "Trade name SpaceX Company type
+                // Private" from looking like continuous prose.
                 let effective_tag = tag_lower.strip_prefix('/').unwrap_or(tag_lower);
                 let effective_tag = effective_tag.strip_suffix('/').unwrap_or(effective_tag);
                 if !in_script
                     && !in_style
                     && skip_depth == 0
                     && is_block_tag(effective_tag)
-                    && !text.ends_with(' ')
                     && !text.is_empty()
                 {
-                    text.push(' ');
+                    // Avoid double newlines; collapse to single newline
+                    if !text.ends_with('\n') {
+                        text.push('\n');
+                    }
                 }
 
                 // Extract alt text from <img> tags
@@ -362,11 +372,18 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
     // Optionally strip Wikipedia reference markers [1], [edit], [citation needed].
     // Do this before whitespace cleanup so the cleanup pass collapses any
     // resulting double spaces.
-    if options.strip_wiki_ref_markers {
+    let cleaned = if options.strip_wiki_ref_markers {
         let text = strip_wiki_ref_markers(&text);
         cleanup_whitespace(&text).into_owned()
     } else {
         cleanup_whitespace(&text).into_owned()
+    };
+    // Trim leading/trailing whitespace (including newlines from block boundaries)
+    let trimmed = cleaned.trim();
+    if trimmed.len() == cleaned.len() {
+        cleaned
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -408,10 +425,29 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
             cleaned.push_str(&text[run_start..i]);
             last_was_space = false;
         } else if b <= 0x20 {
-            // ASCII whitespace or control character
-            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
-                cleaned.push(' ');
-                last_was_space = true;
+            // ASCII whitespace or control character.
+            // Preserve newlines from block-element boundaries: if a
+            // whitespace run contains \n, collapse to \n rather than space.
+            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
+                if !last_was_space {
+                    let mut has_newline = b == b'\n';
+                    // Scan ahead to collapse the full whitespace run
+                    let ws_start = i;
+                    i += 1;
+                    while i < text_len {
+                        let b2 = text_bytes[i];
+                        if b2 == b'\n' {
+                            has_newline = true;
+                        } else if b2 != b' ' && b2 != b'\t' && b2 != b'\r' {
+                            break;
+                        }
+                        i += 1;
+                    }
+                    let _ = ws_start; // consumed
+                    cleaned.push(if has_newline { '\n' } else { ' ' });
+                    last_was_space = true;
+                    continue;
+                }
             }
             // else: C0 control chars (0x00-0x08, 0x0B, 0x0E-0x1F) -> skip
             i += 1;
@@ -595,6 +631,7 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
         "mw-panel",
         "mw-navigation",
         "sidebar",
+        "infobox",
         "sitesub",
         "contentsub",
         "jump-to-nav",
@@ -1453,9 +1490,12 @@ mod tests {
             <div>Tabbed	text</div></body></html>"#;
         let text = strip_to_text(html);
         assert!(text.contains("Hello world"));
-        assert!(text.contains("Line1 Line2"));
+        // <br> is a block element, so Line1/Line2 are separated by newline
+        assert!(
+            text.contains("Line1\nLine2"),
+            "br should produce newline: {text}"
+        );
         assert!(text.contains("Tabbed text"));
-        assert!(!text.contains('\n'));
         assert!(!text.contains('\t'));
         assert!(!text.contains("  "));
     }
@@ -2862,10 +2902,10 @@ mod tests {
     }
 
     #[test]
-    fn consecutive_tags_get_spaces() {
-        // Block tags should insert spaces between content
+    fn consecutive_block_tags_get_newlines() {
+        // Block tags should insert newlines between content
         let text = strip_to_text("<p>One</p><p>Two</p><p>Three</p>");
-        assert_eq!(text, "One Two Three");
+        assert_eq!(text, "One\nTwo\nThree");
     }
 
     #[test]
