@@ -565,7 +565,11 @@ fn kitchen_sink_all_features() {
     assert!(text.contains("São Paulo"), "atilde entity: {text}");
     assert!(text.contains("€"), "numeric entity (euro): {text}");
     assert!(text.contains("Börse"), "ouml entity: {text}");
-    assert!(text.contains("Łódź"), "Latin Extended-A entities: {text}");
+    // Łódź is inside a class="infobox" table which is now stripped as wiki boilerplate.
+    assert!(
+        !text.contains("Łódź"),
+        "infobox content should be stripped: {text}"
+    );
     assert!(text.contains("Erdoğan"), "Turkish gbreve: {text}");
     assert!(text.contains("Český"), "Czech Ccaron: {text}");
     assert!(
@@ -605,13 +609,104 @@ fn kitchen_sink_all_features() {
     assert!(!text.contains("color: black"), "style stripped: {text}");
     assert!(!text.contains("var x"), "script stripped: {text}");
 
+    // Infobox stripped
+    assert!(
+        !text.contains("March 15, 2026"),
+        "infobox date stripped: {text}"
+    );
+    assert!(
+        !text.contains("Poland"),
+        "infobox location stripped: {text}"
+    );
+
     // Structural invariants
     assert!(!text.contains("  "), "no double spaces: {text}");
     assert_eq!(text, text.trim(), "output trimmed");
     assert!(!text.contains("[1]"), "wiki ref markers stripped: {text}");
+}
 
-    // Table cells not fused
-    assert!(!text.contains("LocationŁódź"), "th-td not fused: {text}");
+// =============================================================================
+// Infobox nesting regression
+// =============================================================================
+
+#[test]
+fn nested_infobox_fully_stripped() {
+    // Wikipedia infoboxes contain nested tables (inner formatting tables).
+    // The wiki-skip must track nesting depth so inner </table> doesn't
+    // end the skip prematurely.
+    let html = r#"<html><body>
+    <table class="infobox biography vcard">
+        <tr><th>Born</th><td>Marie Curie</td></tr>
+        <tr><td colspan="2">
+            <table><tr><td>Nested table content</td></tr></table>
+        </td></tr>
+        <tr><th>Died</th><td>1934</td></tr>
+    </table>
+    <p>Article text about the physicist.</p>
+    </body></html>"#;
+    let text = deformat::html::strip_to_text(html);
+    assert!(text.contains("Article text"), "article preserved: {text}");
+    assert!(!text.contains("Born"), "infobox 'Born' stripped: {text}");
+    assert!(
+        !text.contains("Marie Curie"),
+        "infobox name stripped: {text}"
+    );
+    assert!(
+        !text.contains("Nested table"),
+        "nested table stripped: {text}"
+    );
+    assert!(
+        !text.contains("1934"),
+        "infobox 'Died' after nested table stripped: {text}"
+    );
+}
+
+#[test]
+fn block_elements_produce_newlines() {
+    // Block elements (p, div, h1, td, th, li, br) should produce newlines,
+    // not spaces, so NER models see clear sentence boundaries.
+    let html = "<p>First paragraph.</p><p>Second paragraph.</p>";
+    let text = deformat::html::strip_to_text(html);
+    assert!(
+        text.contains("First paragraph.\nSecond paragraph."),
+        "paragraphs separated by newline: {text}"
+    );
+}
+
+#[test]
+fn table_cells_not_concatenated() {
+    // Table cells must not produce "Trade name SpaceX Company type Private".
+    // Each cell should be on its own line.
+    let html = r#"<table>
+        <tr><th>Trade name</th><td>SpaceX</td></tr>
+        <tr><th>Company type</th><td>Private</td></tr>
+    </table>"#;
+    let text = deformat::html::strip_to_text(html);
+    assert!(
+        !text.contains("SpaceX Company"),
+        "cells not concatenated: {text}"
+    );
+    assert!(
+        text.contains("SpaceX\n") || text.contains("SpaceX"),
+        "SpaceX present: {text}"
+    );
+}
+
+#[test]
+fn sidebar_stripped() {
+    let html = r#"<table class="sidebar nomobile">
+        <tr><td>Sidebar navigation</td></tr>
+    </table>
+    <p>Article content.</p>"#;
+    let text = deformat::html::strip_to_text(html);
+    assert!(
+        !text.contains("Sidebar navigation"),
+        "sidebar stripped: {text}"
+    );
+    assert!(
+        text.contains("Article content"),
+        "article preserved: {text}"
+    );
 }
 
 // =============================================================================
