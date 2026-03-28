@@ -3,9 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/deformat.svg)](https://crates.io/crates/deformat)
 [![docs.rs](https://docs.rs/deformat/badge.svg)](https://docs.rs/deformat)
 
-Extracts plain text from HTML, PDF, and other document formats. Operates on
-`&str` and `&[u8]` inputs -- no network I/O, no filesystem access (except
-PDF file extraction).
+Extract plain text from HTML, PDF, and other document formats.
 
 ## Supported formats
 
