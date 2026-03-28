@@ -243,6 +243,7 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                 let tag_name_raw = &html[tag_start..tag_name_end];
                 let tag_name_len = tag_name_end - tag_start;
                 let mut tag_buf = [0u8; 32];
+                let heap_lower;
                 let tag_lower: &str = if tag_name_len < 32 {
                     for (i, &b) in bytes[tag_start..tag_name_end].iter().enumerate() {
                         tag_buf[i] = b.to_ascii_lowercase();
@@ -250,11 +251,10 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                     // SAFETY: input is ASCII (HTML tag names), lowercase is ASCII
                     std::str::from_utf8(&tag_buf[..tag_name_len]).unwrap()
                 } else {
-                    // Heap fallback for absurdly long tag names
-                    // This leak is bounded (one per oversized tag) and only hit
-                    // on pathological input. In practice, HTML tag names are <20 bytes.
-                    // Use a local String to get a &str with the right lifetime.
-                    tag_name_raw // skip lowercase for >31 byte tags
+                    // Heap fallback for absurdly long tag names.
+                    // In practice, HTML tag names are <20 bytes.
+                    heap_lower = tag_name_raw.to_ascii_lowercase();
+                    &heap_lower
                 };
 
                 // Script/style toggle
@@ -428,26 +428,24 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
             // ASCII whitespace or control character.
             // Preserve newlines from block-element boundaries: if a
             // whitespace run contains \n, collapse to \n rather than space.
-            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
-                if !last_was_space {
-                    let mut has_newline = b == b'\n';
-                    // Scan ahead to collapse the full whitespace run
-                    let ws_start = i;
-                    i += 1;
-                    while i < text_len {
-                        let b2 = text_bytes[i];
-                        if b2 == b'\n' {
-                            has_newline = true;
-                        } else if b2 != b' ' && b2 != b'\t' && b2 != b'\r' {
-                            break;
-                        }
-                        i += 1;
+            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
+                let mut has_newline = b == b'\n';
+                // Scan ahead to collapse the full whitespace run
+                let ws_start = i;
+                i += 1;
+                while i < text_len {
+                    let b2 = text_bytes[i];
+                    if b2 == b'\n' {
+                        has_newline = true;
+                    } else if b2 != b' ' && b2 != b'\t' && b2 != b'\r' {
+                        break;
                     }
-                    let _ = ws_start; // consumed
-                    cleaned.push(if has_newline { '\n' } else { ' ' });
-                    last_was_space = true;
-                    continue;
+                    i += 1;
                 }
+                let _ = ws_start; // consumed
+                cleaned.push(if has_newline { '\n' } else { ' ' });
+                last_was_space = true;
+                continue;
             }
             // else: C0 control chars (0x00-0x08, 0x0B, 0x0E-0x1F) -> skip
             i += 1;
