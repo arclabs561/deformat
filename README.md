@@ -61,47 +61,18 @@ pub struct Extracted {
 
 ### HTML strategies
 
-```rust
-// 1. Tag stripping (always available, fast)
-let text = deformat::html::strip_to_text("<p>Hello <b>world</b>!</p>");
-assert_eq!(text, "Hello world!");
-
-// Standalone entity decoding
-assert_eq!(deformat::html::decode_entities("Caf&eacute;"), "Cafe\u{0301}");
-```
-
-```rust
-// 2. Layout-aware DOM conversion (feature: html2text)
-let result = deformat::extract_html2text("<table><tr><td>A</td></tr></table>", 80);
-```
-
-```rust
-// 3. Article extraction via Mozilla Readability (feature: readability)
-//    Falls back to tag stripping if content is too short (< 50 chars).
-let result = deformat::extract_readable(html, Some("https://example.com/article"));
-```
+Three HTML extractors: `html::strip_to_text` (tag stripping, always available), `extract_html2text` (layout-aware DOM, feature: `html2text`), and `extract_readable` (article extraction via Mozilla Readability, feature: `readability` -- falls back to tag stripping if content < 50 chars). Entity decoding available via `html::decode_entities`.
 
 ### PDF extraction
 
 ```rust
-// From file path (feature: pdf)
 let result = deformat::pdf::extract_file(std::path::Path::new("report.pdf"))?;
-
-// From bytes in memory
 let result = deformat::pdf::extract_bytes(&pdf_bytes)?;
 ```
 
 ### Format detection
 
-```rust
-use deformat::detect::{is_html, is_pdf, detect_str, detect_bytes, detect_path};
-use deformat::Format;
-
-assert!(is_html("<!DOCTYPE html><html>..."));
-assert_eq!(detect_str("<html><body>Hello</body></html>"), Format::Html);
-assert_eq!(detect_bytes(b"%PDF-1.4 ..."), Format::Pdf);
-assert_eq!(detect_path("report.pdf"), Format::Pdf);
-```
+`detect_str`, `detect_bytes`, `detect_path` return `Format`. Helpers: `is_html`, `is_pdf`.
 
 ## HTML tag stripping details
 
