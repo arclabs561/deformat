@@ -1006,6 +1006,39 @@ fn md_ensure_newline(out: &mut String) {
     }
 }
 
+/// Check if a tag's inline style hides the element.
+///
+/// Detects `display:none` and `visibility:hidden` in the `style` attribute.
+/// This catches hidden menus, cookie consent details, and other CSS-hidden content.
+fn is_hidden_by_style(tag_buffer: &str) -> bool {
+    if let Some(style) = extract_attr_value(tag_buffer, "style") {
+        let s = style.to_ascii_lowercase();
+        let s = s.replace(' ', "");
+        if s.contains("display:none") || s.contains("visibility:hidden") {
+            return true;
+        }
+    }
+    // Check for hidden attribute: <div hidden> or <div hidden="hidden">
+    // extract_attr_value handles hidden="value"; also check bare `hidden` attribute
+    if let Some(hidden) = extract_attr_value(tag_buffer, "hidden") {
+        if hidden.is_empty() || hidden == "hidden" || hidden == "true" {
+            return true;
+        }
+    }
+    // Bare `hidden` attribute (no value) -- check if " hidden " or " hidden>" exists
+    let lower = tag_buffer.to_ascii_lowercase();
+    if lower.contains(" hidden>") || lower.contains(" hidden ") {
+        return true;
+    }
+    // Check for aria-hidden="true"
+    if let Some(aria) = extract_attr_value(tag_buffer, "aria-hidden") {
+        if aria == "true" {
+            return true;
+        }
+    }
+    false
+}
+
 /// Parse heading level from tag name: "h1" -> Some(1), etc.
 fn heading_level(tag: &str) -> Option<u8> {
     match tag {
@@ -1144,9 +1177,10 @@ fn strip_impl(
     let mut in_style = false;
     let mut skip_depth: u32 = 0;
     let mut wiki_skip_depth: u32 = 0;
+    let mut css_hide_depth: u32 = 0;
 
     while pos < len {
-        let skipping = in_script || in_style || skip_depth > 0;
+        let skipping = in_script || in_style || skip_depth > 0 || css_hide_depth > 0;
 
         // Fast scan: find next '<' or '&' using SIMD-accelerated memchr.
         // In skip mode, only look for '<' (entities don't matter).
@@ -1374,6 +1408,22 @@ fn strip_impl(
                     }
                 } else if is_skip_tag(tag_lower) {
                     skip_depth += 1;
+                }
+
+                // CSS-hidden element tracking: display:none, visibility:hidden,
+                // hidden attribute, aria-hidden="true"
+                if css_hide_depth > 0 {
+                    if is_close {
+                        css_hide_depth = css_hide_depth.saturating_sub(1);
+                    } else {
+                        css_hide_depth += 1;
+                    }
+                } else if !is_close && tag_content_end > tag_name_end {
+                    let tag_buf_start = tag_start.saturating_sub(1);
+                    let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                    if is_hidden_by_style(tag_buffer) {
+                        css_hide_depth += 1;
+                    }
                 }
 
                 // Insert newline at block-level element boundaries.

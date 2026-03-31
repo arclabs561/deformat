@@ -241,3 +241,81 @@ fn header_content_not_skipped() {
     let text = strip_to_text("<header><h1>Article Title</h1></header>");
     assert!(text.contains("Article Title"), "header content: {text}");
 }
+
+// =============================================================================
+// CSS-hidden content stripping
+// =============================================================================
+
+#[test]
+fn display_none_stripped() {
+    let text = strip_to_text(r#"<div style="display:none">Hidden content</div><p>Visible.</p>"#);
+    assert!(text.contains("Visible"), "visible: {text}");
+    assert!(
+        !text.contains("Hidden content"),
+        "display:none stripped: {text}"
+    );
+}
+
+#[test]
+fn display_none_with_spaces() {
+    let text =
+        strip_to_text(r#"<div style="display: none !important;">Hidden</div><p>Visible.</p>"#);
+    assert!(!text.contains("Hidden"), "display:none with spaces: {text}");
+}
+
+#[test]
+fn visibility_hidden_stripped() {
+    let text = strip_to_text(r#"<span style="visibility:hidden">Ghost</span><p>Visible.</p>"#);
+    assert!(!text.contains("Ghost"), "visibility:hidden: {text}");
+}
+
+#[test]
+fn hidden_attribute_stripped() {
+    let text = strip_to_text("<div hidden><p>Hidden by attr</p></div><p>Visible.</p>");
+    assert!(!text.contains("Hidden by attr"), "hidden attr: {text}");
+    assert!(text.contains("Visible"), "visible: {text}");
+}
+
+#[test]
+fn aria_hidden_stripped() {
+    let text =
+        strip_to_text(r#"<div aria-hidden="true">Screen reader hidden</div><p>Visible.</p>"#);
+    assert!(!text.contains("Screen reader"), "aria-hidden: {text}");
+}
+
+#[test]
+fn nested_hidden_elements() {
+    let text = strip_to_text(
+        r#"<div style="display:none"><div><p>Deep hidden</p></div></div><p>Visible.</p>"#,
+    );
+    assert!(!text.contains("Deep hidden"), "nested hidden: {text}");
+    assert!(text.contains("Visible"), "visible after nested: {text}");
+}
+
+#[test]
+fn hidden_then_visible_sibling() {
+    let text = strip_to_text(concat!(
+        r#"<div style="display:none"><p>Hidden section</p></div>"#,
+        r#"<div><p>Visible section after hidden.</p></div>"#,
+    ));
+    assert!(!text.contains("Hidden section"), "hidden: {text}");
+    assert!(
+        text.contains("Visible section after hidden"),
+        "visible: {text}"
+    );
+}
+
+#[test]
+fn hidden_mobile_menu() {
+    // Common pattern: mobile nav hidden with display:none on desktop
+    let text = strip_to_text(
+        r#"<html><body>
+        <div class="mobile-menu" style="display:none">
+            <ul><li>Link 1</li><li>Link 2</li></ul>
+        </div>
+        <article><p>Article content.</p></article>
+    </body></html>"#,
+    );
+    assert!(text.contains("Article content"), "article: {text}");
+    assert!(!text.contains("Link 1"), "mobile menu hidden: {text}");
+}
