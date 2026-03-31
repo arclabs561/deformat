@@ -173,6 +173,40 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                     break;
                 }
 
+                // Script/style fast path: only look for the exact closing tag.
+                // JS/CSS content can contain '<' (e.g., `x < 10`, `a<b`),
+                // which would confuse the general tag parser's '>' scanning.
+                if in_script {
+                    if pos + 7 <= len && bytes[pos..pos + 7].eq_ignore_ascii_case(b"/script") {
+                        // Skip optional whitespace before '>'
+                        let mut end = pos + 7;
+                        while end < len && bytes[end].is_ascii_whitespace() {
+                            end += 1;
+                        }
+                        if end < len && bytes[end] == b'>' {
+                            in_script = false;
+                            pos = end + 1;
+                            continue;
+                        }
+                    }
+                    // Stray '<' inside script -- ignore it
+                    continue;
+                }
+                if in_style {
+                    if pos + 6 <= len && bytes[pos..pos + 6].eq_ignore_ascii_case(b"/style") {
+                        let mut end = pos + 6;
+                        while end < len && bytes[end].is_ascii_whitespace() {
+                            end += 1;
+                        }
+                        if end < len && bytes[end] == b'>' {
+                            in_style = false;
+                            pos = end + 1;
+                            continue;
+                        }
+                    }
+                    continue;
+                }
+
                 // HTML comment <!-- ... --> or <!DOCTYPE ...>
                 if bytes[pos] == b'!' {
                     if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
@@ -262,15 +296,14 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                     &heap_lower
                 };
 
-                // Script/style toggle
+                // Script/style opening: set flag so the fast-path above
+                // takes over scanning for the closing tag.
+                // (Closing </script> and </style> are handled by the fast
+                // path and never reach this point.)
                 if tag_lower == "script" {
                     in_script = true;
-                } else if tag_lower == "/script" {
-                    in_script = false;
                 } else if tag_lower == "style" {
                     in_style = true;
-                } else if tag_lower == "/style" {
-                    in_style = false;
                 }
 
                 // Semantic skip tags -- matched via is_skip_tag() below.
