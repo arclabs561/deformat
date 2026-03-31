@@ -3,7 +3,7 @@
 //! These tests verify that every piece of extracted text can be traced
 //! back to its correct source position in the original HTML.
 
-use deformat::html::strip_to_text_with_spans;
+use deformat::html::{strip_to_text_with_paths, strip_to_text_with_spans};
 
 // =============================================================================
 // Basic text tracing
@@ -446,4 +446,162 @@ fn all_words_traceable_in_complex_html() {
             );
         }
     }
+}
+
+// =============================================================================
+// Structural path tests
+// =============================================================================
+
+#[test]
+fn path_basic_structure() {
+    let html = "<html><body><p>Hello</p></body></html>";
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert!(text.contains("Hello"));
+
+    let hello_span = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("Hello"));
+    assert!(hello_span.is_some(), "Hello should have a path span");
+    let path = &hello_span.unwrap().path;
+    assert!(path.contains("html"), "path has html: {path}");
+    assert!(path.contains("body"), "path has body: {path}");
+    assert!(path.contains("p"), "path has p: {path}");
+}
+
+#[test]
+fn path_nested_elements() {
+    let html = "<article><section><p>Deep content</p></section></article>";
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert!(text.contains("Deep content"));
+
+    let span = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("Deep"))
+        .unwrap();
+    assert!(
+        span.path.contains("article"),
+        "path has article: {}",
+        span.path
+    );
+    assert!(
+        span.path.contains("section"),
+        "path has section: {}",
+        span.path
+    );
+    assert!(span.path.contains("p"), "path has p: {}", span.path);
+}
+
+#[test]
+fn path_skipped_elements_not_in_path() {
+    let html = "<body><nav>Skip</nav><article><p>Content</p></article></body>";
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert!(text.contains("Content"));
+    assert!(!text.contains("Skip"));
+
+    let content_span = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("Content"))
+        .unwrap();
+    assert!(
+        !content_span.path.contains("nav"),
+        "nav not in path: {}",
+        content_span.path
+    );
+    assert!(
+        content_span.path.contains("article"),
+        "article in path: {}",
+        content_span.path
+    );
+}
+
+#[test]
+fn path_entity_inherits_parent_path() {
+    let html = "<div><p>Caf&eacute;</p></div>";
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert!(text.contains("Caf\u{00E9}"));
+
+    // The entity-decoded char should have a path too
+    let eacute_span = spans.iter().find(|s| {
+        let chunk = &text[s.output_start..s.output_end];
+        chunk.contains('\u{00E9}')
+    });
+    assert!(eacute_span.is_some(), "entity has a path span");
+    let path = &eacute_span.unwrap().path;
+    assert!(path.contains("div"), "path has div: {path}");
+    assert!(path.contains("p"), "path has p: {path}");
+}
+
+#[test]
+fn path_multiple_children_same_parent() {
+    let html = "<div><p>First</p><p>Second</p><p>Third</p></div>";
+    let (text, spans) = strip_to_text_with_paths(html);
+
+    // All three paragraphs should have paths containing "div" and "p"
+    for word in ["First", "Second", "Third"] {
+        let span = spans
+            .iter()
+            .find(|s| text[s.output_start..s.output_end].contains(word));
+        assert!(span.is_some(), "{word} has a path span");
+        let path = &span.unwrap().path;
+        assert!(path.contains("div"), "{word}: path has div: {path}");
+        assert!(path.contains("p"), "{word}: path has p: {path}");
+    }
+}
+
+#[test]
+fn path_img_alt_text() {
+    let html = r#"<div><img src="x.jpg" alt="Photo description"></div>"#;
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert!(text.contains("Photo description"));
+
+    let span = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("Photo"))
+        .unwrap();
+    assert!(
+        span.path.contains("div"),
+        "img alt path has parent: {}",
+        span.path
+    );
+}
+
+#[test]
+fn path_empty_for_plain_text() {
+    let (_text, spans) = strip_to_text_with_paths("No tags here.");
+    // Plain text fast path produces no spans
+    assert!(spans.is_empty());
+}
+
+#[test]
+fn path_realistic_article() {
+    let html = r#"<html><body>
+        <article>
+            <h1>Title Here</h1>
+            <p>Introduction paragraph.</p>
+            <div class="content">
+                <p>Main body text.</p>
+            </div>
+        </article>
+    </body></html>"#;
+
+    let (text, spans) = strip_to_text_with_paths(html);
+
+    // Check that spans with h1 path exist
+    let h1_spans: Vec<_> = spans.iter().filter(|s| s.path.contains("h1")).collect();
+    assert!(
+        !h1_spans.is_empty(),
+        "should have h1 path spans, all paths: {:?}",
+        spans.iter().map(|s| &s.path).collect::<Vec<_>>()
+    );
+
+    // Check that spans with div/p path exist
+    let div_p_spans: Vec<_> = spans
+        .iter()
+        .filter(|s| s.path.contains("div") && s.path.contains("p"))
+        .collect();
+    assert!(
+        !div_p_spans.is_empty(),
+        "should have div/p path spans, all paths: {:?}",
+        spans.iter().map(|s| &s.path).collect::<Vec<_>>()
+    );
 }
