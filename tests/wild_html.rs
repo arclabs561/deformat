@@ -864,3 +864,349 @@ let result = process(&amp;input);</code></pre>
     assert!(!text.contains("Pull requests"), "repo nav stripped: {text}");
     assert!(!text.contains("Terms"), "footer nav stripped: {text}");
 }
+
+// =============================================================================
+// Cloudflare/WAF blocked pages
+// =============================================================================
+
+#[test]
+fn cloudflare_blocked_page() {
+    // Many sites return a Cloudflare challenge page when scraped.
+    let html = r#"<!DOCTYPE html>
+    <html lang="en">
+    <head><title>Attention Required! | Cloudflare</title></head>
+    <body>
+        <div class="main-wrapper">
+            <div class="main-content">
+                <h2>Please complete the security check to access</h2>
+                <noscript>Please enable JavaScript to continue.</noscript>
+                <div id="challenge-form">
+                    <form id="challenge-form" action="/cdn-cgi/challenge" method="POST">
+                        <input type="hidden" name="r" value="abc123">
+                    </form>
+                </div>
+            </div>
+        </div>
+        <script src="/cdn-cgi/challenge-platform/challenge.js"></script>
+    </body></html>"#;
+
+    let text = strip_to_text(html);
+    // Should produce minimal output (the challenge text)
+    assert!(
+        text.contains("security check"),
+        "challenge text present: {text}"
+    );
+    assert!(
+        !text.contains("challenge-platform"),
+        "script src not leaked: {text}"
+    );
+    assert!(!text.contains("abc123"), "hidden input not leaked: {text}");
+}
+
+// =============================================================================
+// Stack Overflow-like Q&A structure
+// =============================================================================
+
+#[test]
+fn stackoverflow_like_qa() {
+    let html = r#"<!DOCTYPE html>
+    <html>
+    <head><title>How to do X? - Stack Overflow</title></head>
+    <body>
+        <header><nav><a href="/">Stack Overflow</a></nav></header>
+        <main>
+            <div class="question">
+                <h1>How do I convert a String to &amp;str in Rust?</h1>
+                <div class="post-body">
+                    <p>I have a <code>String</code> but I need a <code>&amp;str</code>.
+                       What's the idiomatic way to do this?</p>
+                    <pre><code>let s: String = "hello".to_string();
+// How to get &amp;str from this?</code></pre>
+                </div>
+                <div class="post-tags">
+                    <a href="/tags/rust">rust</a>
+                    <a href="/tags/string">string</a>
+                </div>
+            </div>
+            <div class="answers">
+                <div class="answer accepted">
+                    <div class="post-body">
+                        <p>Use <code>.as_str()</code> or just borrow with <code>&amp;s</code>:</p>
+                        <pre><code>let s: String = "hello".to_string();
+let slice: &amp;str = s.as_str();
+let slice2: &amp;str = &amp;s;</code></pre>
+                    </div>
+                </div>
+            </div>
+        </main>
+        <footer><nav><a href="/about">About</a></nav></footer>
+    </body></html>"#;
+
+    let text = strip_to_text(html);
+
+    // Content preserved
+    assert!(
+        text.contains("convert a String to &str"),
+        "question decoded: {text}"
+    );
+    assert!(text.contains("as_str()"), "answer code: {text}");
+    assert!(text.contains("let slice"), "code preserved: {text}");
+
+    // Nav stripped
+    assert!(
+        !text.contains("Stack Overflow"),
+        "header nav stripped: {text}"
+    );
+    assert!(!text.contains("About"), "footer stripped: {text}");
+}
+
+// =============================================================================
+// Page wrapped entirely in <form> (ASP.NET pattern)
+// =============================================================================
+
+#[test]
+fn aspnet_form_wrapper() {
+    // ASP.NET wraps entire pages in a <form> for ViewState postback.
+    let html = r#"<!DOCTYPE html>
+    <html>
+    <head><title>ASP.NET Page</title></head>
+    <body>
+        <form id="aspnetForm" method="post" action="./Default.aspx">
+            <input type="hidden" name="__VIEWSTATE" value="dDwtMTY5Nj...">
+            <input type="hidden" name="__VIEWSTATEGENERATOR" value="CA0B0334">
+            <nav><ul><li><a href="/">Home</a></li><li><a href="/about">About</a></li></ul></nav>
+            <div id="content">
+                <h1>Welcome to Our Site</h1>
+                <p>This content is inside the ASP.NET form wrapper.</p>
+                <p>It should all be extracted normally.</p>
+            </div>
+            <footer><p>&copy; 2026</p></footer>
+        </form>
+    </body></html>"#;
+
+    let text = strip_to_text(html);
+    assert!(
+        text.contains("Welcome to Our Site"),
+        "content inside form: {text}"
+    );
+    assert!(
+        text.contains("extracted normally"),
+        "second paragraph: {text}"
+    );
+    // ViewState should not leak
+    assert!(
+        !text.contains("VIEWSTATE"),
+        "hidden inputs not leaked: {text}"
+    );
+    // Nav inside form still stripped
+    assert!(!text.contains("Home"), "nav stripped: {text}");
+}
+
+// =============================================================================
+// Markdown output on complex HTML
+// =============================================================================
+
+#[test]
+fn markdown_complex_article() {
+    use deformat::html::strip_to_markdown;
+
+    let html = r#"<!DOCTYPE html>
+    <html>
+    <head><title>Guide</title><style>body{}</style></head>
+    <body>
+        <nav><a href="/">Home</a></nav>
+        <article>
+            <h1>Complete Guide to Rust Error Handling</h1>
+            <p>Rust has a <strong>powerful</strong> error handling system
+               based on the <code>Result</code> and <code>Option</code> types.</p>
+            <h2>The Result Type</h2>
+            <p>The <a href="https://doc.rust-lang.org/std/result/">Result</a> type
+               represents either success (<code>Ok</code>) or failure (<code>Err</code>).</p>
+            <pre><code>fn parse_number(s: &amp;str) -&gt; Result&lt;i32, ParseIntError&gt; {
+    s.parse()
+}</code></pre>
+            <h2>Common Patterns</h2>
+            <ul>
+                <li>Use <code>?</code> for propagation</li>
+                <li>Use <code>unwrap_or_default()</code> for fallbacks</li>
+                <li>Use <code>map_err()</code> for error conversion</li>
+            </ul>
+            <h3>The ? Operator</h3>
+            <p>The <code>?</code> operator is syntactic sugar for early return on error:</p>
+            <blockquote><p>The question mark operator was introduced in Rust 1.13.</p></blockquote>
+            <hr>
+            <p>See also: <a href="https://doc.rust-lang.org/book/ch09-00-error-handling.html">The Rust Book</a>.</p>
+        </article>
+        <footer><p>&copy; 2026</p></footer>
+    </body></html>"#;
+
+    let md = strip_to_markdown(html);
+
+    // Headings
+    assert!(md.contains("# Complete Guide"), "h1: {md}");
+    assert!(md.contains("## The Result Type"), "h2: {md}");
+    assert!(md.contains("### The ? Operator"), "h3: {md}");
+
+    // Inline formatting
+    assert!(md.contains("**powerful**"), "bold: {md}");
+    assert!(md.contains("`Result`"), "inline code: {md}");
+    assert!(md.contains("`Option`"), "inline code 2: {md}");
+
+    // Links
+    assert!(
+        md.contains("[Result](https://doc.rust-lang.org/std/result/)"),
+        "link: {md}"
+    );
+    assert!(
+        md.contains("[The Rust Book](https://doc.rust-lang.org/book/ch09-00-error-handling.html)"),
+        "link 2: {md}"
+    );
+
+    // Code block
+    assert!(md.contains("```"), "code fence: {md}");
+    assert!(md.contains("fn parse_number"), "code content: {md}");
+
+    // List
+    assert!(md.contains("- Use `?`"), "list item: {md}");
+
+    // HR
+    assert!(md.contains("---"), "horizontal rule: {md}");
+
+    // Blockquote
+    assert!(md.contains("> "), "blockquote: {md}");
+
+    // Boilerplate stripped
+    assert!(!md.contains("Home"), "nav stripped: {md}");
+    assert!(!md.contains("2026"), "footer stripped: {md}");
+}
+
+// =============================================================================
+// Markdown output on tables
+// =============================================================================
+
+#[test]
+fn markdown_preserves_table_content() {
+    use deformat::html::strip_to_markdown;
+
+    let html = r#"<table>
+        <tr><th>Language</th><th>Year</th></tr>
+        <tr><td>Rust</td><td>2010</td></tr>
+        <tr><td>Go</td><td>2009</td></tr>
+    </table>"#;
+
+    let md = strip_to_markdown(html);
+    assert!(md.contains("Language"), "header: {md}");
+    assert!(md.contains("Rust"), "rust row: {md}");
+    assert!(md.contains("2010"), "year: {md}");
+    assert!(md.contains("Go"), "go row: {md}");
+    // Cells should be separated (not fused)
+    assert!(!md.contains("Rust2010"), "cells separated: {md}");
+}
+
+// =============================================================================
+// Regression: form content not eaten
+// =============================================================================
+
+#[test]
+fn form_content_not_eaten() {
+    // Regression test for the Al Jazeera / ASP.NET form-wrapper bug.
+    let html = r#"<html><body>
+        <form id="main-form" method="post">
+            <div class="content">
+                <h1>Article Title</h1>
+                <p>This is the main article content inside a form.</p>
+            </div>
+        </form>
+    </body></html>"#;
+
+    let text = strip_to_text(html);
+    assert!(
+        text.contains("Article Title"),
+        "content inside form preserved: {text}"
+    );
+    assert!(
+        text.contains("main article content"),
+        "paragraph inside form: {text}"
+    );
+}
+
+// =============================================================================
+// Deeply nested skip tags (nav inside header inside aside)
+// =============================================================================
+
+#[test]
+fn nested_skip_tags_dont_leak() {
+    let html = r#"<html><body>
+        <aside>
+            <nav>
+                <ul><li>Link 1</li><li>Link 2</li></ul>
+            </nav>
+            <div>Sidebar text</div>
+        </aside>
+        <article><p>Main content here.</p></article>
+        <footer>
+            <nav><a href="/">Home</a></nav>
+            <p>Footer text</p>
+        </footer>
+    </body></html>"#;
+
+    let text = strip_to_text(html);
+    assert!(text.contains("Main content"), "article: {text}");
+    assert!(!text.contains("Link 1"), "nav stripped: {text}");
+    assert!(!text.contains("Sidebar"), "aside stripped: {text}");
+    assert!(!text.contains("Footer text"), "footer stripped: {text}");
+}
+
+// =============================================================================
+// Stress: many entities in sequence
+// =============================================================================
+
+#[test]
+fn hundred_entities_in_sequence() {
+    let mut html = String::from("<p>");
+    for _ in 0..100 {
+        html.push_str("&amp;&lt;&gt;&quot;&apos;");
+    }
+    html.push_str("</p>");
+
+    let text = strip_to_text(&html);
+    assert_eq!(text.matches('&').count(), 100, "100 ampersands: {text}");
+    assert_eq!(text.matches('<').count(), 100, "100 less-thans: {text}");
+    assert_eq!(text.matches('>').count(), 100, "100 greater-thans: {text}");
+}
+
+// =============================================================================
+// MIME type to format detection
+// =============================================================================
+
+#[test]
+fn detect_mime_roundtrip() {
+    use deformat::detect::{detect_mime, Format};
+
+    let cases = [
+        ("text/html", Format::Html),
+        ("text/html; charset=utf-8", Format::Html),
+        ("application/pdf", Format::Pdf),
+        ("text/plain", Format::PlainText),
+        ("application/json", Format::PlainText),
+        ("application/xml", Format::Xml),
+        ("application/epub+zip", Format::Epub),
+        ("text/markdown", Format::Markdown),
+    ];
+
+    for (mime, expected) in &cases {
+        let detected = detect_mime(mime);
+        assert_eq!(
+            detected, *expected,
+            "MIME {mime}: expected {expected:?}, got {detected:?}"
+        );
+        // Roundtrip: format -> mime_type should be recognizable
+        let rt = detect_mime(expected.mime_type());
+        assert_eq!(
+            rt,
+            *expected,
+            "roundtrip for {expected:?}: mime_type()={}, detected as {rt:?}",
+            expected.mime_type()
+        );
+    }
+}
