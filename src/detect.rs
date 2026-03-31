@@ -13,10 +13,18 @@ pub enum Format {
     PlainText,
     /// HTML or XHTML.
     Html,
+    /// XML (not HTML -- generic XML that can be tag-stripped).
+    Xml,
     /// PDF document (binary).
     Pdf,
     /// Markdown (light markup, mostly passthrough).
     Markdown,
+    /// RTF (Rich Text Format).
+    Rtf,
+    /// DOCX (Office Open XML word processing).
+    Docx,
+    /// EPUB (electronic publication).
+    Epub,
     /// Format could not be determined.
     Unknown,
 }
@@ -28,8 +36,14 @@ impl Format {
         match self {
             Format::PlainText => "text/plain",
             Format::Html => "text/html",
+            Format::Xml => "application/xml",
             Format::Pdf => "application/pdf",
             Format::Markdown => "text/markdown",
+            Format::Rtf => "application/rtf",
+            Format::Docx => {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            }
+            Format::Epub => "application/epub+zip",
             Format::Unknown => "application/octet-stream",
         }
     }
@@ -40,8 +54,12 @@ impl std::fmt::Display for Format {
         match self {
             Format::PlainText => write!(f, "plain text"),
             Format::Html => write!(f, "HTML"),
+            Format::Xml => write!(f, "XML"),
             Format::Pdf => write!(f, "PDF"),
             Format::Markdown => write!(f, "Markdown"),
+            Format::Rtf => write!(f, "RTF"),
+            Format::Docx => write!(f, "DOCX"),
+            Format::Epub => write!(f, "EPUB"),
             Format::Unknown => write!(f, "unknown"),
         }
     }
@@ -77,6 +95,32 @@ pub fn detect_bytes(bytes: &[u8]) -> Format {
         return Format::Pdf;
     }
 
+    // RTF: {\rtf
+    if bytes.starts_with(b"{\\rtf") {
+        return Format::Rtf;
+    }
+
+    // ZIP-based formats: DOCX, EPUB (PK\x03\x04 magic)
+    if bytes.len() >= 4 && bytes[0..4] == [0x50, 0x4B, 0x03, 0x04] {
+        // Peek inside the ZIP for format-specific markers.
+        // EPUB: contains "mimetype" entry with "application/epub+zip"
+        // DOCX: contains "word/" directory or "[Content_Types].xml"
+        // Use simple byte scanning -- no ZIP library needed for detection.
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            if s.contains("application/epub+zip") {
+                return Format::Epub;
+            }
+        }
+        // Check for DOCX markers in raw bytes (works even if not valid UTF-8)
+        if bytes.windows(5).any(|w| w == b"word/")
+            || bytes.windows(19).any(|w| w == b"[Content_Types].xml")
+        {
+            return Format::Docx;
+        }
+        // Generic ZIP -- could be XLSX, PPTX, etc.
+        return Format::Unknown;
+    }
+
     // Try as UTF-8 text
     if let Ok(text) = std::str::from_utf8(bytes) {
         return detect_str(text);
@@ -102,9 +146,52 @@ pub fn detect_path(path: impl AsRef<Path>) -> Format {
         .as_deref()
     {
         Some("html" | "htm" | "xhtml") => Format::Html,
+        Some("xml" | "xsl" | "xslt" | "svg" | "rss" | "atom") => Format::Xml,
         Some("pdf") => Format::Pdf,
         Some("md" | "markdown" | "mkd") => Format::Markdown,
-        Some("txt" | "text") => Format::PlainText,
+        Some("rtf") => Format::Rtf,
+        Some("docx") => Format::Docx,
+        Some("epub") => Format::Epub,
+        Some("txt" | "text" | "log" | "csv" | "tsv" | "json" | "jsonl") => Format::PlainText,
+        _ => Format::Unknown,
+    }
+}
+
+/// Detect format from a MIME type string.
+///
+/// Recognizes standard MIME types for all supported formats. Unknown
+/// MIME types return [`Format::Unknown`].
+///
+/// # Examples
+///
+/// ```
+/// use deformat::detect::{detect_mime, Format};
+/// assert_eq!(detect_mime("text/html"), Format::Html);
+/// assert_eq!(detect_mime("application/pdf"), Format::Pdf);
+/// assert_eq!(detect_mime("text/plain"), Format::PlainText);
+/// ```
+#[must_use]
+pub fn detect_mime(mime: &str) -> Format {
+    // Normalize: lowercase, strip parameters (e.g., "text/html; charset=utf-8")
+    let mime = mime.split(';').next().unwrap_or(mime).trim();
+    match mime.to_ascii_lowercase().as_str() {
+        "text/html" | "application/xhtml+xml" => Format::Html,
+        "text/xml"
+        | "application/xml"
+        | "application/rss+xml"
+        | "application/atom+xml"
+        | "image/svg+xml" => Format::Xml,
+        "application/pdf" => Format::Pdf,
+        "text/markdown" | "text/x-markdown" => Format::Markdown,
+        "application/rtf" | "text/rtf" => Format::Rtf,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Format::Docx,
+        "application/epub+zip" => Format::Epub,
+        "text/plain"
+        | "text/csv"
+        | "text/tab-separated-values"
+        | "application/json"
+        | "application/jsonl"
+        | "text/json" => Format::PlainText,
         _ => Format::Unknown,
     }
 }
@@ -403,5 +490,93 @@ mod tests {
         // Angle brackets mid-sentence without closing tags
         let text = "Use <your name> as the identifier in the form";
         assert_eq!(detect_str(text), Format::PlainText);
+    }
+
+    // ===== New format detection =====
+
+    #[test]
+    fn detect_path_xml() {
+        assert_eq!(detect_path(Path::new("data.xml")), Format::Xml);
+        assert_eq!(detect_path(Path::new("feed.rss")), Format::Xml);
+        assert_eq!(detect_path(Path::new("feed.atom")), Format::Xml);
+        assert_eq!(detect_path(Path::new("style.xsl")), Format::Xml);
+    }
+
+    #[test]
+    fn detect_path_rtf() {
+        assert_eq!(detect_path(Path::new("doc.rtf")), Format::Rtf);
+    }
+
+    #[test]
+    fn detect_path_docx() {
+        assert_eq!(detect_path(Path::new("report.docx")), Format::Docx);
+    }
+
+    #[test]
+    fn detect_path_epub() {
+        assert_eq!(detect_path(Path::new("book.epub")), Format::Epub);
+    }
+
+    #[test]
+    fn detect_path_text_variants() {
+        assert_eq!(detect_path(Path::new("data.csv")), Format::PlainText);
+        assert_eq!(detect_path(Path::new("data.tsv")), Format::PlainText);
+        assert_eq!(detect_path(Path::new("data.json")), Format::PlainText);
+        assert_eq!(detect_path(Path::new("data.jsonl")), Format::PlainText);
+        assert_eq!(detect_path(Path::new("server.log")), Format::PlainText);
+    }
+
+    #[test]
+    fn detect_bytes_rtf() {
+        assert_eq!(detect_bytes(b"{\\rtf1\\ansi some content"), Format::Rtf);
+    }
+
+    #[test]
+    fn detect_bytes_zip_unknown() {
+        // Generic ZIP without DOCX/EPUB markers
+        let zip_header = [0x50, 0x4B, 0x03, 0x04, 0x00, 0x00];
+        assert_eq!(detect_bytes(&zip_header), Format::Unknown);
+    }
+
+    #[test]
+    fn detect_mime_common() {
+        assert_eq!(detect_mime("text/html"), Format::Html);
+        assert_eq!(detect_mime("text/html; charset=utf-8"), Format::Html);
+        assert_eq!(detect_mime("application/xhtml+xml"), Format::Html);
+        assert_eq!(detect_mime("application/pdf"), Format::Pdf);
+        assert_eq!(detect_mime("text/plain"), Format::PlainText);
+        assert_eq!(detect_mime("application/json"), Format::PlainText);
+        assert_eq!(detect_mime("text/xml"), Format::Xml);
+        assert_eq!(detect_mime("application/xml"), Format::Xml);
+        assert_eq!(detect_mime("application/rtf"), Format::Rtf);
+        assert_eq!(detect_mime("text/markdown"), Format::Markdown);
+        assert_eq!(detect_mime("application/epub+zip"), Format::Epub);
+    }
+
+    #[test]
+    fn detect_mime_case_insensitive() {
+        assert_eq!(detect_mime("Text/HTML"), Format::Html);
+        assert_eq!(detect_mime("APPLICATION/PDF"), Format::Pdf);
+    }
+
+    #[test]
+    fn detect_mime_unknown() {
+        assert_eq!(detect_mime("application/octet-stream"), Format::Unknown);
+        assert_eq!(detect_mime("image/png"), Format::Unknown);
+    }
+
+    #[test]
+    fn format_display_new() {
+        assert_eq!(Format::Xml.to_string(), "XML");
+        assert_eq!(Format::Rtf.to_string(), "RTF");
+        assert_eq!(Format::Docx.to_string(), "DOCX");
+        assert_eq!(Format::Epub.to_string(), "EPUB");
+    }
+
+    #[test]
+    fn format_mime_new() {
+        assert_eq!(Format::Xml.mime_type(), "application/xml");
+        assert_eq!(Format::Rtf.mime_type(), "application/rtf");
+        assert_eq!(Format::Epub.mime_type(), "application/epub+zip");
     }
 }
