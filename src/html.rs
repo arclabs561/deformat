@@ -80,6 +80,546 @@ pub fn strip_to_text_with_options(html: &str, options: &StripOptions) -> String 
     strip_impl(html, options)
 }
 
+/// Convert HTML to Markdown, preserving document structure.
+///
+/// Retains headings, bold/italic, links, code blocks, lists, and images
+/// as Markdown syntax. Applies the same boilerplate removal as
+/// [`strip_to_text`]: scripts, styles, nav, header, footer, aside, and
+/// Wikipedia boilerplate are stripped.
+///
+/// # Examples
+///
+/// ```
+/// let md = deformat::html::strip_to_markdown("<h1>Title</h1><p>Hello <b>world</b>!</p>");
+/// assert!(md.contains("# Title"));
+/// assert!(md.contains("**world**"));
+/// ```
+pub fn strip_to_markdown(html: &str) -> String {
+    markdown_impl(html, &StripOptions::default())
+}
+
+/// Convert HTML to Markdown with explicit options.
+///
+/// Like [`strip_to_markdown`], but accepts [`StripOptions`] to control
+/// Wikipedia-specific behavior.
+pub fn strip_to_markdown_with_options(html: &str, options: &StripOptions) -> String {
+    markdown_impl(html, options)
+}
+
+/// Core markdown implementation.
+///
+/// Shares scanning logic with [`strip_impl`] but emits Markdown formatting
+/// for headings, inline formatting, links, code, and lists.
+fn markdown_impl(html: &str, options: &StripOptions) -> String {
+    let bytes = html.as_bytes();
+    let len = bytes.len();
+
+    // Fast path: no '<' means no HTML tags at all.
+    if memchr::memchr(b'<', bytes).is_none() {
+        let decoded = decode_entities_in_str(html);
+        if options.strip_wiki_ref_markers {
+            let stripped = strip_wiki_ref_markers(&decoded);
+            return cleanup_whitespace(&stripped).into_owned();
+        }
+        return cleanup_whitespace(&decoded).into_owned();
+    }
+
+    let mut pos = 0;
+    let mut out = String::with_capacity(html.len() / 2);
+    let mut in_script = false;
+    let mut in_style = false;
+    let mut skip_depth: u32 = 0;
+    let mut wiki_skip_depth: u32 = 0;
+
+    // Markdown-specific state
+    let mut in_pre = false;
+    let mut in_inline_code = false;
+    let mut link_href: Option<String> = None;
+    let mut link_buf: Option<String> = None;
+    let mut ol_counter: u32 = 0;
+
+    while pos < len {
+        let skipping = in_script || in_style || skip_depth > 0;
+
+        let next = if skipping {
+            memchr::memchr(b'<', &bytes[pos..]).map(|o| pos + o)
+        } else {
+            memchr2(b'<', b'&', &bytes[pos..]).map(|o| pos + o)
+        };
+
+        match next {
+            None => {
+                if !skipping {
+                    md_push_text(&mut out, &mut link_buf, &html[pos..]);
+                }
+                break;
+            }
+            Some(marker_pos) => {
+                if !skipping && marker_pos > pos {
+                    md_push_text(&mut out, &mut link_buf, &html[pos..marker_pos]);
+                }
+                pos = marker_pos;
+            }
+        }
+
+        match bytes[pos] {
+            b'<' => {
+                pos += 1;
+                if pos >= len {
+                    break;
+                }
+
+                // Script/style fast path (same as strip_impl)
+                if in_script {
+                    if pos + 7 <= len && bytes[pos..pos + 7].eq_ignore_ascii_case(b"/script") {
+                        let mut end = pos + 7;
+                        while end < len && bytes[end].is_ascii_whitespace() {
+                            end += 1;
+                        }
+                        if end < len && bytes[end] == b'>' {
+                            in_script = false;
+                            pos = end + 1;
+                            continue;
+                        }
+                    }
+                    continue;
+                }
+                if in_style {
+                    if pos + 6 <= len && bytes[pos..pos + 6].eq_ignore_ascii_case(b"/style") {
+                        let mut end = pos + 6;
+                        while end < len && bytes[end].is_ascii_whitespace() {
+                            end += 1;
+                        }
+                        if end < len && bytes[end] == b'>' {
+                            in_style = false;
+                            pos = end + 1;
+                            continue;
+                        }
+                    }
+                    continue;
+                }
+
+                // HTML comment
+                if bytes[pos] == b'!' {
+                    if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
+                        pos += 3;
+                        let mut dashes = 0u32;
+                        while pos < len {
+                            match bytes[pos] {
+                                b'-' => dashes += 1,
+                                b'>' if dashes >= 2 => {
+                                    pos += 1;
+                                    break;
+                                }
+                                _ => dashes = 0,
+                            }
+                            pos += 1;
+                        }
+                        continue;
+                    }
+                    if let Some(o) = memchr::memchr(b'>', &bytes[pos..]) {
+                        pos += o + 1;
+                    } else {
+                        pos = len;
+                    }
+                    continue;
+                }
+
+                // Parse tag (same logic as strip_impl)
+                let tag_start = pos;
+                let mut tag_name_end = pos;
+                let mut in_tag_name = true;
+                let mut in_attr_quote: Option<u8> = None;
+
+                while pos < len {
+                    let b = bytes[pos];
+                    if let Some(q) = in_attr_quote {
+                        if b == q {
+                            in_attr_quote = None;
+                        }
+                        pos += 1;
+                        continue;
+                    }
+                    if b == b'>' {
+                        pos += 1;
+                        break;
+                    }
+                    if in_tag_name && b.is_ascii_whitespace() {
+                        tag_name_end = pos;
+                        in_tag_name = false;
+                    }
+                    if !in_tag_name && (b == b'"' || b == b'\'') {
+                        in_attr_quote = Some(b);
+                    }
+                    pos += 1;
+                }
+
+                if in_tag_name {
+                    tag_name_end = if pos > 0 && pos <= len && bytes[pos - 1] == b'>' {
+                        pos - 1
+                    } else {
+                        pos
+                    };
+                }
+
+                let tag_name_raw = &html[tag_start..tag_name_end];
+                let tag_name_len = tag_name_end - tag_start;
+                let mut tag_buf_arr = [0u8; 32];
+                let heap_lower;
+                let tag_lower: &str = if tag_name_len < 32 {
+                    for (i, &b) in bytes[tag_start..tag_name_end].iter().enumerate() {
+                        tag_buf_arr[i] = b.to_ascii_lowercase();
+                    }
+                    if let Ok(s) = std::str::from_utf8(&tag_buf_arr[..tag_name_len]) {
+                        s
+                    } else {
+                        heap_lower = tag_name_raw.to_ascii_lowercase();
+                        &heap_lower
+                    }
+                } else {
+                    heap_lower = tag_name_raw.to_ascii_lowercase();
+                    &heap_lower
+                };
+
+                // Script/style toggle
+                if tag_lower == "script" {
+                    in_script = true;
+                } else if tag_lower == "style" {
+                    in_style = true;
+                }
+
+                // Wiki-skip detection (same as strip_impl)
+                let tag_content_end = if pos > 0 && bytes[pos - 1] == b'>' {
+                    pos - 1
+                } else {
+                    pos
+                };
+                if matches!(
+                    tag_lower,
+                    "div" | "ol" | "ul" | "table" | "span" | "section"
+                ) {
+                    if wiki_skip_depth > 0 {
+                        wiki_skip_depth += 1;
+                        skip_depth += 1;
+                    } else if tag_content_end > tag_name_end {
+                        let tag_buf_start = tag_start.saturating_sub(1);
+                        let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                        if is_wiki_skip_tag(tag_buffer) {
+                            wiki_skip_depth += 1;
+                            skip_depth += 1;
+                        }
+                    }
+                }
+
+                let is_close = tag_lower.starts_with('/');
+                let close_name = if is_close { &tag_lower[1..] } else { "" };
+
+                if wiki_skip_depth > 0
+                    && is_close
+                    && matches!(
+                        close_name,
+                        "div" | "ol" | "ul" | "table" | "span" | "section"
+                    )
+                {
+                    wiki_skip_depth = wiki_skip_depth.saturating_sub(1);
+                    skip_depth = skip_depth.saturating_sub(1);
+                }
+
+                if is_close {
+                    if is_skip_tag(close_name) {
+                        skip_depth = skip_depth.saturating_sub(1);
+                    }
+                } else if is_skip_tag(tag_lower) {
+                    skip_depth += 1;
+                }
+
+                // --- Markdown-specific output ---
+                if in_script || in_style || skip_depth > 0 {
+                    continue;
+                }
+
+                let effective_tag = tag_lower.strip_prefix('/').unwrap_or(tag_lower);
+                let effective_tag = effective_tag.strip_suffix('/').unwrap_or(effective_tag);
+
+                // Headings
+                if let Some(level) = heading_level(effective_tag) {
+                    if is_close {
+                        md_push(&mut out, &mut link_buf, "\n");
+                    } else {
+                        md_ensure_newline(&mut out);
+                        for _ in 0..level {
+                            out.push('#');
+                        }
+                        out.push(' ');
+                    }
+                    continue;
+                }
+
+                // Bold / strong
+                if matches!(effective_tag, "b" | "strong") && !in_pre {
+                    md_push(&mut out, &mut link_buf, "**");
+                    continue;
+                }
+
+                // Italic / emphasis
+                if matches!(effective_tag, "i" | "em") && !in_pre {
+                    md_push(&mut out, &mut link_buf, "*");
+                    continue;
+                }
+
+                // Inline code
+                if effective_tag == "code" && !in_pre {
+                    if is_close {
+                        in_inline_code = false;
+                    } else {
+                        in_inline_code = true;
+                    }
+                    md_push(&mut out, &mut link_buf, "`");
+                    continue;
+                }
+
+                // Pre / code blocks
+                if effective_tag == "pre" {
+                    if is_close {
+                        in_pre = false;
+                        md_push(&mut out, &mut link_buf, "\n```\n");
+                    } else {
+                        in_pre = true;
+                        md_ensure_newline(&mut out);
+                        out.push_str("```\n");
+                    }
+                    continue;
+                }
+
+                // Links
+                if effective_tag == "a" {
+                    if is_close {
+                        // Emit [text](href)
+                        let text = link_buf.take().unwrap_or_default();
+                        let href = link_href.take().unwrap_or_default();
+                        if !text.is_empty() && !href.is_empty() {
+                            out.push('[');
+                            out.push_str(text.trim());
+                            out.push_str("](");
+                            out.push_str(&href);
+                            out.push(')');
+                        } else {
+                            out.push_str(text.trim());
+                        }
+                    } else {
+                        let tag_buf_start = tag_start.saturating_sub(1);
+                        let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                        link_href = extract_attr_value(tag_buffer, "href")
+                            .map(|s| decode_entities_in_str(s).into_owned());
+                        link_buf = Some(String::new());
+                    }
+                    continue;
+                }
+
+                // Images: ![alt](src)
+                if effective_tag == "img" && !is_close {
+                    let tag_buf_start = tag_start.saturating_sub(1);
+                    let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                    let alt = extract_attr_value(tag_buffer, "alt")
+                        .map(|s| decode_entities_in_str(s).into_owned())
+                        .unwrap_or_default();
+                    let src = extract_attr_value(tag_buffer, "src")
+                        .map(|s| decode_entities_in_str(s).into_owned())
+                        .unwrap_or_default();
+                    if !alt.is_empty() || !src.is_empty() {
+                        md_push(&mut out, &mut link_buf, "![");
+                        md_push(&mut out, &mut link_buf, &alt);
+                        md_push(&mut out, &mut link_buf, "](");
+                        md_push(&mut out, &mut link_buf, &src);
+                        md_push(&mut out, &mut link_buf, ")");
+                    }
+                    continue;
+                }
+
+                // Lists
+                if effective_tag == "ol" && !is_close {
+                    ol_counter = 0;
+                    md_ensure_newline(&mut out);
+                    continue;
+                }
+                if effective_tag == "li" && !is_close {
+                    md_ensure_newline(&mut out);
+                    if ol_counter > 0 || matches!(tag_lower, "li") {
+                        // Check if parent is ol by checking ol_counter
+                        if ol_counter > 0 {
+                            ol_counter += 1;
+                            out.push_str(&format!("{}. ", ol_counter));
+                        } else {
+                            out.push_str("- ");
+                        }
+                    } else {
+                        out.push_str("- ");
+                    }
+                    continue;
+                }
+
+                // Blockquote
+                if effective_tag == "blockquote" {
+                    if !is_close {
+                        md_ensure_newline(&mut out);
+                        out.push_str("> ");
+                    }
+                    continue;
+                }
+
+                // Horizontal rule
+                if effective_tag == "hr" {
+                    md_ensure_newline(&mut out);
+                    out.push_str("---\n");
+                    continue;
+                }
+
+                // Block elements: ensure newline boundary
+                if is_block_tag(effective_tag) && !out.is_empty() {
+                    if !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                }
+            }
+            b'&' => {
+                if in_pre || in_inline_code {
+                    // In code blocks, decode entities but don't do other processing
+                    let target = if let Some(ref mut buf) = link_buf {
+                        buf
+                    } else {
+                        &mut out
+                    };
+                    pos = decode_entity_bytes(html, bytes, pos, target);
+                } else {
+                    let target = if let Some(ref mut buf) = link_buf {
+                        buf
+                    } else {
+                        &mut out
+                    };
+                    pos = decode_entity_bytes(html, bytes, pos, target);
+                }
+            }
+            _ => {
+                pos += 1;
+            }
+        }
+    }
+
+    // Optionally strip Wikipedia reference markers
+    let cleaned = if options.strip_wiki_ref_markers {
+        let text = strip_wiki_ref_markers(&out);
+        cleanup_whitespace_markdown(&text)
+    } else {
+        cleanup_whitespace_markdown(&out)
+    };
+    cleaned.trim().to_string()
+}
+
+/// Push text to the link buffer if active, otherwise to the main output.
+fn md_push_text(out: &mut String, link_buf: &mut Option<String>, text: &str) {
+    if let Some(ref mut buf) = link_buf {
+        buf.push_str(text);
+    } else {
+        out.push_str(text);
+    }
+}
+
+/// Push a markdown marker to the link buffer if active, otherwise to output.
+fn md_push(out: &mut String, link_buf: &mut Option<String>, marker: &str) {
+    if let Some(ref mut buf) = link_buf {
+        buf.push_str(marker);
+    } else {
+        out.push_str(marker);
+    }
+}
+
+/// Ensure the output ends with a newline (for block-level elements).
+fn md_ensure_newline(out: &mut String) {
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+}
+
+/// Parse heading level from tag name: "h1" -> Some(1), etc.
+fn heading_level(tag: &str) -> Option<u8> {
+    match tag {
+        "h1" => Some(1),
+        "h2" => Some(2),
+        "h3" => Some(3),
+        "h4" => Some(4),
+        "h5" => Some(5),
+        "h6" => Some(6),
+        _ => None,
+    }
+}
+
+/// Clean up whitespace for markdown output.
+///
+/// Similar to `cleanup_whitespace` but preserves consecutive newlines
+/// (up to 2) for paragraph separation, and preserves content inside
+/// code fences.
+fn cleanup_whitespace_markdown(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut consecutive_newlines = 0u32;
+    let mut last_was_space = true;
+    let mut in_fence = false;
+
+    for line in text.split('\n') {
+        let trimmed = line.trim();
+
+        // Track code fences
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            if consecutive_newlines > 0 || !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(trimmed);
+            consecutive_newlines = 0;
+            last_was_space = false;
+            continue;
+        }
+
+        if in_fence {
+            // Inside code fence: preserve content as-is (but trim trailing whitespace)
+            result.push('\n');
+            result.push_str(line.trim_end());
+            consecutive_newlines = 0;
+            last_was_space = false;
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            consecutive_newlines += 1;
+            if consecutive_newlines <= 2 && !result.is_empty() {
+                result.push('\n');
+            }
+            last_was_space = true;
+            continue;
+        }
+
+        if consecutive_newlines > 0 || !result.is_empty() {
+            if !result.ends_with('\n') {
+                result.push('\n');
+            }
+        }
+        consecutive_newlines = 0;
+
+        // Collapse inline whitespace
+        let mut first = true;
+        for word in trimmed.split_whitespace() {
+            if !first {
+                result.push(' ');
+            }
+            result.push_str(word);
+            first = false;
+        }
+        last_was_space = false;
+    }
+
+    let _ = last_was_space;
+    result
+}
+
 /// Try readability extraction. Returns `Some((text, title, excerpt))` on
 /// success, `None` if parsing fails or the extracted text is trivial (< 50 chars).
 ///
@@ -3160,5 +3700,131 @@ mod tests {
         let text = strip_to_text(html);
         assert!(!text.contains("Contents"), "real toc stripped: {text}");
         assert!(text.contains("Article text"), "article preserved: {text}");
+    }
+
+    // ===== Markdown output =====
+
+    #[test]
+    fn md_headings() {
+        let md = strip_to_markdown("<h1>Title</h1><h2>Section</h2><h3>Sub</h3>");
+        assert!(md.contains("# Title"), "h1: {md}");
+        assert!(md.contains("## Section"), "h2: {md}");
+        assert!(md.contains("### Sub"), "h3: {md}");
+    }
+
+    #[test]
+    fn md_bold_italic() {
+        let md = strip_to_markdown("<p>Hello <b>bold</b> and <em>italic</em>!</p>");
+        assert!(md.contains("**bold**"), "bold: {md}");
+        assert!(md.contains("*italic*"), "italic: {md}");
+    }
+
+    #[test]
+    fn md_links() {
+        let md = strip_to_markdown(
+            r#"<p>Visit <a href="https://example.com">our site</a> for more.</p>"#,
+        );
+        assert!(md.contains("[our site](https://example.com)"), "link: {md}");
+        assert!(md.contains("for more"), "surrounding text: {md}");
+    }
+
+    #[test]
+    fn md_inline_code() {
+        let md = strip_to_markdown("<p>Use <code>cargo build</code> to compile.</p>");
+        assert!(md.contains("`cargo build`"), "inline code: {md}");
+    }
+
+    #[test]
+    fn md_code_block() {
+        let md = strip_to_markdown(
+            "<pre><code>fn main() {\n    println!(\"hello\");\n}</code></pre><p>After.</p>",
+        );
+        assert!(md.contains("```"), "code fence: {md}");
+        assert!(md.contains("fn main()"), "code content: {md}");
+        assert!(md.contains("After"), "post-code text: {md}");
+    }
+
+    #[test]
+    fn md_unordered_list() {
+        let md = strip_to_markdown("<ul><li>First</li><li>Second</li><li>Third</li></ul>");
+        assert!(md.contains("- First"), "li 1: {md}");
+        assert!(md.contains("- Second"), "li 2: {md}");
+        assert!(md.contains("- Third"), "li 3: {md}");
+    }
+
+    #[test]
+    fn md_image() {
+        let md = strip_to_markdown(r#"<img src="photo.jpg" alt="A nice photo">"#);
+        assert!(md.contains("![A nice photo](photo.jpg)"), "image: {md}");
+    }
+
+    #[test]
+    fn md_hr() {
+        let md = strip_to_markdown("<p>Before</p><hr><p>After</p>");
+        assert!(md.contains("---"), "hr: {md}");
+        assert!(md.contains("Before"), "before: {md}");
+        assert!(md.contains("After"), "after: {md}");
+    }
+
+    #[test]
+    fn md_boilerplate_still_stripped() {
+        let md = strip_to_markdown(
+            r#"<nav><a href="/">Home</a></nav>
+               <article><h1>Title</h1><p>Content.</p></article>
+               <footer><p>Copyright</p></footer>"#,
+        );
+        assert!(md.contains("# Title"), "heading preserved: {md}");
+        assert!(md.contains("Content"), "content preserved: {md}");
+        assert!(!md.contains("Home"), "nav stripped: {md}");
+        assert!(!md.contains("Copyright"), "footer stripped: {md}");
+    }
+
+    #[test]
+    fn md_entities_decoded() {
+        let md = strip_to_markdown("<p>Caf&eacute; &amp; B&ouml;rse</p>");
+        assert!(md.contains("Caf\u{00E9}"), "eacute: {md}");
+        assert!(md.contains("&"), "amp: {md}");
+        assert!(md.contains("B\u{00F6}rse"), "ouml: {md}");
+    }
+
+    #[test]
+    fn md_script_stripped() {
+        let md = strip_to_markdown("<script>if (x < 10) { alert('hi'); }</script><p>Visible.</p>");
+        assert!(md.contains("Visible"), "content: {md}");
+        assert!(!md.contains("alert"), "script stripped: {md}");
+    }
+
+    #[test]
+    fn md_full_article() {
+        let html = r#"<!DOCTYPE html>
+        <html><head><title>Test</title><style>body{}</style></head>
+        <body>
+            <nav><a href="/">Home</a></nav>
+            <article>
+                <h1>Rust 2026</h1>
+                <p>The <strong>Rust</strong> programming language continues to grow.
+                   Visit <a href="https://rust-lang.org">the official site</a>.</p>
+                <h2>Features</h2>
+                <ul>
+                    <li>Memory safety</li>
+                    <li>Zero-cost abstractions</li>
+                </ul>
+                <pre><code>let x = 42;</code></pre>
+            </article>
+            <footer><p>&copy; 2026</p></footer>
+        </body></html>"#;
+        let md = strip_to_markdown(html);
+        assert!(md.contains("# Rust 2026"), "h1: {md}");
+        assert!(md.contains("**Rust**"), "bold: {md}");
+        assert!(
+            md.contains("[the official site](https://rust-lang.org)"),
+            "link: {md}"
+        );
+        assert!(md.contains("## Features"), "h2: {md}");
+        assert!(md.contains("- Memory safety"), "list item: {md}");
+        assert!(md.contains("```"), "code fence: {md}");
+        assert!(md.contains("let x = 42"), "code: {md}");
+        assert!(!md.contains("Home"), "nav stripped: {md}");
+        assert!(!md.contains("2026</p>"), "footer stripped: {md}");
     }
 }
