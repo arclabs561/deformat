@@ -475,10 +475,8 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                 }
 
                 // Block elements: ensure newline boundary
-                if is_block_tag(effective_tag) && !out.is_empty() {
-                    if !out.ends_with('\n') {
-                        out.push('\n');
-                    }
+                if is_block_tag(effective_tag) && !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
                 }
             }
             b'&' => {
@@ -597,10 +595,8 @@ fn cleanup_whitespace_markdown(text: &str) -> String {
             continue;
         }
 
-        if consecutive_newlines > 0 || !result.is_empty() {
-            if !result.ends_with('\n') {
-                result.push('\n');
-            }
+        if (consecutive_newlines > 0 || !result.is_empty()) && !result.ends_with('\n') {
+            result.push('\n');
         }
         consecutive_newlines = 0;
 
@@ -912,11 +908,9 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                     && skip_depth == 0
                     && is_block_tag(effective_tag)
                     && !text.is_empty()
+                    && !text.ends_with('\n')
                 {
-                    // Avoid double newlines; collapse to single newline
-                    if !text.ends_with('\n') {
-                        text.push('\n');
-                    }
+                    text.push('\n');
                 }
 
                 // Extract alt text from <img> tags
@@ -1240,7 +1234,7 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
             } else {
                 // Class is space-separated tokens -- match whole tokens
                 for token in check_val.split_whitespace() {
-                    if WIKI_SKIP_IDS.iter().any(|id| token == *id) {
+                    if WIKI_SKIP_IDS.contains(&&*token) {
                         return true;
                     }
                 }
