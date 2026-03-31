@@ -33,6 +33,7 @@
 //! | `pdf` | `pdf-extract` | PDF text extraction from file paths or bytes |
 //! | `docx` | `zip` | DOCX text extraction from file paths or bytes |
 //! | `epub` | `zip` | EPUB text extraction with reading-order chapters |
+//! | `rtf` | `rtf-parser-tt` | RTF text extraction |
 
 pub mod detect;
 pub mod error;
@@ -46,6 +47,9 @@ pub mod docx;
 
 #[cfg(feature = "epub")]
 pub mod epub;
+
+#[cfg(feature = "rtf")]
+pub mod rtf;
 
 pub use detect::Format;
 pub use error::Error;
