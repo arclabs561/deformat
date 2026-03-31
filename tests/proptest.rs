@@ -38,7 +38,7 @@ fn arb_html_fragment() -> impl Strategy<Value = String> {
         "pre",
     ]);
     let skip_tag_names = prop::sample::select(vec![
-        "script", "style", "nav", "header", "footer", "aside", "noscript", "template", "svg",
+        "script", "style", "nav", "footer", "aside", "noscript", "template", "svg",
     ]);
     let entities = prop::sample::select(vec![
         "&amp;",
@@ -316,7 +316,7 @@ proptest! {
     fn skip_tag_content_never_leaks(
         content in "[a-zA-Z]{5,15}",
         tag in prop::sample::select(vec![
-            "nav", "header", "footer", "aside", "noscript",
+            "nav", "footer", "aside", "noscript",
             "template", "svg", "textarea", "iframe",
         ]).prop_map(|s| s.to_string()),
     ) {
@@ -339,9 +339,9 @@ proptest! {
     #[test]
     fn nested_skip_tags_no_leak(
         content in "[a-zA-Z]{5,15}",
-        outer in prop::sample::select(vec!["header", "footer", "nav", "aside"])
+        outer in prop::sample::select(vec!["footer", "nav", "aside", "noscript"])
             .prop_map(|s| s.to_string()),
-        inner in prop::sample::select(vec!["nav", "aside", "form", "noscript"])
+        inner in prop::sample::select(vec!["nav", "aside", "noscript", "template"])
             .prop_map(|s| s.to_string()),
     ) {
         let html = format!(
