@@ -102,16 +102,12 @@ pub fn detect_bytes(bytes: &[u8]) -> Format {
 
     // ZIP-based formats: DOCX, EPUB (PK\x03\x04 magic)
     if bytes.len() >= 4 && bytes[0..4] == [0x50, 0x4B, 0x03, 0x04] {
-        // Peek inside the ZIP for format-specific markers.
-        // EPUB: contains "mimetype" entry with "application/epub+zip"
-        // DOCX: contains "word/" directory or "[Content_Types].xml"
-        // Use simple byte scanning -- no ZIP library needed for detection.
-        if let Ok(s) = std::str::from_utf8(bytes) {
-            if s.contains("application/epub+zip") {
-                return Format::Epub;
-            }
+        // Peek inside the ZIP for format-specific markers using raw byte scanning.
+        // EPUB: "mimetype" entry contains "application/epub+zip" near the start
+        if bytes.windows(20).any(|w| w == b"application/epub+zip") {
+            return Format::Epub;
         }
-        // Check for DOCX markers in raw bytes (works even if not valid UTF-8)
+        // DOCX: contains "word/" directory or "[Content_Types].xml"
         if bytes.windows(5).any(|w| w == b"word/")
             || bytes.windows(19).any(|w| w == b"[Content_Types].xml")
         {
