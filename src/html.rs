@@ -901,21 +901,25 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                 }
 
                 // Lists
-                if effective_tag == "ol" && !is_close {
-                    ol_counter = 0;
+                if effective_tag == "ol" {
+                    if is_close {
+                        ol_counter = 0; // Reset when leaving <ol>
+                    } else {
+                        ol_counter = 1; // Start counting at 1
+                    }
+                    md_ensure_newline(&mut out);
+                    continue;
+                }
+                if effective_tag == "ul" && !is_close {
+                    ol_counter = 0; // Unordered list resets counter
                     md_ensure_newline(&mut out);
                     continue;
                 }
                 if effective_tag == "li" && !is_close {
                     md_ensure_newline(&mut out);
-                    if ol_counter > 0 || matches!(tag_lower, "li") {
-                        // Check if parent is ol by checking ol_counter
-                        if ol_counter > 0 {
-                            ol_counter += 1;
-                            out.push_str(&format!("{}. ", ol_counter));
-                        } else {
-                            out.push_str("- ");
-                        }
+                    if ol_counter > 0 {
+                        out.push_str(&format!("{}. ", ol_counter));
+                        ol_counter += 1;
                     } else {
                         out.push_str("- ");
                     }
@@ -4264,6 +4268,26 @@ mod tests {
         assert!(md.contains("- First"), "li 1: {md}");
         assert!(md.contains("- Second"), "li 2: {md}");
         assert!(md.contains("- Third"), "li 3: {md}");
+    }
+
+    #[test]
+    fn md_ordered_list() {
+        let md = strip_to_markdown("<ol><li>Alpha</li><li>Beta</li><li>Gamma</li></ol>");
+        assert!(md.contains("1. Alpha"), "ol 1: {md}");
+        assert!(md.contains("2. Beta"), "ol 2: {md}");
+        assert!(md.contains("3. Gamma"), "ol 3: {md}");
+    }
+
+    #[test]
+    fn md_mixed_lists() {
+        let md = strip_to_markdown(concat!(
+            "<ol><li>Ordered 1</li><li>Ordered 2</li></ol>",
+            "<ul><li>Unordered A</li><li>Unordered B</li></ul>"
+        ));
+        assert!(md.contains("1. Ordered 1"), "ol 1: {md}");
+        assert!(md.contains("2. Ordered 2"), "ol 2: {md}");
+        assert!(md.contains("- Unordered A"), "ul a: {md}");
+        assert!(md.contains("- Unordered B"), "ul b: {md}");
     }
 
     #[test]
