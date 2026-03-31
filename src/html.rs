@@ -1337,7 +1337,7 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
             } else {
                 // Class is space-separated tokens -- match whole tokens
                 for token in check_val.split_whitespace() {
-                    if WIKI_SKIP_IDS.contains(&token.as_ref()) {
+                    if WIKI_SKIP_IDS.contains(&token) {
                         return true;
                     }
                 }
