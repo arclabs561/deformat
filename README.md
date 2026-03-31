@@ -26,7 +26,7 @@ cargo add deformat --features readability,html2text,pdf   # all extractors
 
 ```toml
 [dependencies]
-deformat = { version = "0.5.1", features = ["readability", "html2text"] }
+deformat = { version = "0.6.0", features = ["readability", "html2text"] }
 ```
 
 ## Usage
@@ -52,7 +52,7 @@ All extraction functions return an `Extracted` struct:
 pub struct Extracted {
     pub text: String,
     pub format: Format,
-    pub extractor: String,       // e.g. "strip", "readability", "pdf-extract"
+    pub extractor: Extractor,    // Strip, Readability, Html2text, PdfExtract, Passthrough
     pub title: Option<String>,   // article title (readability only)
     pub excerpt: Option<String>, // article excerpt (readability only)
     pub fallback: bool,          // true if a richer extractor failed

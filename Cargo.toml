@@ -1,6 +1,6 @@
 [package]
 name = "deformat"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.80.0"
 license = "MIT OR Apache-2.0"
@@ -10,13 +10,13 @@ readme = "README.md"
 keywords = ["text-extraction", "html", "pdf", "document", "nlp"]
 categories = ["text-processing", "parser-implementations"]
 include = [
-    "/src/**/*.rs",
-    "/tests/**/*.rs",
-    "/examples/**/*.rs",
-    "/benches/**/*.rs",
-    "/Cargo.toml",
-    "/LICENSE-*",
-    "/README.md",
+  "/src/**/*.rs",
+  "/tests/**/*.rs",
+  "/examples/**/*.rs",
+  "/benches/**/*.rs",
+  "/Cargo.toml",
+  "/LICENSE-*",
+  "/README.md",
 ]
 
 [dependencies]
