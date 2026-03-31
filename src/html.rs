@@ -1721,6 +1721,13 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
         "mw-head-base",
         "footer",
         "printfooter",
+        // Wikipedia Vector skin (2022): interlanguage links and nav portlets.
+        // "mw-portlet-lang" / "p-lang-btn" target the 79-language sidebar.
+        "mw-portlet-lang",
+        "p-lang-btn",
+        "mw-portlet-navigation",
+        "mw-portlet-interaction",
+        "mw-portlet-tools",
     ];
     // Check class and id attribute values.
     // Match against space-delimited tokens in class values (word-boundary matching)

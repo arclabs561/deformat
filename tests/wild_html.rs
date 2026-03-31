@@ -1210,3 +1210,52 @@ fn detect_mime_roundtrip() {
         );
     }
 }
+
+#[test]
+fn wikipedia_interlanguage_links_stripped() {
+    // Wikipedia Vector skin (2022) wraps interlanguage links in
+    // <div id="p-lang-btn" class="vector-dropdown mw-portlet mw-portlet-lang">.
+    // These should be stripped -- 79 language names are boilerplate.
+    let html = r#"<html><body>
+<div id="p-lang-btn" class="vector-dropdown mw-portlet mw-portlet-lang">
+  <ul><li><a lang="fr">Français</a></li><li><a lang="de">Deutsch</a></li><li><a lang="ja">日本語</a></li></ul>
+</div>
+<div id="mw-content-text">
+  <p>Gross domestic product (GDP) is the market value of all final goods.</p>
+</div>
+</body></html>"#;
+    let text = deformat::html::strip_to_text(html);
+    assert!(
+        !text.contains("Français"),
+        "interlanguage links should be stripped"
+    );
+    assert!(
+        !text.contains("Deutsch"),
+        "interlanguage links should be stripped"
+    );
+    assert!(
+        text.contains("Gross domestic product"),
+        "article content preserved"
+    );
+}
+
+#[test]
+fn wikipedia_portlet_navigation_stripped() {
+    // mw-portlet-navigation contains site nav links (Contents, Help, etc.)
+    // that are boilerplate on every Wikipedia page.
+    let html = r#"<html><body>
+<div id="p-navigation" class="vector-menu mw-portlet mw-portlet-navigation">
+  <ul><li>Main page</li><li>Contents</li><li>Help</li></ul>
+</div>
+<article><p>Classical logic is a branch of mathematics.</p></article>
+</body></html>"#;
+    let text = deformat::html::strip_to_text(html);
+    assert!(
+        !text.contains("Main page"),
+        "nav portlet should be stripped"
+    );
+    assert!(
+        text.contains("Classical logic"),
+        "article content preserved"
+    );
+}
