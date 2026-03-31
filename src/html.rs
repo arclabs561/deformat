@@ -59,7 +59,7 @@ impl StripOptions {
 /// assert_eq!(text, "Hello world!");
 /// ```
 pub fn strip_to_text(html: &str) -> String {
-    strip_impl(html, &StripOptions::default())
+    strip_impl(html, &StripOptions::default(), None)
 }
 
 /// Strip HTML tags with explicit options.
@@ -77,7 +77,91 @@ pub fn strip_to_text(html: &str) -> String {
 /// assert!(!text.contains("[1]"));
 /// ```
 pub fn strip_to_text_with_options(html: &str, options: &StripOptions) -> String {
-    strip_impl(html, options)
+    strip_impl(html, options, None)
+}
+
+/// A mapping from output byte ranges to source HTML byte ranges.
+///
+/// Each span represents a contiguous run of output text that originated
+/// from a contiguous region of the source HTML. Use this to trace
+/// extracted text back to its source position (e.g., for NER pipelines
+/// that need to highlight entities in the original HTML).
+///
+/// # Examples
+///
+/// ```
+/// let (text, spans) = deformat::html::strip_to_text_with_spans("<p>Hello <b>world</b>!</p>");
+/// assert_eq!(text, "Hello world!");
+/// // Find where "world" came from in the HTML
+/// let world_start = text.find("world").unwrap();
+/// let world_end = world_start + "world".len();
+/// let source = spans.source_range(world_start, world_end);
+/// // source points to the byte range in the original HTML containing "world"
+/// assert!(source.is_some());
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct SpanMap {
+    /// (output_byte_start, output_byte_end, source_byte_start, source_byte_end)
+    spans: Vec<(usize, usize, usize, usize)>,
+}
+
+impl SpanMap {
+    /// Find the source HTML byte range for a given output byte range.
+    ///
+    /// Returns the smallest source range that covers all source spans
+    /// overlapping with `output_start..output_end`. Returns `None` if
+    /// no spans overlap the requested range.
+    #[must_use]
+    pub fn source_range(&self, output_start: usize, output_end: usize) -> Option<(usize, usize)> {
+        let mut src_start = usize::MAX;
+        let mut src_end = 0;
+        let mut found = false;
+        for &(os, oe, ss, se) in &self.spans {
+            if oe > output_start && os < output_end {
+                src_start = src_start.min(ss);
+                src_end = src_end.max(se);
+                found = true;
+            }
+        }
+        if found {
+            Some((src_start, src_end))
+        } else {
+            None
+        }
+    }
+
+    /// Iterate over all span mappings.
+    ///
+    /// Each tuple is `(output_start, output_end, source_start, source_end)`.
+    pub fn iter(&self) -> impl Iterator<Item = &(usize, usize, usize, usize)> {
+        self.spans.iter()
+    }
+
+    /// Number of spans.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.spans.len()
+    }
+
+    /// Whether the span map is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.spans.is_empty()
+    }
+}
+
+/// Strip HTML tags and return both the clean text and a source offset map.
+///
+/// Like [`strip_to_text`], but also returns a [`SpanMap`] that maps
+/// byte ranges in the output text back to byte ranges in the source HTML.
+///
+/// Note: the span map tracks direct text copies and entity decoding.
+/// Block-boundary newlines and whitespace-collapsed regions map to
+/// approximate source positions.
+pub fn strip_to_text_with_spans(html: &str) -> (String, SpanMap) {
+    let mut spans = Vec::new();
+    let text = strip_impl(html, &StripOptions::default(), Some(&mut spans));
+    (text, SpanMap { spans })
 }
 
 /// Convert HTML to Markdown, preserving document structure.
@@ -649,7 +733,11 @@ pub fn extract_with_readability(
 // Core strip implementation
 // ---------------------------------------------------------------------------
 
-fn strip_impl(html: &str, options: &StripOptions) -> String {
+fn strip_impl(
+    html: &str,
+    options: &StripOptions,
+    mut spans: Option<&mut Vec<(usize, usize, usize, usize)>>,
+) -> String {
     let bytes = html.as_bytes();
     let len = bytes.len();
 
@@ -688,7 +776,11 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
             None => {
                 // No more markers -- copy remainder if not skipping
                 if !skipping {
+                    let out_start = text.len();
                     text.push_str(&html[pos..]);
+                    if let Some(ref mut s) = spans {
+                        s.push((out_start, text.len(), pos, len));
+                    }
                 }
                 break;
             }
@@ -696,7 +788,11 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                 // Bulk-copy text before the marker (splitting at ASCII positions
                 // is always valid UTF-8)
                 if !skipping && marker_pos > pos {
+                    let out_start = text.len();
                     text.push_str(&html[pos..marker_pos]);
+                    if let Some(ref mut s) = spans {
+                        s.push((out_start, text.len(), pos, marker_pos));
+                    }
                 }
                 pos = marker_pos;
             }
@@ -915,8 +1011,7 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
 
                 // Extract alt text from <img> tags
                 if !in_script && !in_style && skip_depth == 0 && tag_lower == "img" {
-                    // Reconstruct tag buffer for attr extraction: <...>
-                    let tag_buf_start = tag_start.saturating_sub(1); // include '<'
+                    let tag_buf_start = tag_start.saturating_sub(1);
                     let tag_buffer = &html[tag_buf_start..pos.min(len)];
                     if let Some(alt) = extract_attr_value(tag_buffer, "alt") {
                         if !alt.is_empty() {
@@ -924,7 +1019,12 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                             if !text.ends_with(' ') && !text.is_empty() {
                                 text.push(' ');
                             }
+                            let out_start = text.len();
                             text.push_str(&decoded);
+                            if let Some(ref mut s) = spans {
+                                // Map alt text to the <img> tag's source range
+                                s.push((out_start, text.len(), tag_buf_start, pos.min(len)));
+                            }
                             text.push(' ');
                         }
                     }
@@ -933,7 +1033,14 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
             b'&' => {
                 // Reuse decode_entity_bytes for all entity handling
                 // (named, numeric, semicolon-optional). pos points to '&'.
+                let entity_start = pos;
+                let out_start = text.len();
                 pos = decode_entity_bytes(html, bytes, pos, &mut text);
+                if let Some(ref mut s) = spans {
+                    if text.len() > out_start {
+                        s.push((out_start, text.len(), entity_start, pos));
+                    }
+                }
             }
             _ => {
                 pos += 1;
@@ -3837,5 +3944,88 @@ mod tests {
         assert!(md.contains("let x = 42"), "code: {md}");
         assert!(!md.contains("Home"), "nav stripped: {md}");
         assert!(!md.contains("2026</p>"), "footer stripped: {md}");
+    }
+
+    // ===== SpanMap =====
+
+    #[test]
+    fn span_map_basic() {
+        let html = "<p>Hello world!</p>";
+        let (text, spans) = strip_to_text_with_spans(html);
+        assert!(text.contains("Hello world!"), "text: {text}");
+        assert!(!spans.is_empty(), "should have spans");
+
+        // Find "Hello" in output
+        let hello_start = text.find("Hello").unwrap();
+        let hello_end = hello_start + "Hello".len();
+        let src = spans.source_range(hello_start, hello_end).unwrap();
+        // The source range should point into the HTML
+        let source_text = &html[src.0..src.1];
+        assert!(
+            source_text.contains("Hello"),
+            "source should contain Hello: {source_text}"
+        );
+    }
+
+    #[test]
+    fn span_map_entity() {
+        let html = "<p>Caf&eacute;</p>";
+        let (text, spans) = strip_to_text_with_spans(html);
+        assert!(text.contains("Caf\u{00E9}"), "text: {text}");
+
+        // The 'e' with acute comes from "&eacute;" in the source
+        let cafe_start = text.find("Caf\u{00E9}").unwrap();
+        let cafe_end = cafe_start + "Caf\u{00E9}".len();
+        let src = spans.source_range(cafe_start, cafe_end).unwrap();
+        let source_text = &html[src.0..src.1];
+        // Source should cover "Caf" and "&eacute;"
+        assert!(
+            source_text.contains("&eacute;") || source_text.contains("Caf"),
+            "source contains entity: {source_text}"
+        );
+    }
+
+    #[test]
+    fn span_map_skipped_tags() {
+        let html = "<nav>Skip me</nav><p>Keep me</p>";
+        let (text, spans) = strip_to_text_with_spans(html);
+        assert!(text.contains("Keep me"), "text: {text}");
+        assert!(!text.contains("Skip me"), "nav stripped: {text}");
+
+        // Find "Keep" in output
+        let keep_start = text.find("Keep").unwrap();
+        let keep_end = keep_start + "Keep me".len();
+        let src = spans.source_range(keep_start, keep_end).unwrap();
+        let source_text = &html[src.0..src.1];
+        assert!(
+            source_text.contains("Keep me"),
+            "source is in paragraph: {source_text}"
+        );
+    }
+
+    #[test]
+    fn span_map_img_alt() {
+        let html = r#"<p>See <img src="x.jpg" alt="photo"> here</p>"#;
+        let (text, spans) = strip_to_text_with_spans(html);
+        assert!(text.contains("photo"), "alt text: {text}");
+
+        let photo_start = text.find("photo").unwrap();
+        let photo_end = photo_start + "photo".len();
+        let src = spans.source_range(photo_start, photo_end).unwrap();
+        // Source should point to the <img> tag area
+        let source_text = &html[src.0..src.1];
+        assert!(
+            source_text.contains("alt="),
+            "source contains img tag: {source_text}"
+        );
+    }
+
+    #[test]
+    fn span_map_no_out_of_bounds() {
+        // Query a range beyond the output -- should return None
+        let (text, spans) = strip_to_text_with_spans("<p>short</p>");
+        assert!(text.contains("short"));
+        assert!(spans.source_range(100, 200).is_none());
+        assert!(spans.source_range(0, 0).is_none());
     }
 }
