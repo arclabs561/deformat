@@ -28,6 +28,7 @@
 //!
 //! | Feature | Crate | What it adds |
 //! |---------|-------|-------------|
+//! | `serde` | `serde` | [`serde::Serialize`]/[`serde::Deserialize`] on [`Extracted`], [`Format`], [`Extractor`], and [`html::HtmlMetadata`] |
 //! | `readability` | `dom_smoothie` | Mozilla Readability article extraction |
 //! | `html2text` | `html2text` | DOM-based HTML-to-text with layout awareness |
 //! | `pdf` | `pdf-extract` | PDF text extraction from file paths or bytes |
