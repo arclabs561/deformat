@@ -22,6 +22,9 @@ include = [
 [dependencies]
 memchr = "2"
 
+# Optional: JSON serialization for Extracted, Format, Extractor
+serde = { version = "1", optional = true, features = ["derive"] }
+
 # Optional: DOM-based HTML-to-text conversion
 html2text = { version = "0.16", optional = true }
 
@@ -49,6 +52,7 @@ docx = ["dep:zip"]
 epub = ["dep:zip"]
 rtf = ["dep:rtf-parser-tt"]
 xlsx = ["dep:calamine"]
+serde = ["dep:serde"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

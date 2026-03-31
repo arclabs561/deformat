@@ -60,6 +60,7 @@ pub use error::Error;
 
 /// Which extraction strategy produced an [`Extracted`] result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Extractor {
     /// Fast tag stripping (always available).
@@ -88,6 +89,7 @@ impl std::fmt::Display for Extractor {
 
 /// Extracted text with metadata about the source document.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct Extracted {
     /// The extracted plain text content.
