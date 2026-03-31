@@ -584,7 +584,7 @@ fn path_realistic_article() {
         </article>
     </body></html>"#;
 
-    let (text, spans) = strip_to_text_with_paths(html);
+    let (_text, spans) = strip_to_text_with_paths(html);
 
     // Check that spans with h1 path exist
     let h1_spans: Vec<_> = spans.iter().filter(|s| s.path.contains("h1")).collect();
