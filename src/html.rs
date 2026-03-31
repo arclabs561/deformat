@@ -164,6 +164,390 @@ pub fn strip_to_text_with_spans(html: &str) -> (String, SpanMap) {
     (text, SpanMap { spans })
 }
 
+/// A text span annotated with its structural path in the HTML document.
+///
+/// The `path` field contains an XPath-like string showing the element
+/// nesting, e.g. `html/body/article/p[2]`. Sibling indices are 1-based.
+///
+/// # Examples
+///
+/// ```
+/// let (text, path_spans) = deformat::html::strip_to_text_with_paths(
+///     "<article><h1>Title</h1><p>Content here.</p></article>"
+/// );
+/// assert!(text.contains("Content"));
+/// let content_span = path_spans.iter().find(|s| {
+///     text[s.output_start..s.output_end].contains("Content")
+/// });
+/// assert!(content_span.is_some());
+/// let path = &content_span.unwrap().path;
+/// assert!(path.contains("article"), "path: {path}");
+/// assert!(path.contains("p"), "path has p: {path}");
+/// ```
+#[derive(Debug, Clone)]
+pub struct PathSpan {
+    /// Start byte offset in the output text.
+    pub output_start: usize,
+    /// End byte offset in the output text.
+    pub output_end: usize,
+    /// Start byte offset in the source HTML.
+    pub source_start: usize,
+    /// End byte offset in the source HTML.
+    pub source_end: usize,
+    /// XPath-like element path, e.g. `html/body/article/p[2]`.
+    pub path: String,
+}
+
+/// Strip HTML and return text with structural path annotations.
+///
+/// Like [`strip_to_text_with_spans`], but each span also carries the
+/// XPath-like path showing which HTML element the text came from.
+pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
+    let bytes = html.as_bytes();
+    let len = bytes.len();
+
+    if memchr::memchr(b'<', bytes).is_none() {
+        return (
+            cleanup_whitespace(&decode_entities_in_str(html)).into_owned(),
+            Vec::new(),
+        );
+    }
+
+    let mut pos = 0;
+    let mut text = String::with_capacity(html.len() / 2);
+    let mut in_script = false;
+    let mut in_style = false;
+    let mut skip_depth: u32 = 0;
+    let mut wiki_skip_depth: u32 = 0;
+    let mut path_spans: Vec<PathSpan> = Vec::new();
+
+    // Element path stack: (tag_name, sibling_counts_map)
+    // sibling_counts tracks how many of each tag name we've seen at this level
+    let mut path_stack: Vec<(String, std::collections::HashMap<String, u32>)> = Vec::new();
+
+    while pos < len {
+        let skipping = in_script || in_style || skip_depth > 0;
+
+        let next = if skipping {
+            memchr::memchr(b'<', &bytes[pos..]).map(|o| pos + o)
+        } else {
+            memchr::memchr2(b'<', b'&', &bytes[pos..]).map(|o| pos + o)
+        };
+
+        match next {
+            None => {
+                if !skipping {
+                    let out_start = text.len();
+                    text.push_str(&html[pos..]);
+                    if text.len() > out_start {
+                        path_spans.push(PathSpan {
+                            output_start: out_start,
+                            output_end: text.len(),
+                            source_start: pos,
+                            source_end: len,
+                            path: build_path(&path_stack),
+                        });
+                    }
+                }
+                break;
+            }
+            Some(marker_pos) => {
+                if !skipping && marker_pos > pos {
+                    let out_start = text.len();
+                    text.push_str(&html[pos..marker_pos]);
+                    if text.len() > out_start {
+                        path_spans.push(PathSpan {
+                            output_start: out_start,
+                            output_end: text.len(),
+                            source_start: pos,
+                            source_end: marker_pos,
+                            path: build_path(&path_stack),
+                        });
+                    }
+                }
+                pos = marker_pos;
+            }
+        }
+
+        match bytes[pos] {
+            b'<' => {
+                pos += 1;
+                if pos >= len {
+                    break;
+                }
+
+                // Script/style fast path
+                if in_script {
+                    if pos + 7 <= len && bytes[pos..pos + 7].eq_ignore_ascii_case(b"/script") {
+                        let mut end = pos + 7;
+                        while end < len && bytes[end].is_ascii_whitespace() {
+                            end += 1;
+                        }
+                        if end < len && bytes[end] == b'>' {
+                            in_script = false;
+                            pos = end + 1;
+                            continue;
+                        }
+                    }
+                    continue;
+                }
+                if in_style {
+                    if pos + 6 <= len && bytes[pos..pos + 6].eq_ignore_ascii_case(b"/style") {
+                        let mut end = pos + 6;
+                        while end < len && bytes[end].is_ascii_whitespace() {
+                            end += 1;
+                        }
+                        if end < len && bytes[end] == b'>' {
+                            in_style = false;
+                            pos = end + 1;
+                            continue;
+                        }
+                    }
+                    continue;
+                }
+
+                // Comment
+                if bytes[pos] == b'!' {
+                    if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
+                        pos += 3;
+                        let mut dashes = 0u32;
+                        while pos < len {
+                            match bytes[pos] {
+                                b'-' => dashes += 1,
+                                b'>' if dashes >= 2 => {
+                                    pos += 1;
+                                    break;
+                                }
+                                _ => dashes = 0,
+                            }
+                            pos += 1;
+                        }
+                        continue;
+                    }
+                    if let Some(o) = memchr::memchr(b'>', &bytes[pos..]) {
+                        pos += o + 1;
+                    } else {
+                        pos = len;
+                    }
+                    continue;
+                }
+
+                // Parse tag
+                let tag_start = pos;
+                let mut tag_name_end = pos;
+                let mut in_tag_name = true;
+                let mut in_attr_quote: Option<u8> = None;
+
+                while pos < len {
+                    let b = bytes[pos];
+                    if let Some(q) = in_attr_quote {
+                        if b == q {
+                            in_attr_quote = None;
+                        }
+                        pos += 1;
+                        continue;
+                    }
+                    if b == b'>' {
+                        pos += 1;
+                        break;
+                    }
+                    if in_tag_name && b.is_ascii_whitespace() {
+                        tag_name_end = pos;
+                        in_tag_name = false;
+                    }
+                    if !in_tag_name && (b == b'"' || b == b'\'') {
+                        in_attr_quote = Some(b);
+                    }
+                    pos += 1;
+                }
+
+                if in_tag_name {
+                    tag_name_end = if pos > 0 && pos <= len && bytes[pos - 1] == b'>' {
+                        pos - 1
+                    } else {
+                        pos
+                    };
+                }
+
+                let tag_name_raw = &html[tag_start..tag_name_end];
+                let tag_lower = tag_name_raw.to_ascii_lowercase();
+
+                // Script/style toggle
+                if tag_lower == "script" {
+                    in_script = true;
+                } else if tag_lower == "style" {
+                    in_style = true;
+                }
+
+                // Wiki-skip detection
+                let tag_content_end = if pos > 0 && bytes[pos - 1] == b'>' {
+                    pos - 1
+                } else {
+                    pos
+                };
+                if matches!(
+                    tag_lower.as_str(),
+                    "div" | "ol" | "ul" | "table" | "span" | "section"
+                ) {
+                    if wiki_skip_depth > 0 {
+                        wiki_skip_depth += 1;
+                        skip_depth += 1;
+                    } else if tag_content_end > tag_name_end {
+                        let tag_buf_start = tag_start.saturating_sub(1);
+                        let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                        if is_wiki_skip_tag(tag_buffer) {
+                            wiki_skip_depth += 1;
+                            skip_depth += 1;
+                        }
+                    }
+                }
+
+                let is_close = tag_lower.starts_with('/');
+                let close_name = if is_close { &tag_lower[1..] } else { "" };
+
+                if wiki_skip_depth > 0
+                    && is_close
+                    && matches!(
+                        close_name,
+                        "div" | "ol" | "ul" | "table" | "span" | "section"
+                    )
+                {
+                    wiki_skip_depth = wiki_skip_depth.saturating_sub(1);
+                    skip_depth = skip_depth.saturating_sub(1);
+                }
+
+                if is_close {
+                    if is_skip_tag(close_name) {
+                        skip_depth = skip_depth.saturating_sub(1);
+                    }
+                } else if is_skip_tag(&tag_lower) {
+                    skip_depth += 1;
+                }
+
+                // Path stack tracking -- only track non-skip, non-script/style elements
+                let effective = tag_lower
+                    .strip_prefix('/')
+                    .unwrap_or(&tag_lower)
+                    .strip_suffix('/')
+                    .unwrap_or(&tag_lower);
+                let is_trackable = !effective.is_empty()
+                    && effective.bytes().all(|b| b.is_ascii_alphanumeric())
+                    && !is_skip_tag(effective)
+                    && effective != "script"
+                    && effective != "style";
+                if is_trackable {
+                    if is_close {
+                        if let Some(idx) =
+                            path_stack.iter().rposition(|(name, _)| name == effective)
+                        {
+                            path_stack.truncate(idx);
+                        }
+                    } else if !tag_lower.ends_with('/') {
+                        if let Some(parent) = path_stack.last_mut() {
+                            let count = parent.1.entry(effective.to_string()).or_insert(0);
+                            *count += 1;
+                        }
+                        path_stack.push((effective.to_string(), std::collections::HashMap::new()));
+                    }
+                }
+
+                // Block boundary newline
+                let eff = effective;
+                if !in_script
+                    && !in_style
+                    && skip_depth == 0
+                    && is_block_tag(eff)
+                    && !text.is_empty()
+                    && !text.ends_with('\n')
+                {
+                    text.push('\n');
+                }
+
+                // Img alt text
+                if !in_script && !in_style && skip_depth == 0 && tag_lower == "img" {
+                    let tag_buf_start = tag_start.saturating_sub(1);
+                    let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                    if let Some(alt) = extract_attr_value(tag_buffer, "alt") {
+                        if !alt.is_empty() {
+                            let decoded = decode_entities_in_str(alt);
+                            if !text.ends_with(' ') && !text.is_empty() {
+                                text.push(' ');
+                            }
+                            let out_start = text.len();
+                            text.push_str(&decoded);
+                            path_spans.push(PathSpan {
+                                output_start: out_start,
+                                output_end: text.len(),
+                                source_start: tag_buf_start,
+                                source_end: pos.min(len),
+                                path: build_path(&path_stack),
+                            });
+                            text.push(' ');
+                        }
+                    }
+                }
+            }
+            b'&' => {
+                let entity_start = pos;
+                let out_start = text.len();
+                pos = decode_entity_bytes(html, bytes, pos, &mut text);
+                if text.len() > out_start {
+                    path_spans.push(PathSpan {
+                        output_start: out_start,
+                        output_end: text.len(),
+                        source_start: entity_start,
+                        source_end: pos,
+                        path: build_path(&path_stack),
+                    });
+                }
+            }
+            _ => {
+                pos += 1;
+            }
+        }
+    }
+
+    // Adjust for trim
+    let trimmed = text.trim_start();
+    let trim_offset = text.len() - trimmed.len();
+    if trim_offset > 0 {
+        for span in &mut path_spans {
+            span.output_start = span.output_start.saturating_sub(trim_offset);
+            span.output_end = span.output_end.saturating_sub(trim_offset);
+        }
+        path_spans.retain(|s| s.output_start < s.output_end);
+    }
+
+    (text.trim().to_string(), path_spans)
+}
+
+/// Build an XPath-like path string from the element stack.
+fn build_path(stack: &[(String, std::collections::HashMap<String, u32>)]) -> String {
+    if stack.is_empty() {
+        return String::new();
+    }
+    let mut path = String::new();
+    for (i, (name, _)) in stack.iter().enumerate() {
+        if i > 0 {
+            path.push('/');
+        }
+        path.push_str(name);
+        // Add sibling index if parent tracked siblings
+        if i > 0 {
+            if let Some(parent) = stack.get(i - 1) {
+                if let Some(&count) = parent.1.get(name) {
+                    if count > 1 || parent.1.values().any(|&v| v > 1) {
+                        path.push('[');
+                        path.push_str(&count.to_string());
+                        path.push(']');
+                    }
+                }
+            }
+        }
+    }
+    path
+}
+
 /// Convert HTML to Markdown, preserving document structure.
 ///
 /// Retains headings, bold/italic, links, code blocks, lists, and images
