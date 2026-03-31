@@ -77,7 +77,7 @@ let result = deformat::pdf::extract_bytes(&pdf_bytes)?;
 ## HTML tag stripping details
 
 `html::strip_to_text` handles: tag removal, script/style/noscript content removal,
-semantic element filtering (`<nav>`, `<header>`, `<footer>`, `<aside>`, `<form>`,
+semantic element filtering (`<nav>`, `<header>`, `<footer>`, `<aside>`,
 etc.), ~300 named HTML entities (Latin, Greek, math, typography), numeric/hex character
 references, Windows-1252 C1 range mapping, CJK ruby annotation stripping, Wikipedia
 boilerplate removal, reference marker stripping (`[1]`, `[edit]`), image alt text

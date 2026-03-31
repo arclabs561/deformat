@@ -43,8 +43,8 @@ impl StripOptions {
 /// This is the core built-in extractor. It handles:
 /// - Tag removal (all HTML tags stripped)
 /// - Script, style, and noscript content removal
-/// - Semantic element filtering: skips `<nav>`, `<header>`, `<footer>`,
-///   `<aside>`, `<head>`, `<menu>`, `<form>`, `<select>`, `<figcaption>`
+/// - Semantic element filtering: skips `<nav>`, `<footer>`, `<aside>`,
+///   `<head>`, `<menu>`, `<select>`, `<figcaption>`
 /// - Wikipedia/MediaWiki boilerplate removal (TOC, references, navboxes)
 /// - HTML entity decoding (`&amp;`, `&#123;`, `&#x1F;`, etc.)
 /// - Whitespace collapsing (HTML rendering semantics)
@@ -1222,17 +1222,27 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
         "printfooter",
     ];
     // Check class and id attribute values.
-    // Fast path: try matching as-is first (values are almost always lowercase).
-    // Only allocate a lowercase copy when the value contains uppercase chars.
+    // Match against space-delimited tokens in class values (word-boundary matching)
+    // to avoid false positives like "l-sidebar-fixed" matching "sidebar".
+    // For id values, use contains() since ids are single values.
     for attr in &["class", "id"] {
         if let Some(val) = extract_attr_value(tag_buffer, attr) {
-            if WIKI_SKIP_IDS.iter().any(|id| val.contains(id)) {
-                return true;
-            }
-            if val.bytes().any(|b| b.is_ascii_uppercase()) {
-                let val_lower = val.to_ascii_lowercase();
-                if WIKI_SKIP_IDS.iter().any(|id| val_lower.contains(id)) {
+            let check_val = if val.bytes().any(|b| b.is_ascii_uppercase()) {
+                val.to_ascii_lowercase()
+            } else {
+                val.to_string()
+            };
+            if *attr == "id" {
+                // ID is a single value -- substring match is appropriate
+                if WIKI_SKIP_IDS.iter().any(|id| check_val.contains(id)) {
                     return true;
+                }
+            } else {
+                // Class is space-separated tokens -- match whole tokens
+                for token in check_val.split_whitespace() {
+                    if WIKI_SKIP_IDS.iter().any(|id| token == *id) {
+                        return true;
+                    }
                 }
             }
         }
@@ -1243,16 +1253,20 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
 /// Returns true if the tag name is a semantic skip element whose content
 /// should be excluded from text output.
 fn is_skip_tag(tag: &str) -> bool {
+    // Note: <form> and <header> are intentionally NOT skip tags.
+    // - <form>: many CMS frameworks (ASP.NET, Al Jazeera) wrap the entire
+    //   page in a <form> for AJAX.
+    // - <header>: HTML5 allows <header> inside <article> for article
+    //   headings (title, byline). Page-level headers typically contain
+    //   <nav> which IS a skip tag, so nav content is still stripped.
     matches!(
         tag,
         "head"
             | "nav"
-            | "header"
             | "footer"
             | "aside"
             | "menu"
             | "noscript"
-            | "form"
             | "select"
             | "figcaption"
             | "template"
@@ -2101,14 +2115,17 @@ mod tests {
     }
 
     #[test]
-    fn header_stripped() {
+    fn header_not_stripped() {
+        // <header> is NOT a skip tag because HTML5 allows <header> inside
+        // <article> for article headings. Page-level headers typically
+        // contain <nav> which IS a skip tag.
         let html = r#"<html><body>
             <header><h1>Site</h1></header>
             <main><p>Page.</p></main>
         </body></html>"#;
         let text = strip_to_text(html);
         assert!(text.contains("Page"));
-        assert!(!text.contains("Site"));
+        assert!(text.contains("Site"), "header content preserved: {text}");
     }
 
     #[test]
