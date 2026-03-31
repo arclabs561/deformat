@@ -138,6 +138,19 @@ pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
                 fallback: false,
             })
         }
+        // XML: strip tags just like HTML
+        Format::Xml => {
+            let text = html::strip_to_text(content);
+            Ok(Extracted {
+                text,
+                format,
+                extractor: Extractor::Strip,
+                title: None,
+                excerpt: None,
+                fallback: false,
+            })
+        }
+        // Text-like formats pass through unchanged
         Format::PlainText | Format::Markdown | Format::Unknown => Ok(Extracted {
             text: content.to_string(),
             format,
@@ -146,8 +159,9 @@ pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
             excerpt: None,
             fallback: false,
         }),
-        Format::Pdf => Err(Error::UnsupportedFormat(
-            "PDF cannot be extracted from a string; use deformat::pdf::extract_file() or extract_bytes()".into(),
+        // Binary formats cannot be extracted from a string
+        Format::Pdf | Format::Rtf | Format::Docx | Format::Epub => Err(Error::UnsupportedFormat(
+            format!("{format} cannot be extracted from a string; use binary extraction methods"),
         )),
     }
 }
