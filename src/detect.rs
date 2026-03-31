@@ -25,6 +25,8 @@ pub enum Format {
     Docx,
     /// EPUB (electronic publication).
     Epub,
+    /// XLSX/XLS/ODS spreadsheet.
+    Xlsx,
     /// Format could not be determined.
     Unknown,
 }
@@ -44,6 +46,7 @@ impl Format {
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             }
             Format::Epub => "application/epub+zip",
+            Format::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             Format::Unknown => "application/octet-stream",
         }
     }
@@ -60,6 +63,7 @@ impl std::fmt::Display for Format {
             Format::Rtf => write!(f, "RTF"),
             Format::Docx => write!(f, "DOCX"),
             Format::Epub => write!(f, "EPUB"),
+            Format::Xlsx => write!(f, "XLSX"),
             Format::Unknown => write!(f, "unknown"),
         }
     }
@@ -148,6 +152,7 @@ pub fn detect_path(path: impl AsRef<Path>) -> Format {
         Some("rtf") => Format::Rtf,
         Some("docx") => Format::Docx,
         Some("epub") => Format::Epub,
+        Some("xlsx" | "xls" | "xlsb" | "xlsm" | "ods") => Format::Xlsx,
         Some("txt" | "text" | "log" | "csv" | "tsv" | "json" | "jsonl") => Format::PlainText,
         _ => Format::Unknown,
     }
@@ -182,6 +187,9 @@ pub fn detect_mime(mime: &str) -> Format {
         "application/rtf" | "text/rtf" => Format::Rtf,
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Format::Docx,
         "application/epub+zip" => Format::Epub,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        | "application/vnd.ms-excel"
+        | "application/vnd.oasis.opendocument.spreadsheet" => Format::Xlsx,
         "text/plain"
         | "text/csv"
         | "text/tab-separated-values"

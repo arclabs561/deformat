@@ -34,6 +34,7 @@
 //! | `docx` | `zip` | DOCX text extraction from file paths or bytes |
 //! | `epub` | `zip` | EPUB text extraction with reading-order chapters |
 //! | `rtf` | `rtf-parser-tt` | RTF text extraction |
+//! | `xlsx` | `calamine` | XLSX/XLS/ODS spreadsheet text extraction |
 
 pub mod detect;
 pub mod error;
@@ -50,6 +51,9 @@ pub mod epub;
 
 #[cfg(feature = "rtf")]
 pub mod rtf;
+
+#[cfg(feature = "xlsx")]
+pub mod xlsx;
 
 pub use detect::Format;
 pub use error::Error;
@@ -172,9 +176,11 @@ pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
             fallback: false,
         }),
         // Binary formats cannot be extracted from a string
-        Format::Pdf | Format::Rtf | Format::Docx | Format::Epub => Err(Error::UnsupportedFormat(
-            format!("{format} cannot be extracted from a string; use binary extraction methods"),
-        )),
+        Format::Pdf | Format::Rtf | Format::Docx | Format::Epub | Format::Xlsx => {
+            Err(Error::UnsupportedFormat(format!(
+                "{format} cannot be extracted from a string; use binary extraction methods"
+            )))
+        }
     }
 }
 
