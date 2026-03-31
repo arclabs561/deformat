@@ -272,7 +272,7 @@ fn img_alt_text_traces_to_img_tag() {
 fn span_map_len_and_is_empty() {
     let (_, spans) = strip_to_text_with_spans("<p>text</p>");
     assert!(!spans.is_empty());
-    assert!(spans.len() > 0);
+    assert!(!spans.is_empty());
 
     let (_, empty_spans) = strip_to_text_with_spans("");
     assert!(empty_spans.is_empty());
@@ -339,7 +339,7 @@ fn empty_html() {
 #[test]
 fn no_tags_plain_text() {
     let html = "Just plain text.";
-    let (text, spans) = strip_to_text_with_spans(html);
+    let (text, _spans) = strip_to_text_with_spans(html);
     // Plain text without tags goes through the fast path (no '<')
     // This path doesn't track spans (it goes through decode_entities_in_str + cleanup_whitespace)
     // Document the behavior: fast path produces empty spans
