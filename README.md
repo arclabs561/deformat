@@ -17,6 +17,7 @@ Extract plain text from HTML, PDF, and other document formats.
 | DOCX | `&Path` or `&[u8]` | `docx` | `docx::extract_file`, `docx::extract_bytes` |
 | EPUB | `&Path` or `&[u8]` | `epub` | `epub::extract_file`, `epub::extract_bytes` |
 | RTF | `&Path` or `&[u8]` | `rtf` | `rtf::extract_file`, `rtf::extract_bytes` |
+| XLSX/XLS/ODS | `&Path` or `&[u8]` | `xlsx` | `xlsx::extract_file`, `xlsx::extract_bytes` |
 | XML | `&str` | *(none)* | `html::strip_to_text` (tag strip) |
 | Plain text / Markdown | `&str` | *(none)* | passthrough |
 

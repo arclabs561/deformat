@@ -248,6 +248,7 @@ fn format_display_all_variants() {
         (deformat::Format::Rtf, "RTF"),
         (deformat::Format::Docx, "DOCX"),
         (deformat::Format::Epub, "EPUB"),
+        (deformat::Format::Xlsx, "XLSX"),
         (deformat::Format::Unknown, "unknown"),
     ];
     for (fmt, expected) in &formats {
