@@ -10,6 +10,8 @@ pub enum Error {
     UnsupportedFormat(String),
     /// An I/O error occurred (e.g., reading a PDF file).
     Io(std::io::Error),
+    /// PDF parsing or extraction failed.
+    PdfExtract(String),
     /// The extraction produced no usable text.
     EmptyResult,
 }
@@ -21,6 +23,7 @@ impl fmt::Display for Error {
                 write!(f, "unsupported format: {fmt_name}")
             }
             Error::Io(e) => write!(f, "I/O error: {e}"),
+            Error::PdfExtract(msg) => write!(f, "PDF extraction failed: {msg}"),
             Error::EmptyResult => write!(f, "extraction produced no text"),
         }
     }

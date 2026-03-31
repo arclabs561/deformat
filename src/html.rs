@@ -248,11 +248,16 @@ fn strip_impl(html: &str, options: &StripOptions) -> String {
                     for (i, &b) in bytes[tag_start..tag_name_end].iter().enumerate() {
                         tag_buf[i] = b.to_ascii_lowercase();
                     }
-                    // SAFETY: input is ASCII (HTML tag names), lowercase is ASCII
-                    std::str::from_utf8(&tag_buf[..tag_name_len]).unwrap()
+                    // Input is &str (valid UTF-8) and to_ascii_lowercase preserves
+                    // UTF-8 validity, so from_utf8 cannot fail. Fall back to heap
+                    // defensively rather than panicking.
+                    if let Ok(s) = std::str::from_utf8(&tag_buf[..tag_name_len]) {
+                        s
+                    } else {
+                        heap_lower = tag_name_raw.to_ascii_lowercase();
+                        &heap_lower
+                    }
                 } else {
-                    // Heap fallback for absurdly long tag names.
-                    // In practice, HTML tag names are <20 bytes.
                     heap_lower = tag_name_raw.to_ascii_lowercase();
                     &heap_lower
                 };
@@ -431,7 +436,6 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
             if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
                 let mut has_newline = b == b'\n';
                 // Scan ahead to collapse the full whitespace run
-                let ws_start = i;
                 i += 1;
                 while i < text_len {
                     let b2 = text_bytes[i];
@@ -442,7 +446,6 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
                     }
                     i += 1;
                 }
-                let _ = ws_start; // consumed
                 cleaned.push(if has_newline { '\n' } else { ' ' });
                 last_was_space = true;
                 continue;
@@ -456,7 +459,9 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
                 continue;
             }
             // Decode the UTF-8 character
-            let ch = text[i..].chars().next().unwrap();
+            let Some(ch) = text[i..].chars().next() else {
+                break;
+            };
             let ch_len = ch.len_utf8();
             if is_invisible_char(ch) {
                 // skip

@@ -10,15 +10,10 @@ use std::path::Path;
 ///
 /// # Errors
 ///
-/// Returns [`Error::Io`] if the file cannot be read, or
+/// Returns [`Error::PdfExtract`] if the file cannot be read or parsed, or
 /// [`Error::EmptyResult`] if extraction produces no text.
 pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
-    let text = pdf_extract::extract_text(path).map_err(|e| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("PDF extraction failed: {e}"),
-        ))
-    })?;
+    let text = pdf_extract::extract_text(path).map_err(|e| Error::PdfExtract(e.to_string()))?;
 
     if text.trim().is_empty() {
         return Err(Error::EmptyResult);
@@ -27,7 +22,7 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
     Ok(Extracted {
         text,
         format: Format::Pdf,
-        extractor: "pdf-extract".into(),
+        extractor: crate::Extractor::PdfExtract,
         title: None,
         excerpt: None,
         fallback: false,
@@ -38,15 +33,11 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Io`] if parsing fails, or [`Error::EmptyResult`]
+/// Returns [`Error::PdfExtract`] if parsing fails, or [`Error::EmptyResult`]
 /// if extraction produces no text.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
-    let text = pdf_extract::extract_text_from_mem(bytes).map_err(|e| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("PDF extraction failed: {e}"),
-        ))
-    })?;
+    let text =
+        pdf_extract::extract_text_from_mem(bytes).map_err(|e| Error::PdfExtract(e.to_string()))?;
 
     if text.trim().is_empty() {
         return Err(Error::EmptyResult);
@@ -55,7 +46,7 @@ pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
     Ok(Extracted {
         text,
         format: Format::Pdf,
-        extractor: "pdf-extract".into(),
+        extractor: crate::Extractor::PdfExtract,
         title: None,
         excerpt: None,
         fallback: false,

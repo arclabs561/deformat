@@ -3,7 +3,7 @@
 //! These test cross-module interactions and realistic content scenarios
 //! that go beyond individual unit tests.
 
-use deformat::{extract, extract_as, Error, Format};
+use deformat::{extract, extract_as, Error, Extractor, Format};
 
 // =============================================================================
 // Extract + detect consistency
@@ -751,7 +751,7 @@ fn aria_class_does_not_hide_content() {
 #[test]
 fn extracted_fields_accessible() {
     let result = extract("<p>Hello</p>").unwrap();
-    assert_eq!(result.extractor, "strip");
+    assert_eq!(result.extractor, Extractor::Strip);
     assert_eq!(result.format, Format::Html);
     assert!(result.title.is_none());
     assert!(result.excerpt.is_none());
@@ -761,7 +761,7 @@ fn extracted_fields_accessible() {
 #[test]
 fn extracted_passthrough_fields() {
     let result = extract("plain text").unwrap();
-    assert_eq!(result.extractor, "passthrough");
+    assert_eq!(result.extractor, Extractor::Passthrough);
     assert_eq!(result.format, Format::PlainText);
     assert!(!result.fallback);
 }
