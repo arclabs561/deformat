@@ -1084,6 +1084,228 @@ fn cleanup_whitespace_markdown(text: &str) -> String {
     result
 }
 
+// ---------------------------------------------------------------------------
+// Metadata extraction
+// ---------------------------------------------------------------------------
+
+/// Metadata extracted from an HTML document's `<head>` section.
+///
+/// All fields are `None` if not found. Extraction is heuristic: it scans
+/// `<meta>`, `<title>`, `<link>`, and `<html>` tags for standard attributes
+/// including OpenGraph (`og:`), Dublin Core (`dc:`), and plain HTML meta names.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct HtmlMetadata {
+    /// Title from `<title>` or `<meta property="og:title">`.
+    pub title: Option<String>,
+    /// Author from `<meta name="author">` or `<meta property="article:author">`.
+    pub author: Option<String>,
+    /// Description from `<meta name="description">` or `<meta property="og:description">`.
+    pub description: Option<String>,
+    /// Publication date from `<meta property="article:published_time">`,
+    /// `<meta name="date">`, or `<time datetime="...">`.
+    pub date_published: Option<String>,
+    /// Language from `<html lang="...">` or `<meta http-equiv="content-language">`.
+    pub language: Option<String>,
+    /// Canonical URL from `<link rel="canonical" href="...">` or `<meta property="og:url">`.
+    pub canonical_url: Option<String>,
+}
+
+/// Extract metadata from an HTML document's `<head>` section.
+///
+/// Scans `<meta>`, `<title>`, `<link>`, and `<html>` tags. Reads up to
+/// `</head>` or `<body` to avoid processing article body content.
+///
+/// # Examples
+///
+/// ```
+/// let html = r#"<html lang="en">
+/// <head>
+///   <title>My Article</title>
+///   <meta name="author" content="Jane Doe">
+///   <meta property="og:description" content="A great read.">
+/// </head>
+/// <body><p>Content.</p></body></html>"#;
+///
+/// let meta = deformat::html::extract_metadata(html);
+/// assert_eq!(meta.title.as_deref(), Some("My Article"));
+/// assert_eq!(meta.author.as_deref(), Some("Jane Doe"));
+/// assert_eq!(meta.description.as_deref(), Some("A great read."));
+/// assert_eq!(meta.language.as_deref(), Some("en"));
+/// ```
+pub fn extract_metadata(html: &str) -> HtmlMetadata {
+    let mut meta = HtmlMetadata::default();
+    let bytes = html.as_bytes();
+
+    // Only scan up to </head> or <body to avoid article body content.
+    let head_end = {
+        let h = html.to_ascii_lowercase();
+        let e1 = h.find("</head").unwrap_or(usize::MAX);
+        let e2 = h.find("<body").unwrap_or(usize::MAX);
+        e1.min(e2).min(html.len())
+    };
+    // For <html lang> and <title> text we may need to look slightly before/after
+    // the head boundary, but everything important is in head. Clamp at head_end
+    // for meta/link, but allow a small window for <html> tag (always before head).
+    let head = &html[..head_end];
+
+    // --- <html lang="..."> ---
+    if meta.language.is_none() {
+        if let Some(pos) = find_icase(head, "<html") {
+            let tag_end = head[pos..].find('>').unwrap_or(head.len() - pos) + pos;
+            let tag = &head[pos..tag_end];
+            if let Some(v) = extract_attr_value(tag, "lang").or_else(|| extract_attr_value(tag, "xml:lang")) {
+                if !v.is_empty() {
+                    meta.language = Some(v.to_string());
+                }
+            }
+        }
+    }
+
+    // --- <title>...</title> ---
+    if meta.title.is_none() {
+        if let Some(pos) = find_icase(head, "<title") {
+            if let Some(start) = head[pos..].find('>') {
+                let text_start = pos + start + 1;
+                if let Some(end) = find_icase(&head[text_start..], "</title") {
+                    let raw = &head[text_start..text_start + end];
+                    let t = decode_entities(raw.trim());
+                    if !t.is_empty() {
+                        meta.title = Some(t);
+                    }
+                }
+            }
+        }
+    }
+
+    // --- scan <meta> and <link> tags ---
+    let mut pos = 0;
+    while pos < head.len() {
+        // Find next '<'
+        let Some(lt) = memchr::memchr(b'<', &bytes[pos..head_end]) else {
+            break;
+        };
+        let tag_start = pos + lt;
+        // Find closing '>'
+        let Some(gt_rel) = memchr::memchr(b'>', &bytes[tag_start..head_end]) else {
+            break;
+        };
+        let tag_end = tag_start + gt_rel;
+        let tag = &html[tag_start..tag_end];
+        pos = tag_end + 1;
+
+        let tag_lower_prefix = tag
+            .get(1..6)
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+
+        if tag_lower_prefix.starts_with("meta") {
+            let name = extract_attr_value(tag, "name").unwrap_or("");
+            let property = extract_attr_value(tag, "property").unwrap_or("");
+            let http_equiv = extract_attr_value(tag, "http-equiv").unwrap_or("");
+            let content = extract_attr_value(tag, "content").unwrap_or("");
+
+            if content.is_empty() {
+                continue;
+            }
+
+            // title
+            if meta.title.is_none() && eq_icase(property, "og:title") {
+                meta.title = Some(decode_entities(content));
+            }
+            // author
+            if meta.author.is_none()
+                && (eq_icase(name, "author")
+                    || eq_icase(property, "article:author")
+                    || eq_icase(name, "dc.creator")
+                    || eq_icase(name, "dcterms.creator"))
+            {
+                meta.author = Some(decode_entities(content));
+            }
+            // description
+            if meta.description.is_none()
+                && (eq_icase(name, "description")
+                    || eq_icase(property, "og:description")
+                    || eq_icase(name, "twitter:description"))
+            {
+                meta.description = Some(decode_entities(content));
+            }
+            // date_published
+            if meta.date_published.is_none()
+                && (eq_icase(property, "article:published_time")
+                    || eq_icase(name, "date")
+                    || eq_icase(name, "dc.date")
+                    || eq_icase(name, "dcterms.created")
+                    || eq_icase(name, "pubdate"))
+            {
+                meta.date_published = Some(content.to_string());
+            }
+            // canonical_url
+            if meta.canonical_url.is_none() && eq_icase(property, "og:url") {
+                meta.canonical_url = Some(content.to_string());
+            }
+            // language
+            if meta.language.is_none()
+                && (eq_icase(http_equiv, "content-language")
+                    || eq_icase(name, "language")
+                    || eq_icase(property, "og:locale"))
+            {
+                // og:locale uses underscores (en_US); normalize to BCP-47 (en-US)
+                meta.language = Some(content.replace('_', "-"));
+            }
+        } else if tag_lower_prefix.starts_with("link") {
+            let rel = extract_attr_value(tag, "rel").unwrap_or("");
+            if eq_icase(rel, "canonical") {
+                if let Some(href) = extract_attr_value(tag, "href") {
+                    if meta.canonical_url.is_none() && !href.is_empty() {
+                        meta.canonical_url = Some(href.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // --- <time datetime="..."> fallback for date ---
+    if meta.date_published.is_none() {
+        if let Some(pos) = find_icase(head, "<time") {
+            let tag_end = head[pos..].find('>').unwrap_or(head.len() - pos) + pos;
+            let tag = &head[pos..tag_end];
+            if let Some(dt) = extract_attr_value(tag, "datetime") {
+                if !dt.is_empty() {
+                    meta.date_published = Some(dt.to_string());
+                }
+            }
+        }
+    }
+
+    meta
+}
+
+/// Find a substring case-insensitively, returning the byte offset.
+fn find_icase(haystack: &str, needle: &str) -> Option<usize> {
+    let nl = needle.to_ascii_lowercase();
+    let mut i = 0;
+    let hb = haystack.as_bytes();
+    let nb = nl.as_bytes();
+    while i + nb.len() <= hb.len() {
+        if hb[i..i + nb.len()]
+            .iter()
+            .zip(nb.iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == *b)
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Compare two strings case-insensitively (ASCII).
+fn eq_icase(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+}
+
+
 /// Try readability extraction. Returns `Some((text, title, excerpt))` on
 /// success, `None` if parsing fails or the extracted text is trivial (< 50 chars).
 ///

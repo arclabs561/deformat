@@ -765,3 +765,166 @@ fn extracted_passthrough_fields() {
     assert_eq!(result.format, Format::PlainText);
     assert!(!result.fallback);
 }
+
+// =============================================================================
+// extract_metadata
+// =============================================================================
+
+#[test]
+fn metadata_html_lang_and_title() {
+    let html = r#"<html lang="en"><head><title>My Page</title></head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.language.as_deref(), Some("en"));
+    assert_eq!(m.title.as_deref(), Some("My Page"));
+}
+
+#[test]
+fn metadata_og_title_overrides_title_tag() {
+    // og:title should fill title when <title> is absent
+    let html = r#"<html><head>
+        <meta property="og:title" content="OG Title">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.title.as_deref(), Some("OG Title"));
+}
+
+#[test]
+fn metadata_title_tag_wins_over_og() {
+    // <title> is found first; og:title does not overwrite it
+    let html = r#"<html><head>
+        <title>Real Title</title>
+        <meta property="og:title" content="OG Title">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.title.as_deref(), Some("Real Title"));
+}
+
+#[test]
+fn metadata_author_from_meta_name() {
+    let html = r#"<html><head>
+        <meta name="author" content="Jane Doe">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.author.as_deref(), Some("Jane Doe"));
+}
+
+#[test]
+fn metadata_author_from_article_author() {
+    let html = r#"<html><head>
+        <meta property="article:author" content="John Smith">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.author.as_deref(), Some("John Smith"));
+}
+
+#[test]
+fn metadata_description_plain_and_og() {
+    let html = r#"<html><head>
+        <meta name="description" content="Plain desc">
+        <meta property="og:description" content="OG desc">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    // plain name="description" comes first in the scan
+    assert_eq!(m.description.as_deref(), Some("Plain desc"));
+}
+
+#[test]
+fn metadata_description_og_when_no_plain() {
+    let html = r#"<html><head>
+        <meta property="og:description" content="OG desc">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.description.as_deref(), Some("OG desc"));
+}
+
+#[test]
+fn metadata_date_from_article_published_time() {
+    let html = r#"<html><head>
+        <meta property="article:published_time" content="2024-03-15T10:00:00Z">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.date_published.as_deref(), Some("2024-03-15T10:00:00Z"));
+}
+
+#[test]
+fn metadata_date_from_meta_name_date() {
+    let html = r#"<html><head>
+        <meta name="date" content="2024-01-01">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.date_published.as_deref(), Some("2024-01-01"));
+}
+
+#[test]
+fn metadata_canonical_from_link_rel() {
+    let html = r#"<html><head>
+        <link rel="canonical" href="https://example.com/article">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.canonical_url.as_deref(), Some("https://example.com/article"));
+}
+
+#[test]
+fn metadata_canonical_from_og_url() {
+    let html = r#"<html><head>
+        <meta property="og:url" content="https://example.com/og">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.canonical_url.as_deref(), Some("https://example.com/og"));
+}
+
+#[test]
+fn metadata_language_from_content_language() {
+    let html = r#"<html><head>
+        <meta http-equiv="content-language" content="fr">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.language.as_deref(), Some("fr"));
+}
+
+#[test]
+fn metadata_og_locale_normalizes_underscore() {
+    // og:locale uses en_US; should become en-US
+    let html = r#"<html><head>
+        <meta property="og:locale" content="en_US">
+    </head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.language.as_deref(), Some("en-US"));
+}
+
+#[test]
+fn metadata_empty_document_all_none() {
+    let m = deformat::html::extract_metadata("<html><body><p>No head.</p></body></html>");
+    assert!(m.title.is_none());
+    assert!(m.author.is_none());
+    assert!(m.description.is_none());
+    assert!(m.date_published.is_none());
+    assert!(m.language.is_none());
+    assert!(m.canonical_url.is_none());
+}
+
+#[test]
+fn metadata_stops_at_body() {
+    // author in body should NOT be picked up
+    let html = r#"<html><head><title>T</title></head>
+        <body><meta name="author" content="Body Author"></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert!(m.author.is_none(), "author from body should not be extracted");
+}
+
+#[test]
+fn metadata_title_entity_decoded() {
+    let html = r#"<html><head><title>Caf&eacute; &amp; Bar</title></head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    assert_eq!(m.title.as_deref(), Some("Café & Bar"));
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn metadata_serializes_to_json() {
+    let html = r#"<html lang="de"><head><title>Test</title></head><body></body></html>"#;
+    let m = deformat::html::extract_metadata(html);
+    let json = serde_json::to_string(&m).expect("serialize");
+    assert!(json.contains("\"title\":\"Test\""));
+    assert!(json.contains("\"language\":\"de\""));
+}
