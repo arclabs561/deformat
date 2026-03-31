@@ -7,6 +7,7 @@ use std::path::Path;
 
 /// Detected document format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Format {
     /// Plain text (no conversion needed).
