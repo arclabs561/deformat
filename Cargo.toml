@@ -31,11 +31,16 @@ dom_smoothie = { version = "0.15", optional = true }
 # Optional: PDF text extraction
 pdf-extract = { version = "0.10", optional = true }
 
+# Optional: DOCX/EPUB extraction (ZIP-based formats)
+zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+
 [features]
 default = []
 html2text = ["dep:html2text"]
 readability = ["dep:dom_smoothie"]
 pdf = ["dep:pdf-extract"]
+docx = ["dep:zip"]
+epub = ["dep:zip"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

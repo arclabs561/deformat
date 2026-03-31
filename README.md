@@ -10,9 +10,13 @@ Extract plain text from HTML, PDF, and other document formats.
 | Format | Input | Feature flag | Extractor |
 |--------|-------|--------------|-----------|
 | HTML (tag strip) | `&str` | *(none -- always available)* | `html::strip_to_text` |
+| HTML (markdown) | `&str` | *(none)* | `html::strip_to_markdown` |
 | HTML (layout-aware) | `&str` | `html2text` | `extract_html2text` |
 | HTML (article) | `&str` | `readability` | `extract_readable` |
 | PDF | `&Path` or `&[u8]` | `pdf` | `pdf::extract_file`, `pdf::extract_bytes` |
+| DOCX | `&Path` or `&[u8]` | `docx` | `docx::extract_file`, `docx::extract_bytes` |
+| EPUB | `&Path` or `&[u8]` | `epub` | `epub::extract_file`, `epub::extract_bytes` |
+| XML | `&str` | *(none)* | `html::strip_to_text` (tag strip) |
 | Plain text / Markdown | `&str` | *(none)* | passthrough |
 
 The default build depends only on [`memchr`](https://crates.io/crates/memchr).

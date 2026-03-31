@@ -31,6 +31,8 @@
 //! | `readability` | `dom_smoothie` | Mozilla Readability article extraction |
 //! | `html2text` | `html2text` | DOM-based HTML-to-text with layout awareness |
 //! | `pdf` | `pdf-extract` | PDF text extraction from file paths or bytes |
+//! | `docx` | `zip` | DOCX text extraction from file paths or bytes |
+//! | `epub` | `zip` | EPUB text extraction with reading-order chapters |
 
 pub mod detect;
 pub mod error;
@@ -38,6 +40,12 @@ pub mod html;
 
 #[cfg(feature = "pdf")]
 pub mod pdf;
+
+#[cfg(feature = "docx")]
+pub mod docx;
+
+#[cfg(feature = "epub")]
+pub mod epub;
 
 pub use detect::Format;
 pub use error::Error;
