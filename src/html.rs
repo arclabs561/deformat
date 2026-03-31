@@ -1044,6 +1044,22 @@ fn strip_impl(
         }
     }
 
+    // When span tracking is active, skip cleanup_whitespace to preserve
+    // exact output byte positions. Adjust spans for leading whitespace trim.
+    if let Some(ref mut s) = spans {
+        let trimmed = text.trim_start();
+        let trim_offset = text.len() - trimmed.len();
+        if trim_offset > 0 {
+            for span in s.iter_mut() {
+                span.0 = span.0.saturating_sub(trim_offset);
+                span.1 = span.1.saturating_sub(trim_offset);
+            }
+            // Remove spans that collapsed to zero length
+            s.retain(|&(os, oe, _, _)| os < oe);
+        }
+        return text.trim().to_string();
+    }
+
     // Optionally strip Wikipedia reference markers [1], [edit], [citation needed].
     // Do this before whitespace cleanup so the cleanup pass collapses any
     // resulting double spaces.
