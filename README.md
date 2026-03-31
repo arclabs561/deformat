@@ -69,6 +69,14 @@ pub struct Extracted {
 
 Three HTML extractors: `html::strip_to_text` (tag stripping, always available), `extract_html2text` (layout-aware DOM, feature: `html2text`), and `extract_readable` (article extraction via Mozilla Readability, feature: `readability` -- falls back to tag stripping if content < 50 chars). Entity decoding available via `html::decode_entities`.
 
+`html::extract_metadata` returns an `HtmlMetadata` struct with title, author, description, date, language, and canonical URL extracted from `<head>`. No feature flag required.
+
+```rust
+let meta = deformat::html::extract_metadata(html);
+// meta.title, meta.author, meta.description, meta.date_published,
+// meta.language, meta.canonical_url
+```
+
 ### PDF extraction
 
 ```rust
