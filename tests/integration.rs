@@ -861,7 +861,10 @@ fn metadata_canonical_from_link_rel() {
         <link rel="canonical" href="https://example.com/article">
     </head><body></body></html>"#;
     let m = deformat::html::extract_metadata(html);
-    assert_eq!(m.canonical_url.as_deref(), Some("https://example.com/article"));
+    assert_eq!(
+        m.canonical_url.as_deref(),
+        Some("https://example.com/article")
+    );
 }
 
 #[test]
@@ -909,7 +912,10 @@ fn metadata_stops_at_body() {
     let html = r#"<html><head><title>T</title></head>
         <body><meta name="author" content="Body Author"></body></html>"#;
     let m = deformat::html::extract_metadata(html);
-    assert!(m.author.is_none(), "author from body should not be extracted");
+    assert!(
+        m.author.is_none(),
+        "author from body should not be extracted"
+    );
 }
 
 #[test]

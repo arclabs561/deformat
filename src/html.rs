@@ -1154,7 +1154,9 @@ pub fn extract_metadata(html: &str) -> HtmlMetadata {
         if let Some(pos) = find_icase(head, "<html") {
             let tag_end = head[pos..].find('>').unwrap_or(head.len() - pos) + pos;
             let tag = &head[pos..tag_end];
-            if let Some(v) = extract_attr_value(tag, "lang").or_else(|| extract_attr_value(tag, "xml:lang")) {
+            if let Some(v) =
+                extract_attr_value(tag, "lang").or_else(|| extract_attr_value(tag, "xml:lang"))
+            {
                 if !v.is_empty() {
                     meta.language = Some(v.to_string());
                 }
@@ -1302,9 +1304,11 @@ fn find_icase(haystack: &str, needle: &str) -> Option<usize> {
 
 /// Compare two strings case-insensitively (ASCII).
 fn eq_icase(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
 }
-
 
 /// Try readability extraction. Returns `Some((text, title, excerpt))` on
 /// success, `None` if parsing fails or the extracted text is trivial (< 50 chars).
