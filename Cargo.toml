@@ -19,6 +19,8 @@ include = [
   "/README.md",
 ]
 
+[workspace]
+
 [dependencies]
 memchr = "2"
 
