@@ -1,3 +1,4 @@
 /target
 .claude/scrutinize-report*.md
 .qa/reports/
+Cargo.lock
