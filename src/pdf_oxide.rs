@@ -9,6 +9,7 @@
 //! Both backends can be enabled simultaneously. The modules expose
 //! parallel APIs; callers choose which one to invoke.
 
+use crate::segment::{element_id, Segment, SegmentData, SegmentMetadata};
 use crate::{Error, Extracted, Extractor, Format};
 use std::path::Path;
 
@@ -61,6 +62,60 @@ fn extract_doc(doc: &mut pdf_oxide::PdfDocument) -> Result<Extracted, Error> {
         excerpt: None,
         fallback: false,
     })
+}
+
+/// Extract typed [`Segment`]s from a PDF file, one per page.
+///
+/// Emits one [`Segment::NarrativeText`] per non-empty page, with
+/// `metadata.page_number` set. Does not split paragraphs within a
+/// page — that requires layout analysis beyond what `pdf_oxide`
+/// exposes at this seam.
+///
+/// # Errors
+///
+/// Returns [`Error::Parse`] on any failure from the PDF backend.
+pub fn extract_to_segments(path: &Path) -> Result<Vec<Segment>, Error> {
+    let mut doc = pdf_oxide::PdfDocument::open(path)
+        .map_err(|e| Error::Parse(format!("PDF (oxide): {e}")))?;
+    segments_from_doc(&mut doc)
+}
+
+/// Like [`extract_to_segments`], from bytes in memory.
+pub fn extract_bytes_to_segments(bytes: &[u8]) -> Result<Vec<Segment>, Error> {
+    let mut doc = pdf_oxide::PdfDocument::from_bytes(bytes.to_vec())
+        .map_err(|e| Error::Parse(format!("PDF (oxide): {e}")))?;
+    segments_from_doc(&mut doc)
+}
+
+fn segments_from_doc(doc: &mut pdf_oxide::PdfDocument) -> Result<Vec<Segment>, Error> {
+    let page_count = doc
+        .page_count()
+        .map_err(|e| Error::Parse(format!("PDF (oxide) page_count: {e}")))?;
+    let mut segments: Vec<Segment> = Vec::new();
+    for i in 0..page_count {
+        let page_text = doc
+            .extract_text(i)
+            .map_err(|e| Error::Parse(format!("PDF (oxide) page {i}: {e}")))?;
+        let trimmed = page_text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let page_num = u32::try_from(i + 1).unwrap_or(u32::MAX);
+        let id = element_id("NarrativeText", trimmed, i);
+        let meta = SegmentMetadata {
+            page_number: Some(page_num),
+            ..SegmentMetadata::default()
+        };
+        segments.push(Segment::NarrativeText(SegmentData {
+            element_id: id,
+            text: trimmed.to_string(),
+            metadata: meta,
+        }));
+    }
+    if segments.is_empty() {
+        return Err(Error::EmptyResult);
+    }
+    Ok(segments)
 }
 
 #[cfg(test)]

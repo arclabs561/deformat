@@ -33,7 +33,7 @@ cargo add deformat --features readability,html2text,pdf   # all extractors
 
 ```toml
 [dependencies]
-deformat = { version = "0.9.1", features = ["readability", "html2text"] }
+deformat = { version = "0.10.0", features = ["readability", "html2text"] }
 ```
 
 ## Usage
@@ -59,7 +59,7 @@ All extraction functions return an `Extracted` struct:
 pub struct Extracted {
     pub text: String,
     pub format: Format,
-    pub extractor: Extractor,    // Strip, Readability, Html2text, PdfExtract, Passthrough
+    pub extractor: Extractor,    // Strip, Readability, Html2text, PdfExtract, PdfOxide, Passthrough
     pub title: Option<String>,   // article title (readability only)
     pub excerpt: Option<String>, // article excerpt (readability only)
     pub fallback: bool,          // true if a richer extractor failed
@@ -151,6 +151,12 @@ Recall is strong across all page types; precision is the gap. Articles
 and documentation are competitive; commerce / forum / listing pages
 over-include boilerplate. Reproduce with `scripts/fetch_wcxb.py` +
 the `bench_wcxb` example.
+
+`html::filter_boilerplate` drops short label-like segments from
+`strip_to_segments` output. Measured delta on the same WCXB dev split:
+overall `without%` 56.5 → 64.3 (+7.8pp boilerplate removal), precision
++1.1pp, recall −1.5pp. Opt in by calling
+`filter_boilerplate(segs, 40)` after `strip_to_segments`.
 
 ## Known limitations
 

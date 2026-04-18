@@ -270,7 +270,9 @@ pub struct PathSpan {
     pub path: String,
 }
 
-pub use crate::segment::{strip_to_segments, Segment, SegmentData, SegmentMetadata};
+pub use crate::segment::{
+    filter_boilerplate, strip_to_segments, Segment, SegmentData, SegmentMetadata,
+};
 
 /// Strip HTML and return text with structural path annotations.
 ///
