@@ -33,7 +33,7 @@ cargo add deformat --features readability,html2text,pdf   # all extractors
 
 ```toml
 [dependencies]
-deformat = { version = "0.10.0", features = ["readability", "html2text"] }
+deformat = { version = "0.11.0", features = ["readability", "html2text"] }
 ```
 
 ## Usage
@@ -157,6 +157,15 @@ the `bench_wcxb` example.
 overall `without%` 56.5 → 64.3 (+7.8pp boilerplate removal), precision
 +1.1pp, recall −1.5pp. Opt in by calling
 `filter_boilerplate(segs, 40)` after `strip_to_segments`.
+
+`html::strip_to_segments_filtered(html, link_ratio_cap)` applies a
+Trafilatura-style link-density pass: blocks whose output text is
+mostly inside `<a>` elements are dropped. Measured at `cap=0.45`:
+overall F1 0.740 → **0.748**, precision +2.2pp, recall −1.4pp.
+Per-type: article +1.2pp, forum +1.4pp, service +1.6pp; listing
+regresses (−3.4pp) because legitimate listing pages are link-heavy.
+Choose the threshold that fits your corpus — the helper sweeps in
+`examples/bench_wcxb.rs`.
 
 ## Known limitations
 

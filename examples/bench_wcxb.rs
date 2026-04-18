@@ -145,6 +145,31 @@ fn extract(kind: &str, html: &str) -> String {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         }
+        "density" => {
+            // Link-density filter at Trafilatura-style 0.45 ratio cap.
+            deformat::html::strip_to_segments_filtered(html, 0.45)
+                .iter()
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        k if k.starts_with("density-") => {
+            // e.g. `density-0.7`
+            let cap: f32 = k.trim_start_matches("density-").parse().unwrap_or(0.45);
+            deformat::html::strip_to_segments_filtered(html, cap)
+                .iter()
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        "both" => {
+            let segs = deformat::html::strip_to_segments_filtered(html, 0.45);
+            deformat::html::filter_boilerplate(segs, 40)
+                .iter()
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
         #[cfg(feature = "readability")]
         "readable" => deformat::extract_readable(html, None).text,
         other => panic!("unknown extractor: {other}"),

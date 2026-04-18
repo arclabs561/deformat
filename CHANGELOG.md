@@ -3,6 +3,32 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## 0.11.0 — 2026-04-18
+
+### Fixed
+- `strip_to_text_with_paths`: closing tags whose bare name matched no
+  stack entry left `path_stack` unchanged, so text emitted after
+  `</a>` (and other inline closes) carried stale `/a` in its
+  `PathSpan.path`. Bug was a chained `unwrap_or` that fell back to the
+  full `tag_lower` (including the leading `/`) when the intermediate
+  strip found nothing. Replaced with `trim_matches('/')`. This
+  affects any consumer that read `PathSpan.path` directly; the
+  user-visible extracted text is unchanged.
+
+### Added
+- `html::strip_to_segments_filtered(html, link_ratio_cap)` applies a
+  Trafilatura-style link-density filter. Measured on WCXB at
+  `cap=0.45`: F1 0.740 → 0.748 (+0.8pp overall), precision +2.2pp,
+  recall −1.4pp. Per-type: article +1.2, forum +1.4, service +1.6;
+  listing −3.4 (legitimate listings are link-heavy). Titles and
+  headers are always preserved.
+- `pdf_oxide::extract_to_segments_with_coords` /
+  `extract_bytes_to_segments_with_coords` emit one Segment per
+  detected text line with `metadata.coordinates` populated from
+  `pdf_oxide::extract_text_lines` — Docling-style page anchors for
+  RAG citations.
+- `Coordinates` is now re-exported from `deformat::html`.
+
 ## 0.10.0 — 2026-04-18
 
 ### Breaking
