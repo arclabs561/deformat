@@ -1,10 +1,10 @@
-//! Tests against real-world document files (DOCX, EPUB).
+//! Tests against real-world document files (DOCX, EPUB, XLSX).
 //!
 //! These tests are `#[ignore]` by default because the fixture files
 //! must be downloaded first. Run with:
 //!
 //! ```sh
-//! # Download fixtures first (see scripts/fetch_fixtures.sh)
+//! scripts/fetch_fixtures.sh
 //! cargo test --all-features --test real_formats -- --ignored
 //! ```
 
@@ -146,6 +146,59 @@ mod epub_tests {
         let bytes = std::fs::read(&path).unwrap();
         let result = deformat::epub::extract_bytes(&bytes).unwrap();
         let file_result = deformat::epub::extract_file(&path).unwrap();
+        assert_eq!(result.text, file_result.text, "bytes vs file mismatch");
+    }
+}
+
+// =============================================================================
+// XLSX
+// =============================================================================
+
+#[cfg(feature = "xlsx")]
+mod xlsx_tests {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn extract_real_xlsx_demo() {
+        let path = fixtures_dir().join("sample1.xlsx");
+        if !path.exists() {
+            eprintln!("Skipping: {path:?} not found. Run scripts/fetch_fixtures.sh");
+            return;
+        }
+        let result = deformat::xlsx::extract_file(&path).unwrap();
+        assert!(
+            !result.text.trim().is_empty(),
+            "expected some cell text from sample1.xlsx"
+        );
+        assert_eq!(result.format, deformat::Format::Xlsx);
+        // Should not contain XML tags or raw namespaces
+        assert!(
+            !result.text.contains("<x:"),
+            "XML namespace leaked: {}...",
+            &result.text[..result.text.len().min(200)]
+        );
+        assert!(
+            !result.text.contains("sharedStrings"),
+            "internal ref leaked"
+        );
+        println!(
+            "sample1.xlsx: {} chars. First 200: {}",
+            result.text.len(),
+            &result.text[..result.text.len().min(200)]
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn xlsx_bytes_api() {
+        let path = fixtures_dir().join("sample1.xlsx");
+        if !path.exists() {
+            return;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let result = deformat::xlsx::extract_bytes(&bytes).unwrap();
+        let file_result = deformat::xlsx::extract_file(&path).unwrap();
         assert_eq!(result.text, file_result.text, "bytes vs file mismatch");
     }
 }
