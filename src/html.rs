@@ -921,6 +921,23 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                     continue;
                 }
 
+                // <code class="language-X"> inside a <pre> block: pick up the
+                // language hint and patch the already-emitted opening fence.
+                if in_pre && effective_tag == "code" {
+                    if !is_close {
+                        let tag_buf_start = tag_start.saturating_sub(1);
+                        let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                        if let Some(lang) = extract_language_class(tag_buffer) {
+                            if out.ends_with("```\n") {
+                                out.truncate(out.len() - 1);
+                                out.push_str(lang);
+                                out.push('\n');
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 // Pre / code blocks
                 if effective_tag == "pre" {
                     if is_close {
@@ -929,7 +946,16 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                     } else {
                         in_pre = true;
                         md_ensure_newline(&mut out);
-                        out.push_str("```\n");
+                        // <pre class="language-X"> (Prism style)
+                        let tag_buf_start = tag_start.saturating_sub(1);
+                        let tag_buffer = &html[tag_buf_start..pos.min(len)];
+                        if let Some(lang) = extract_language_class(tag_buffer) {
+                            out.push_str("```");
+                            out.push_str(lang);
+                            out.push('\n');
+                        } else {
+                            out.push_str("```\n");
+                        }
                     }
                     continue;
                 }
@@ -1384,6 +1410,28 @@ fn find_icase(haystack: &str, needle: &str) -> Option<usize> {
 /// Compare two strings case-insensitively (ASCII).
 fn eq_icase(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
+}
+
+/// Detect the natural language of extracted text.
+///
+/// Returns an ISO 639-3 three-letter code (`"eng"`, `"fra"`, `"deu"`, ...)
+/// or `None` if the input is too short to classify confidently. Wraps
+/// [`whichlang::detect_language`] and is a compose-point for pipelines
+/// that want to enrich [`HtmlMetadata`] after extraction — the raw
+/// `<html lang>` attribute is already surfaced by [`extract_metadata`],
+/// but is often absent or wrong.
+///
+/// Requires the `whichlang` feature.
+#[cfg(feature = "whichlang")]
+#[must_use]
+pub fn detect_language(text: &str) -> Option<&'static str> {
+    // whichlang's sample-size recommendation: ~200 chars for stable results.
+    // Shorter inputs can still classify but with higher variance; we only
+    // reject empty input, leaving the caller to decide on further thresholds.
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(whichlang::detect_language(text).three_letter_code())
 }
 
 /// Try readability extraction. Returns `Some((text, title, excerpt))` on
@@ -2702,6 +2750,32 @@ fn extract_attr_value<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
             };
         }
         pos += 1;
+    }
+    None
+}
+
+/// Extract a `language-<name>` token from a tag's `class` attribute.
+///
+/// Recognizes the Prism / highlight.js / GitHub convention: the `class`
+/// attribute contains a token like `language-rust` or `lang-python`.
+/// Returns the bare language name (`rust`, `python`), or `None` if no
+/// such token is present.
+fn extract_language_class(tag_buffer: &str) -> Option<&str> {
+    let class = extract_attr_value(tag_buffer, "class")?;
+    for token in class.split_whitespace() {
+        let Some(lang) = token
+            .strip_prefix("language-")
+            .or_else(|| token.strip_prefix("lang-"))
+        else {
+            continue;
+        };
+        if !lang.is_empty()
+            && lang
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '+' | '.'))
+        {
+            return Some(lang);
+        }
     }
     None
 }

@@ -32,7 +32,7 @@ cargo add deformat --features readability,html2text,pdf   # all extractors
 
 ```toml
 [dependencies]
-deformat = { version = "0.7.0", features = ["readability", "html2text"] }
+deformat = { version = "0.7.1", features = ["readability", "html2text"] }
 ```
 
 ## Usage
@@ -96,6 +96,29 @@ etc.), ~300 named HTML entities (Latin, Greek, math, typography), numeric/hex ch
 references, Windows-1252 C1 range mapping, CJK ruby annotation stripping, Wikipedia
 boilerplate removal, reference marker stripping (`[1]`, `[edit]`), image alt text
 extraction, and whitespace collapsing.
+
+## Known limitations
+
+Worth calling out so you can pick the right tool for the job:
+
+- **Article-extraction accuracy on crawled HTML**: on the Scrapinghub benchmark
+  `deformat` scores F1 ≈ 0.79 (recall 0.997, precision 0.68). Trafilatura-class
+  Python extractors reach F1 ≈ 0.94; Rust ports (`trafilatura`, `rs-trafilatura`,
+  `justext`) are now available if highest precision matters more than multi-format
+  coverage. Text-density boilerplate detection is not yet implemented here.
+- **Table structure in PDF and DOCX is flattened to text**. Row/column
+  relationships are lost. No Rust extractor currently reconstructs table structure
+  from PDF line drawings; DOCX tables are emitted as tab-separated rows.
+- **Charset detection assumes UTF-8**. Legacy Windows-1252 / CJK-encoded
+  documents must be decoded upstream before calling extractors that take `&str`.
+- **No OCR**. Scanned PDFs yield empty text. Compose with `tesseract-sys`.
+- **No layout analysis**. Multi-column PDFs may read columns in presentation
+  order rather than reading order. For typeset papers consider a vision-model
+  pipeline (Python-side Marker, Docling) instead.
+- **Output positions in `strip_to_text_with_spans` are post-cleanup**. Spans
+  whose source bytes span whitespace collapsed by cleanup are tagged
+  `SpanKind::EntityDecoded` rather than `Direct` — byte-level interpolation
+  via `source_position` is only exact for `Direct` spans.
 
 ## License
 

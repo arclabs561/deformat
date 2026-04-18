@@ -468,3 +468,58 @@ fn strip_options_wiki_vs_default() {
     assert!(default_text.contains("Einstein"), "content preserved");
     assert!(wiki_text.contains("Einstein"), "content preserved");
 }
+
+// =============================================================================
+// Markdown: code-fence language hints
+// =============================================================================
+
+#[test]
+fn markdown_preserves_pre_language_class() {
+    // Prism style: <pre class="language-rust">
+    let html = r#"<pre class="language-rust"><code>fn main() {}</code></pre>"#;
+    let md = deformat::html::strip_to_markdown(html);
+    assert!(
+        md.contains("```rust"),
+        "expected ```rust fence, got: {md:?}"
+    );
+}
+
+#[test]
+fn markdown_preserves_code_language_class() {
+    // GitHub / highlight.js style: <pre><code class="language-python">
+    let html = r#"<pre><code class="language-python">print("hi")</code></pre>"#;
+    let md = deformat::html::strip_to_markdown(html);
+    assert!(
+        md.contains("```python"),
+        "expected ```python fence, got: {md:?}"
+    );
+}
+
+#[test]
+fn markdown_preserves_lang_prefix_too() {
+    // Some sites use `lang-X` instead of `language-X`
+    let html = r#"<pre><code class="lang-go">package main</code></pre>"#;
+    let md = deformat::html::strip_to_markdown(html);
+    assert!(md.contains("```go"), "expected ```go fence, got: {md:?}");
+}
+
+#[test]
+fn markdown_plain_fence_when_no_language() {
+    let html = "<pre><code>plain text</code></pre>";
+    let md = deformat::html::strip_to_markdown(html);
+    // Fence should still open and close with bare ```
+    assert!(md.contains("```\n"), "expected bare fence, got: {md:?}");
+    assert!(
+        !md.contains("```language"),
+        "should not emit stray language"
+    );
+}
+
+#[test]
+fn markdown_ignores_non_language_class_tokens() {
+    // Class has `highlight` but no language-* token
+    let html = r#"<pre class="highlight"><code>x</code></pre>"#;
+    let md = deformat::html::strip_to_markdown(html);
+    assert!(md.contains("```\n"));
+    assert!(!md.contains("```highlight"));
+}

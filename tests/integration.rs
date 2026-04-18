@@ -934,3 +934,32 @@ fn metadata_serializes_to_json() {
     assert!(json.contains("\"title\":\"Test\""));
     assert!(json.contains("\"language\":\"de\""));
 }
+
+// =============================================================================
+// Language detection (whichlang feature)
+// =============================================================================
+
+#[cfg(feature = "whichlang")]
+#[test]
+fn detect_language_english() {
+    let text = "The quick brown fox jumps over the lazy dog. \
+                The sentence is long enough to classify reliably.";
+    let code = deformat::html::detect_language(text);
+    assert_eq!(code, Some("eng"));
+}
+
+#[cfg(feature = "whichlang")]
+#[test]
+fn detect_language_french() {
+    let text = "Le vif renard brun saute par-dessus le chien paresseux. \
+                Cette phrase doit être assez longue pour être classifiée.";
+    let code = deformat::html::detect_language(text);
+    assert_eq!(code, Some("fra"));
+}
+
+#[cfg(feature = "whichlang")]
+#[test]
+fn detect_language_empty_returns_none() {
+    assert_eq!(deformat::html::detect_language(""), None);
+    assert_eq!(deformat::html::detect_language("   \n\t "), None);
+}
