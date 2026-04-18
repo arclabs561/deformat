@@ -105,20 +105,23 @@ pub fn detect_bytes(bytes: &[u8]) -> Format {
         return Format::Rtf;
     }
 
-    // ZIP-based formats: DOCX, EPUB (PK\x03\x04 magic)
+    // ZIP-based formats: DOCX, EPUB, XLSX (PK\x03\x04 magic).
+    // Every OOXML document contains `[Content_Types].xml`, so discriminate
+    // by the top-level directory (`word/`, `xl/`, `ppt/`) instead.
     if bytes.len() >= 4 && bytes[0..4] == [0x50, 0x4B, 0x03, 0x04] {
-        // Peek inside the ZIP for format-specific markers using raw byte scanning.
         // EPUB: "mimetype" entry contains "application/epub+zip" near the start
         if bytes.windows(20).any(|w| w == b"application/epub+zip") {
             return Format::Epub;
         }
-        // DOCX: contains "word/" directory or "[Content_Types].xml"
-        if bytes.windows(5).any(|w| w == b"word/")
-            || bytes.windows(19).any(|w| w == b"[Content_Types].xml")
-        {
+        // XLSX: top-level `xl/` directory
+        if bytes.windows(3).any(|w| w == b"xl/") {
+            return Format::Xlsx;
+        }
+        // DOCX: top-level `word/` directory
+        if bytes.windows(5).any(|w| w == b"word/") {
             return Format::Docx;
         }
-        // Generic ZIP -- could be XLSX, PPTX, etc.
+        // Generic ZIP -- could be PPTX, JAR, etc.
         return Format::Unknown;
     }
 

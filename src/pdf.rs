@@ -52,3 +52,27 @@ pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
         fallback: false,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_pdf_invalid_bytes() {
+        let result = extract_bytes(b"not a pdf");
+        assert!(matches!(result, Err(Error::PdfExtract(_))));
+    }
+
+    #[test]
+    fn extract_pdf_empty_bytes() {
+        let result = extract_bytes(b"");
+        assert!(matches!(result, Err(Error::PdfExtract(_))));
+    }
+
+    #[test]
+    fn extract_pdf_nonexistent_file() {
+        let path = Path::new("/nonexistent/path/to/file.pdf");
+        let result = extract_file(path);
+        assert!(result.is_err(), "should fail on missing file");
+    }
+}

@@ -114,4 +114,11 @@ mod tests {
         let result = extract_bytes(b"");
         assert!(result.is_err(), "should fail on empty input");
     }
+
+    #[test]
+    fn extract_xlsx_nonexistent_file() {
+        let path = Path::new("/nonexistent/path/to/file.xlsx");
+        let result = extract_file(path);
+        assert!(result.is_err(), "should fail on missing file");
+    }
 }

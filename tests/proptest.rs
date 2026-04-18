@@ -231,24 +231,26 @@ proptest! {
 }
 
 // =============================================================================
-// Invariant: entity decoding never panics
+// Panic-freedom: entity decoding tolerates any entity-like input
 // =============================================================================
 
 proptest! {
+    // No assertion: the test passes iff strip_to_text returns without panicking.
     #[test]
-    fn entity_decoding_never_panics(entity in arb_entity_like()) {
+    fn entity_decoding_does_not_panic(entity in arb_entity_like()) {
         let html = format!("<p>{entity}</p>");
         let _text = deformat::html::strip_to_text(&html);
     }
 }
 
 // =============================================================================
-// Invariant: strip_to_text never panics on arbitrary input
+// Panic-freedom: strip_to_text tolerates arbitrary input
 // =============================================================================
 
 proptest! {
+    // No assertion: the test passes iff strip_to_text returns without panicking.
     #[test]
-    fn strip_never_panics(input in ".*") {
+    fn strip_does_not_panic(input in ".*") {
         let _text = deformat::html::strip_to_text(&input);
     }
 }
@@ -545,26 +547,6 @@ proptest! {
             twice,
             "strip_to_text not idempotent on input: {:?}",
             &html[..html.len().min(80)]
-        );
-    }
-}
-
-// =============================================================================
-// Invariant: output is valid UTF-8 (should be guaranteed by Rust, but verify)
-// =============================================================================
-
-proptest! {
-    #[test]
-    fn output_is_valid_utf8(html in arb_html_fragment()) {
-        let text = deformat::html::strip_to_text(&html);
-        // If we got here, the String was valid UTF-8.
-        // Double-check by round-tripping through bytes.
-        let bytes = text.as_bytes();
-        let roundtrip = std::str::from_utf8(bytes);
-        prop_assert!(
-            roundtrip.is_ok(),
-            "Output is not valid UTF-8: {:?}",
-            text
         );
     }
 }
