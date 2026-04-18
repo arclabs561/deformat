@@ -36,6 +36,7 @@
 //! | `epub` | `zip` | EPUB text extraction with reading-order chapters |
 //! | `rtf` | `rtf-parser-tt` | RTF text extraction |
 //! | `xlsx` | `calamine` | XLSX/XLS/ODS spreadsheet text extraction |
+//! | `whichlang` | `whichlang` | Natural-language detection via [`html::detect_language`] |
 
 pub mod detect;
 pub mod error;

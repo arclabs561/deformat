@@ -1,6 +1,6 @@
 [package]
 name = "deformat"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 rust-version = "1.80.0"
 license = "MIT OR Apache-2.0"
@@ -45,6 +45,9 @@ rtf-parser-tt = { version = "0.5", optional = true }
 # Optional: XLSX/ODS spreadsheet text extraction
 calamine = { version = "0.34", optional = true }
 
+# Optional: language detection on extracted text
+whichlang = { version = "0.1", optional = true }
+
 [features]
 default = []
 html2text = ["dep:html2text"]
@@ -55,6 +58,7 @@ epub = ["dep:zip"]
 rtf = ["dep:rtf-parser-tt"]
 xlsx = ["dep:calamine"]
 serde = ["dep:serde"]
+whichlang = ["dep:whichlang"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
