@@ -31,11 +31,13 @@
 //! | `serde` | `serde` | [`serde::Serialize`]/[`serde::Deserialize`] on [`Extracted`], [`Format`], [`Extractor`], and [`html::HtmlMetadata`] |
 //! | `readability` | `dom_smoothie` | Mozilla Readability article extraction |
 //! | `html2text` | `html2text` | DOM-based HTML-to-text with layout awareness |
-//! | `pdf` | `pdf-extract` | PDF text extraction from file paths or bytes |
+//! | `pdf` | `pdf-extract` | PDF text extraction (default backend) |
+//! | `pdf_oxide` | `pdf_oxide` | Alternative PDF backend; vendor-reported faster, unaudited here |
 //! | `docx` | `zip` | DOCX text extraction from file paths or bytes |
 //! | `epub` | `zip` | EPUB text extraction with reading-order chapters |
 //! | `rtf` | `rtf-parser-tt` | RTF text extraction |
 //! | `xlsx` | `calamine` | XLSX/XLS/ODS spreadsheet text extraction |
+//! | `pptx` | `zip` | PPTX presentation text extraction |
 //! | `whichlang` | `whichlang` | Natural-language detection via [`html::detect_language`] |
 
 pub mod detect;
@@ -44,6 +46,9 @@ pub mod html;
 
 #[cfg(feature = "pdf")]
 pub mod pdf;
+
+#[cfg(feature = "pdf_oxide")]
+pub mod pdf_oxide;
 
 #[cfg(feature = "docx")]
 pub mod docx;
@@ -56,6 +61,9 @@ pub mod rtf;
 
 #[cfg(feature = "xlsx")]
 pub mod xlsx;
+
+#[cfg(feature = "pptx")]
+pub mod pptx;
 
 pub use detect::Format;
 pub use error::Error;
@@ -180,7 +188,7 @@ pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
             fallback: false,
         }),
         // Binary formats cannot be extracted from a string
-        Format::Pdf | Format::Rtf | Format::Docx | Format::Epub | Format::Xlsx => {
+        Format::Pdf | Format::Rtf | Format::Docx | Format::Epub | Format::Xlsx | Format::Pptx => {
             Err(Error::UnsupportedFormat(format!(
                 "{format} cannot be extracted from a string; use binary extraction methods"
             )))

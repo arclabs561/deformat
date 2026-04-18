@@ -18,6 +18,7 @@ Extract plain text from HTML, PDF, and other document formats.
 | EPUB | `&Path` or `&[u8]` | `epub` | `epub::extract_file`, `epub::extract_bytes` |
 | RTF | `&Path` or `&[u8]` | `rtf` | `rtf::extract_file`, `rtf::extract_bytes` |
 | XLSX/XLS/ODS | `&Path` or `&[u8]` | `xlsx` | `xlsx::extract_file`, `xlsx::extract_bytes` |
+| PPTX | `&Path` or `&[u8]` | `pptx` | `pptx::extract_file`, `pptx::extract_bytes` |
 | XML | `&str` | *(none)* | `html::strip_to_text` (tag strip) |
 | Plain text / Markdown | `&str` | *(none)* | passthrough |
 
@@ -32,7 +33,7 @@ cargo add deformat --features readability,html2text,pdf   # all extractors
 
 ```toml
 [dependencies]
-deformat = { version = "0.7.1", features = ["readability", "html2text"] }
+deformat = { version = "0.8.0", features = ["readability", "html2text"] }
 ```
 
 ## Usage

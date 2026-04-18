@@ -963,3 +963,46 @@ fn detect_language_empty_returns_none() {
     assert_eq!(deformat::html::detect_language(""), None);
     assert_eq!(deformat::html::detect_language("   \n\t "), None);
 }
+
+// =============================================================================
+// Charset detection (encoding_rs feature)
+// =============================================================================
+
+#[cfg(feature = "encoding_rs")]
+#[test]
+fn decode_bytes_utf8_passthrough() {
+    let bytes = "Caf\u{00E9} au lait".as_bytes();
+    let decoded = deformat::detect::decode_bytes(bytes, "utf-8");
+    assert_eq!(decoded, "Caf\u{00E9} au lait");
+}
+
+#[cfg(feature = "encoding_rs")]
+#[test]
+fn decode_bytes_respects_meta_charset() {
+    // HTML declaring windows-1252 with bytes 0xE9 (= U+00E9 'é' in cp1252).
+    let mut html = b"<html><head><meta charset=\"windows-1252\"></head><body>Caf".to_vec();
+    html.push(0xE9);
+    html.extend_from_slice(b" au lait</body></html>");
+    let decoded = deformat::detect::decode_bytes(&html, "utf-8");
+    assert!(decoded.contains("Caf\u{00E9}"), "got: {decoded}");
+}
+
+#[cfg(feature = "encoding_rs")]
+#[test]
+fn decode_bytes_utf8_bom() {
+    // UTF-8 BOM + content
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice("Hello".as_bytes());
+    let decoded = deformat::detect::decode_bytes(&bytes, "windows-1252");
+    // BOM is consumed; content should be "Hello" (not the BOM-prefixed windows-1252 mojibake)
+    assert_eq!(decoded.trim_start_matches('\u{FEFF}'), "Hello");
+}
+
+#[cfg(feature = "encoding_rs")]
+#[test]
+fn decode_bytes_default_fallback() {
+    // Pure cp1252 bytes (no meta, no BOM). With a windows-1252 default, 0xE9 -> é.
+    let bytes = [b'C', b'a', b'f', 0xE9];
+    let decoded = deformat::detect::decode_bytes(&bytes, "windows-1252");
+    assert_eq!(decoded, "Caf\u{00E9}");
+}

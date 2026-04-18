@@ -249,6 +249,7 @@ fn format_display_all_variants() {
         (deformat::Format::Docx, "DOCX"),
         (deformat::Format::Epub, "EPUB"),
         (deformat::Format::Xlsx, "XLSX"),
+        (deformat::Format::Pptx, "PPTX"),
         (deformat::Format::Unknown, "unknown"),
     ];
     for (fmt, expected) in &formats {
@@ -269,6 +270,7 @@ fn format_mime_roundtrip() {
         deformat::Format::Markdown,
         deformat::Format::Rtf,
         deformat::Format::Epub,
+        deformat::Format::Pptx,
     ];
     for fmt in &roundtrippable {
         let mime = fmt.mime_type();
