@@ -1,7 +1,9 @@
 //! Format detection from content bytes, strings, and file extensions.
 //!
-//! Zero dependencies. Uses magic bytes for binary formats and content
-//! heuristics for text formats.
+//! Zero required dependencies. Uses magic bytes for binary formats and
+//! content heuristics for text formats. The optional `encoding_rs`
+//! feature adds [`decode_bytes`] for charset-aware decoding of non-UTF-8
+//! HTML/XML input.
 
 use std::path::Path;
 
@@ -28,6 +30,8 @@ pub enum Format {
     Epub,
     /// XLSX/XLS/ODS spreadsheet.
     Xlsx,
+    /// PPTX presentation (Office Open XML presentation).
+    Pptx,
     /// Format could not be determined.
     Unknown,
 }
@@ -48,6 +52,9 @@ impl Format {
             }
             Format::Epub => "application/epub+zip",
             Format::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            Format::Pptx => {
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            }
             Format::Unknown => "application/octet-stream",
         }
     }
@@ -65,6 +72,7 @@ impl std::fmt::Display for Format {
             Format::Docx => write!(f, "DOCX"),
             Format::Epub => write!(f, "EPUB"),
             Format::Xlsx => write!(f, "XLSX"),
+            Format::Pptx => write!(f, "PPTX"),
             Format::Unknown => write!(f, "unknown"),
         }
     }
@@ -121,7 +129,11 @@ pub fn detect_bytes(bytes: &[u8]) -> Format {
         if bytes.windows(5).any(|w| w == b"word/") {
             return Format::Docx;
         }
-        // Generic ZIP -- could be PPTX, JAR, etc.
+        // PPTX: top-level `ppt/` directory
+        if bytes.windows(4).any(|w| w == b"ppt/") {
+            return Format::Pptx;
+        }
+        // Generic ZIP -- could be JAR, ODT, etc.
         return Format::Unknown;
     }
 
@@ -157,6 +169,7 @@ pub fn detect_path(path: impl AsRef<Path>) -> Format {
         Some("docx") => Format::Docx,
         Some("epub") => Format::Epub,
         Some("xlsx" | "xls" | "xlsb" | "xlsm" | "ods") => Format::Xlsx,
+        Some("pptx" | "ppt" | "ppsx" | "pps") => Format::Pptx,
         Some("txt" | "text" | "log" | "csv" | "tsv" | "json" | "jsonl") => Format::PlainText,
         _ => Format::Unknown,
     }
@@ -194,6 +207,8 @@ pub fn detect_mime(mime: &str) -> Format {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         | "application/vnd.ms-excel"
         | "application/vnd.oasis.opendocument.spreadsheet" => Format::Xlsx,
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        | "application/vnd.ms-powerpoint" => Format::Pptx,
         "text/plain"
         | "text/csv"
         | "text/tab-separated-values"
@@ -202,6 +217,95 @@ pub fn detect_mime(mime: &str) -> Format {
         | "text/json" => Format::PlainText,
         _ => Format::Unknown,
     }
+}
+
+/// Detect the character encoding of raw bytes and decode them to a
+/// Rust string.
+///
+/// Recognizes the BOM (UTF-8, UTF-16 LE/BE, UTF-32 LE/BE) and an
+/// HTML `<meta charset>` / `<meta http-equiv="Content-Type" ...>`
+/// declaration in the first 1024 bytes. Falls back to the supplied
+/// default label (commonly `"utf-8"` or `"windows-1252"`).
+///
+/// Returns an owned `Cow::Owned` when the encoding differs from UTF-8
+/// and `Cow::Borrowed` when the bytes are already valid UTF-8. Invalid
+/// sequences are replaced with U+FFFD rather than erroring, matching
+/// the WHATWG HTML spec's lossy-decode behavior.
+///
+/// Requires the `encoding_rs` feature.
+#[cfg(feature = "encoding_rs")]
+#[must_use]
+pub fn decode_bytes<'a>(bytes: &'a [u8], default_label: &str) -> std::borrow::Cow<'a, str> {
+    let encoding = sniff_encoding(bytes, default_label);
+    let (decoded, _used, _had_errors) = encoding.decode(bytes);
+    decoded
+}
+
+/// Sniff the character encoding from BOM and embedded meta declarations.
+///
+/// Returns the detected [`encoding_rs::Encoding`] reference, or the
+/// encoding labeled by `default_label` if nothing is detected. The
+/// default itself falls back to UTF-8 if the label is unknown.
+#[cfg(feature = "encoding_rs")]
+fn sniff_encoding(bytes: &[u8], default_label: &str) -> &'static encoding_rs::Encoding {
+    // BOM wins over everything else.
+    if let Some((encoding, _)) = encoding_rs::Encoding::for_bom(bytes) {
+        return encoding;
+    }
+    // Look for <meta charset=X> or <meta http-equiv="Content-Type"
+    // content="text/html; charset=X"> in the first 1 KiB.
+    let prefix = &bytes[..bytes.len().min(1024)];
+    if let Some(label) = extract_meta_charset(prefix) {
+        if let Some(enc) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+            return enc;
+        }
+    }
+    encoding_rs::Encoding::for_label(default_label.as_bytes()).unwrap_or(encoding_rs::UTF_8)
+}
+
+/// Find a `charset=X` value inside a byte slice.
+///
+/// Matches both `<meta charset="X">` and
+/// `<meta http-equiv="Content-Type" content="text/html; charset=X">`.
+/// The search is restricted to byte positions after a `<meta` token so
+/// that body-text occurrences of the word "charset" do not mislead.
+#[cfg(feature = "encoding_rs")]
+fn extract_meta_charset(bytes: &[u8]) -> Option<String> {
+    let lower = std::str::from_utf8(bytes)
+        .ok()
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_else(|| {
+            // Every byte is valid Windows-1252; use it as a Unicode-safe
+            // lower-casing vessel to hunt for the ASCII meta declaration.
+            let (s, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
+            s.to_ascii_lowercase()
+        });
+    let mut pos = 0;
+    while let Some(meta_rel) = lower[pos..].find("<meta") {
+        let meta_start = pos + meta_rel;
+        let tag_end = lower[meta_start..]
+            .find('>')
+            .map(|o| meta_start + o)
+            .unwrap_or(lower.len());
+        let tag = &lower[meta_start..tag_end];
+        if let Some(cs_rel) = tag.find("charset") {
+            let after = tag[cs_rel + "charset".len()..].trim_start();
+            if let Some(rest) = after.strip_prefix('=') {
+                let rest = rest
+                    .trim_start()
+                    .trim_start_matches(['"', '\'']);
+                let end = rest
+                    .find(|c: char| c.is_ascii_whitespace() || matches!(c, '"' | '\'' | ';' | '/'))
+                    .unwrap_or(rest.len());
+                let label = rest[..end].trim();
+                if !label.is_empty() {
+                    return Some(label.to_string());
+                }
+            }
+        }
+        pos = tag_end + 1;
+    }
+    None
 }
 
 /// Detect whether content looks like HTML.
