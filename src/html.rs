@@ -271,7 +271,8 @@ pub struct PathSpan {
 }
 
 pub use crate::segment::{
-    filter_boilerplate, strip_to_segments, Segment, SegmentData, SegmentMetadata,
+    filter_boilerplate, strip_to_segments, strip_to_segments_filtered, Coordinates, Segment,
+    SegmentData, SegmentMetadata,
 };
 
 /// Strip HTML and return text with structural path annotations.
@@ -502,12 +503,10 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     skip_depth += 1;
                 }
 
-                // Path stack tracking -- only track non-skip, non-script/style elements
-                let effective = tag_lower
-                    .strip_prefix('/')
-                    .unwrap_or(&tag_lower)
-                    .strip_suffix('/')
-                    .unwrap_or(&tag_lower);
+                // Path stack tracking -- only track non-skip, non-script/style elements.
+                // Strip an optional leading `/` (close-tag marker) and trailing `/`
+                // (self-closing marker) to get the bare tag name.
+                let effective = tag_lower.trim_matches('/');
                 let is_trackable = !effective.is_empty()
                     && effective.bytes().all(|b| b.is_ascii_alphanumeric())
                     && !is_skip_tag(effective)

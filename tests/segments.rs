@@ -322,3 +322,36 @@ fn nested_tables_use_outer_html() {
     assert!(as_html.contains(r#"id="outer""#));
     assert!(as_html.contains(r#"id="inner""#));
 }
+
+// =============================================================================
+// strip_to_segments_filtered -- link-density cap
+// =============================================================================
+
+#[test]
+fn density_filter_drops_pure_link_block() {
+    // A <p> full of links vs a <p> full of prose.
+    let html = r#"
+        <p><a href="/">Home</a> <a href="/a">About</a> <a href="/c">Contact</a></p>
+        <p>This paragraph has real prose that is not a link.</p>
+    "#;
+    // Cap at 0.5: first paragraph (100% link text) dropped, second kept.
+    let segs = deformat::html::strip_to_segments_filtered(html, 0.5);
+    assert_eq!(segs.len(), 1);
+    assert!(segs[0].data().text.contains("real prose"));
+}
+
+#[test]
+fn density_filter_preserves_prose_with_one_link() {
+    let html = "<p>Read <a href='/'>the paper</a> for details on this topic.</p>";
+    let segs = deformat::html::strip_to_segments_filtered(html, 0.5);
+    assert_eq!(segs.len(), 1);
+    assert!(segs[0].data().text.contains("Read"));
+}
+
+#[test]
+fn density_filter_preserves_titles() {
+    // A Title composed entirely of an <a> still survives.
+    let html = "<h1><a href='/'>Home</a></h1><nav><a>x</a><a>y</a></nav>";
+    let segs = deformat::html::strip_to_segments_filtered(html, 0.5);
+    assert!(segs.iter().any(|s| s.type_name() == "Title"));
+}

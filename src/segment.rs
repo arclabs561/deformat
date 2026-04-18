@@ -218,8 +218,46 @@ pub(crate) fn element_id(kind: &str, text: &str, ord: usize) -> String {
 /// assert_eq!(segs[0].data().text, "Greeting");
 /// assert_eq!(segs[1].type_name(), "NarrativeText");
 /// ```
+/// Variant of [`strip_to_segments`] that drops blocks with a high
+/// link-text to total-text ratio.
+///
+/// Implements Trafilatura's link-density heuristic: for each block,
+/// compute the fraction of text bytes that live inside `<a>` anchors.
+/// Blocks above the threshold are navigation / boilerplate and are
+/// dropped. `Title` and `Header` segments are preserved regardless.
+///
+/// `link_ratio_cap` is a value in `[0.0, 1.0]`. A Trafilatura-calibrated
+/// default is around `0.45`; measured on WCXB, this is the single
+/// biggest F1 mover for article / documentation page types.
+///
+/// # Examples
+///
+/// ```
+/// use deformat::html::strip_to_segments_filtered;
+///
+/// let segs = strip_to_segments_filtered(
+///     "<nav><a href='/'>Home</a> <a href='/a'>About</a></nav>\
+///      <article><p>The real article content goes here.</p></article>",
+///     0.45,
+/// );
+/// // Nav block dropped (100% link text); article block kept.
+/// assert!(segs.iter().all(|s| !s.data().text.contains("Home")));
+/// ```
+#[must_use]
+pub fn strip_to_segments_filtered(html: &str, link_ratio_cap: f32) -> Vec<Segment> {
+    strip_to_segments_inner(html, Some(link_ratio_cap.clamp(0.0, 1.0)))
+}
+
+/// Extract typed [`Segment`]s from an HTML document.
+///
+/// Use [`strip_to_segments_filtered`] if you also want link-density
+/// boilerplate filtering.
 #[must_use]
 pub fn strip_to_segments(html: &str) -> Vec<Segment> {
+    strip_to_segments_inner(html, None)
+}
+
+fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segment> {
     let (full_text, path_spans) = crate::html::strip_to_text_with_paths(html);
     if path_spans.is_empty() {
         return Vec::new();
@@ -243,6 +281,8 @@ pub fn strip_to_segments(html: &str) -> Vec<Segment> {
         let text_slice = full_text
             .get(span.output_start..span.output_end)
             .unwrap_or("");
+        let text_len = text_slice.chars().count();
+        let under_anchor = path_has_anchor_below_block(&span.path, &block_key);
 
         match current {
             Some(ref mut acc) if acc.block_key == block_key => {
@@ -251,6 +291,10 @@ pub fn strip_to_segments(html: &str) -> Vec<Segment> {
                 }
                 acc.text.push_str(text_slice);
                 acc.src_end = acc.src_end.max(span.source_end);
+                acc.total_chars += text_len;
+                if under_anchor {
+                    acc.link_chars += text_len;
+                }
             }
             _ => {
                 if let Some(acc) = current.take() {
@@ -261,6 +305,7 @@ pub fn strip_to_segments(html: &str) -> Vec<Segment> {
                         &mut last_title_id,
                         html,
                         &table_ranges,
+                        link_ratio_cap,
                     );
                 }
                 current = Some(GroupAcc {
@@ -270,6 +315,8 @@ pub fn strip_to_segments(html: &str) -> Vec<Segment> {
                     text: text_slice.to_string(),
                     src_start: span.source_start,
                     src_end: span.source_end,
+                    link_chars: if under_anchor { text_len } else { 0 },
+                    total_chars: text_len,
                 });
             }
         }
@@ -282,6 +329,7 @@ pub fn strip_to_segments(html: &str) -> Vec<Segment> {
             &mut last_title_id,
             html,
             &table_ranges,
+            link_ratio_cap,
         );
     }
     segments
@@ -362,6 +410,10 @@ struct GroupAcc {
     src_start: usize,
     /// Latest source byte touched by this group (exclusive).
     src_end: usize,
+    /// Output-byte count of this group's text from inside `<a>` anchors.
+    link_chars: usize,
+    /// Output-byte count of all text in this group.
+    total_chars: usize,
 }
 
 /// Parse a PathSpan path and return:
@@ -394,6 +446,22 @@ fn classify_block(path: &str) -> (String, String, Option<u32>) {
         }
         None => (path.to_string(), String::new(), None),
     }
+}
+
+/// Does `path` contain an `<a>` component after the block prefix?
+///
+/// The block's path is a prefix of `path`; any `a` element strictly
+/// below that prefix means the text slice was rendered inside an
+/// anchor, which is the signal Trafilatura uses for link-density
+/// boilerplate detection.
+fn path_has_anchor_below_block(path: &str, block_key: &str) -> bool {
+    let after = match path.strip_prefix(block_key) {
+        Some(rest) => rest.trim_start_matches('/'),
+        None => return false,
+    };
+    after
+        .split('/')
+        .any(|c| c.split('[').next().unwrap_or(c) == "a")
 }
 
 fn is_block_like(tag: &str) -> bool {
@@ -440,12 +508,23 @@ fn finish_group(
     last_title_id: &mut Option<String>,
     html: &str,
     table_ranges: &[(usize, usize)],
+    link_ratio_cap: Option<f32>,
 ) {
     let text = acc.text.trim().to_string();
     if text.is_empty() {
         return;
     }
     let type_name = block_tag_to_type(&acc.block_tag);
+    // Link-density filter: drop over-link blocks (nav / tag clouds),
+    // but always keep Titles and Headers.
+    if let Some(cap) = link_ratio_cap {
+        if type_name != "Title" && type_name != "Header" && acc.total_chars > 0 {
+            let ratio = acc.link_chars as f32 / acc.total_chars as f32;
+            if ratio > cap {
+                return;
+            }
+        }
+    }
     let eid = element_id(type_name, &text, ord);
     let mut meta = SegmentMetadata::default();
     if let Some(d) = acc.depth {
