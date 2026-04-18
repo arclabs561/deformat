@@ -137,6 +137,14 @@ fn extract(kind: &str, html: &str) -> String {
             .map(|s| s.data().text.clone())
             .collect::<Vec<_>>()
             .join("\n\n"),
+        "filtered" => {
+            let segs = deformat::html::strip_to_segments(html);
+            deformat::html::filter_boilerplate(segs, 40)
+                .iter()
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
         #[cfg(feature = "readability")]
         "readable" => deformat::extract_readable(html, None).text,
         other => panic!("unknown extractor: {other}"),

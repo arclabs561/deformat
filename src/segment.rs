@@ -68,6 +68,7 @@ pub enum Segment {
 /// Payload common to every [`Segment`] variant.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct SegmentData {
     /// Short stable identifier; content-hashed so repeated parses of
     /// the same input produce the same id.
@@ -88,6 +89,7 @@ pub struct SegmentData {
 /// also used by Docling (`SectionHeaderItem.level`).
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct SegmentMetadata {
     /// 1-based page number (set by PDF / DOCX extractors; not set for HTML).
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
@@ -111,6 +113,30 @@ pub struct SegmentMetadata {
     /// HTML form of the segment (used for [`Segment::Table`]).
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub text_as_html: Option<String>,
+    /// Page-relative bounding box for this segment, when the source
+    /// format carries layout information (currently: PDF via
+    /// `pdf_oxide`). Absent for HTML / DOCX / EPUB / RTF.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub coordinates: Option<Coordinates>,
+}
+
+/// Bounding box coordinates for a segment, matching the shape in
+/// Unstructured.io's `ElementMetadata.coordinates`.
+///
+/// Points are in the order `[top-left, top-right, bottom-right,
+/// bottom-left]`. The `system` string is the coordinate frame
+/// (commonly `"PixelSpace"` or `"PointSpace"` for PDF pages).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Coordinates {
+    /// Four `(x, y)` corner points.
+    pub points: Vec<(f64, f64)>,
+    /// Name of the coordinate system (e.g. `"PixelSpace"`).
+    pub system: String,
+    /// Layout width of the page.
+    pub layout_width: f64,
+    /// Layout height of the page.
+    pub layout_height: f64,
 }
 
 impl Segment {
@@ -199,6 +225,13 @@ pub fn strip_to_segments(html: &str) -> Vec<Segment> {
         return Vec::new();
     }
 
+    // Pre-index top-level `<table>...</table>` source ranges so Table
+    // segments can carry `text_as_html` matching the Unstructured wire
+    // format. Only top-level (depth 1) tables are indexed — nested
+    // tables share the outer table's HTML which is consistent with
+    // emitting one Segment per outermost table.
+    let table_ranges = index_table_ranges(html);
+
     // Group consecutive path_spans that share the same block-level
     // ancestor. Each group becomes one Segment.
     let mut segments: Vec<Segment> = Vec::new();
@@ -217,24 +250,104 @@ pub fn strip_to_segments(html: &str) -> Vec<Segment> {
                     acc.text.push(' ');
                 }
                 acc.text.push_str(text_slice);
+                acc.src_end = acc.src_end.max(span.source_end);
             }
             _ => {
                 if let Some(acc) = current.take() {
-                    finish_group(acc, segments.len(), &mut segments, &mut last_title_id);
+                    finish_group(
+                        acc,
+                        segments.len(),
+                        &mut segments,
+                        &mut last_title_id,
+                        html,
+                        &table_ranges,
+                    );
                 }
                 current = Some(GroupAcc {
                     block_key,
                     block_tag,
                     depth,
                     text: text_slice.to_string(),
+                    src_start: span.source_start,
+                    src_end: span.source_end,
                 });
             }
         }
     }
     if let Some(acc) = current {
-        finish_group(acc, segments.len(), &mut segments, &mut last_title_id);
+        finish_group(
+            acc,
+            segments.len(),
+            &mut segments,
+            &mut last_title_id,
+            html,
+            &table_ranges,
+        );
     }
     segments
+}
+
+/// Find every top-level `<table>...</table>` byte range in `html`.
+///
+/// Nested tables are skipped — the outer range covers them. Returns
+/// a sorted `Vec<(start, end)>` where `start` is the byte offset of
+/// the `<` in `<table` and `end` is the byte offset just past the
+/// `>` in `</table>`.
+fn index_table_ranges(html: &str) -> Vec<(usize, usize)> {
+    let bytes = html.as_bytes();
+    let mut ranges = Vec::new();
+    let mut depth: u32 = 0;
+    let mut start: Option<usize> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        if starts_with_ci(bytes, i + 1, b"table") {
+            let after = i + 1 + b"table".len();
+            if after >= bytes.len() {
+                break;
+            }
+            let next = bytes[after];
+            if next == b'>' || next == b' ' || next == b'\t' || next == b'\n' || next == b'/' {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+        } else if starts_with_ci(bytes, i + 1, b"/table") {
+            let after = i + 1 + b"/table".len();
+            if after >= bytes.len() {
+                break;
+            }
+            let next = bytes[after];
+            if matches!(next, b'>' | b' ' | b'\t' | b'\n') && depth > 0 {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(s) = start.take() {
+                        // Find the terminating `>` to include it.
+                        let mut end = after;
+                        while end < bytes.len() && bytes[end] != b'>' {
+                            end += 1;
+                        }
+                        if end < bytes.len() {
+                            ranges.push((s, end + 1));
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    ranges
+}
+
+fn starts_with_ci(bytes: &[u8], pos: usize, needle: &[u8]) -> bool {
+    if pos + needle.len() > bytes.len() {
+        return false;
+    }
+    bytes[pos..pos + needle.len()].eq_ignore_ascii_case(needle)
 }
 
 struct GroupAcc {
@@ -245,6 +358,10 @@ struct GroupAcc {
     /// Heading depth, if the block tag is h1..h6.
     depth: Option<u32>,
     text: String,
+    /// Earliest source byte touched by this group.
+    src_start: usize,
+    /// Latest source byte touched by this group (exclusive).
+    src_end: usize,
 }
 
 /// Parse a PathSpan path and return:
@@ -253,14 +370,22 @@ struct GroupAcc {
 /// - `depth`: Some(n) if the tag is h1..h6
 fn classify_block(path: &str) -> (String, String, Option<u32>) {
     let mut block_idx: Option<usize> = None;
+    let mut table_idx: Option<usize> = None;
     let parts: Vec<&str> = path.split('/').collect();
     for (i, raw) in parts.iter().enumerate() {
         let name = raw.split('[').next().unwrap_or(raw);
+        if name == "table" {
+            table_idx = Some(i);
+        }
         if is_block_like(name) {
             block_idx = Some(i);
         }
     }
-    match block_idx {
+    // A `<table>` ancestor dominates its cells: every td/tr/th inside
+    // the same table groups into one Segment::Table. Without this, each
+    // cell would emit its own Segment.
+    let use_idx = table_idx.or(block_idx);
+    match use_idx {
         Some(i) => {
             let block_key = parts[..=i].join("/");
             let block_tag = parts[i].split('[').next().unwrap_or(parts[i]).to_string();
@@ -313,6 +438,8 @@ fn finish_group(
     ord: usize,
     out: &mut Vec<Segment>,
     last_title_id: &mut Option<String>,
+    html: &str,
+    table_ranges: &[(usize, usize)],
 ) {
     let text = acc.text.trim().to_string();
     if text.is_empty() {
@@ -327,6 +454,18 @@ fn finish_group(
     if type_name != "Title" && type_name != "Header" {
         if let Some(parent) = last_title_id.clone() {
             meta.parent_id = Some(parent);
+        }
+    }
+    // Populate text_as_html for Table segments from the pre-indexed
+    // `<table>...</table>` ranges.
+    if type_name == "Table" {
+        if let Some(&(ts, te)) = table_ranges
+            .iter()
+            .find(|(ts, te)| *ts <= acc.src_start && *te >= acc.src_end)
+        {
+            if let Some(slice) = html.get(ts..te) {
+                meta.text_as_html = Some(slice.to_string());
+            }
         }
     }
     let data = SegmentData {
@@ -349,6 +488,51 @@ fn finish_group(
         _ => Segment::NarrativeText(data),
     };
     out.push(seg);
+}
+
+/// Drop segments that look like navigation, menus, or label fragments.
+///
+/// Pragmatic text-level heuristic, not Trafilatura's link-density pass:
+///
+/// - Segments shorter than `min_chars` whose text contains no sentence-
+///   ending punctuation (`.`, `?`, `!`) are dropped. Typical targets:
+///   `"About"`, `"Contact Us"`, `"Sign up"`, menu entries.
+/// - ListItems with no sentence punctuation AND no space (single word /
+///   single hyphenated token) are dropped.
+/// - `Title` and `Header` / `Footer` segments are always preserved.
+///
+/// The filter is conservative by design: it trades a bit of recall for
+/// a precision gain on navigation-heavy pages (forum, product,
+/// listing, collection page types on the WCXB benchmark). Measure
+/// before/after on your own corpus — the right threshold depends on
+/// the source population.
+#[must_use]
+pub fn filter_boilerplate(segments: Vec<Segment>, min_chars: usize) -> Vec<Segment> {
+    segments
+        .into_iter()
+        .filter(|seg| keep_segment(seg, min_chars))
+        .collect()
+}
+
+fn keep_segment(seg: &Segment, min_chars: usize) -> bool {
+    if matches!(
+        seg,
+        Segment::Title(_) | Segment::Header(_) | Segment::Footer(_)
+    ) {
+        return true;
+    }
+    let text = seg.data().text.trim();
+    let has_sentence = text.chars().any(|c| matches!(c, '.' | '?' | '!'));
+
+    match seg {
+        Segment::ListItem(_) => has_sentence || text.contains(' '),
+        _ => {
+            if text.chars().count() < min_chars && !has_sentence {
+                return false;
+            }
+            true
+        }
+    }
 }
 
 fn block_tag_to_type(tag: &str) -> &'static str {

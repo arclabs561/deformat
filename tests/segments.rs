@@ -165,3 +165,160 @@ fn serde_segments_are_deserializable() {
     assert_eq!(back[0].type_name(), segs[0].type_name());
     assert_eq!(back[0].data().text, segs[0].data().text);
 }
+
+// =============================================================================
+// filter_boilerplate
+// =============================================================================
+
+#[test]
+fn filter_drops_short_labelless_narratives() {
+    // Three NarrativeTexts: real prose, nav label, menu item.
+    let html = r#"
+        <p>This is a real paragraph of prose ending with a period.</p>
+        <p>About</p>
+        <p>Contact Us</p>
+    "#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(segs.len(), 3);
+    let filtered = deformat::html::filter_boilerplate(segs, 40);
+    // Real prose survives; short labels dropped.
+    assert_eq!(filtered.len(), 1);
+    assert!(filtered[0].data().text.starts_with("This is a real"));
+}
+
+#[test]
+fn filter_preserves_titles_always() {
+    // Short title-like content survives even without sentence punctuation.
+    let html = "<h1>About</h1><p>Text.</p>";
+    let segs = deformat::html::strip_to_segments(html);
+    let filtered = deformat::html::filter_boilerplate(segs, 40);
+    assert!(filtered.iter().any(|s| s.type_name() == "Title"));
+}
+
+#[test]
+fn filter_keeps_multi_word_list_items() {
+    let html = r#"<ul>
+        <li>Buy groceries and cook dinner</li>
+        <li>X</li>
+    </ul>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    let filtered = deformat::html::filter_boilerplate(segs, 40);
+    // Multi-word list item survives; single-token one is dropped.
+    assert_eq!(filtered.len(), 1);
+    assert!(filtered[0].data().text.contains("groceries"));
+}
+
+// =============================================================================
+// DOCX segments (feature-gated)
+// =============================================================================
+
+#[cfg(feature = "docx")]
+#[test]
+fn docx_segments_one_per_paragraph() {
+    use std::io::Write;
+    let xml = r#"<?xml version="1.0"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Introduction</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Deformat extracts text from document formats.</w:t></w:r></w:p>
+        <w:p><w:r><w:t>It supports PDF, DOCX, EPUB, and more.</w:t></w:r></w:p>
+      </w:body>
+    </w:document>"#;
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("[Content_Types].xml", opts).unwrap();
+    write!(zip, r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#).unwrap();
+    zip.start_file("word/document.xml", opts).unwrap();
+    write!(zip, "{xml}").unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+
+    let segs = deformat::docx::extract_bytes_to_segments(&bytes).unwrap();
+    assert_eq!(segs.len(), 3, "got: {segs:?}");
+    assert_eq!(segs[0].type_name(), "Title");
+    assert_eq!(segs[0].data().metadata.category_depth, Some(1));
+    assert_eq!(segs[0].data().text, "Introduction");
+    assert_eq!(segs[1].type_name(), "NarrativeText");
+    assert!(segs[1].data().text.contains("Deformat extracts"));
+    // Non-title paragraphs carry parent_id = title id.
+    assert_eq!(
+        segs[1].data().metadata.parent_id.as_deref(),
+        Some(segs[0].data().element_id.as_str())
+    );
+}
+
+#[cfg(feature = "docx")]
+#[test]
+fn docx_segments_empty_returns_empty_result() {
+    use std::io::Write;
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("word/document.xml", opts).unwrap();
+    write!(zip, r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body></w:body></w:document>"#).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let r = deformat::docx::extract_bytes_to_segments(&bytes);
+    assert!(matches!(r, Err(deformat::Error::EmptyResult)));
+}
+
+// =============================================================================
+// PDF segments (feature-gated)
+// =============================================================================
+
+#[cfg(feature = "pdf_oxide")]
+#[test]
+fn pdf_oxide_segments_invalid_bytes_is_parse_err() {
+    let r = deformat::pdf_oxide::extract_bytes_to_segments(b"not a pdf");
+    assert!(matches!(r, Err(deformat::Error::Parse(_))));
+}
+
+// =============================================================================
+// Table -> text_as_html
+// =============================================================================
+
+#[test]
+fn table_segment_carries_text_as_html() {
+    let html = r#"<table>
+        <tr><th>Name</th><th>Score</th></tr>
+        <tr><td>Alice</td><td>95</td></tr>
+    </table>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    // Expect one Table segment, not multiple cell segments.
+    let tables: Vec<&Segment> = segs.iter().filter(|s| s.type_name() == "Table").collect();
+    assert_eq!(tables.len(), 1, "got segments: {segs:?}");
+    let tab = tables[0];
+    // Table plain text contains the cell values.
+    assert!(tab.data().text.contains("Alice"));
+    assert!(tab.data().text.contains("95"));
+    // text_as_html carries the original `<table>...</table>` slice.
+    let as_html = tab
+        .data()
+        .metadata
+        .text_as_html
+        .as_ref()
+        .expect("text_as_html populated");
+    assert!(as_html.starts_with("<table"), "got: {as_html:?}");
+    assert!(as_html.ends_with("</table>"), "got: {as_html:?}");
+    assert!(as_html.contains("Alice"));
+}
+
+#[test]
+fn nested_tables_use_outer_html() {
+    let html = r#"<table id="outer"><tr><td>
+        <table id="inner"><tr><td>InnerCell</td></tr></table>
+    </td></tr></table>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    let tables: Vec<&Segment> = segs.iter().filter(|s| s.type_name() == "Table").collect();
+    // One Table segment spanning the outer table.
+    assert_eq!(tables.len(), 1, "got: {segs:?}");
+    let as_html = tables[0]
+        .data()
+        .metadata
+        .text_as_html
+        .as_ref()
+        .expect("text_as_html");
+    assert!(as_html.contains(r#"id="outer""#));
+    assert!(as_html.contains(r#"id="inner""#));
+}

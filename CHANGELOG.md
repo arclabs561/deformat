@@ -3,6 +3,32 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## 0.10.0 — 2026-04-18
+
+### Breaking
+- `SegmentData` and `SegmentMetadata` are now `#[non_exhaustive]`.
+  Construct via field assignment from `SegmentMetadata::default()`
+  rather than struct literals; future field additions are now
+  non-breaking.
+- `SegmentMetadata` gains `coordinates: Option<Coordinates>` for PDF
+  bounding boxes (Unstructured-compatible wire shape).
+
+### Added
+- `html::filter_boilerplate(segments, min_chars)` drops short
+  punctuation-less segments (navigation / menu fragments). Measured
+  on WCXB: `without%` improves from 56.5 → 64.3, precision +1.1pp,
+  recall -1.5pp; overall F1 flat at the token level.
+- `docx::extract_to_segments` / `extract_bytes_to_segments` emit one
+  segment per `<w:p>`. `<w:pStyle w:val="Heading1..9">` → `Title` with
+  `category_depth`; others → `NarrativeText` with `parent_id` linking
+  to the preceding Title.
+- `pdf_oxide::extract_to_segments` / `extract_bytes_to_segments` emit
+  one `NarrativeText` per non-empty page with `metadata.page_number`.
+- `Segment::Table` now carries `metadata.text_as_html` populated from
+  the original `<table>...</table>` source range. Nested tables
+  collapse into the outermost table's Segment.
+- New `Coordinates` public type (points + system + layout dims).
+
 ## 0.9.1 — 2026-04-18
 
 ### Added
