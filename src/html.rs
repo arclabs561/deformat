@@ -1,5 +1,8 @@
 //! HTML-to-text extraction.
 //!
+//! See also [`crate::segment`] for Unstructured.io-compatible typed
+//! element output, re-exported here as [`strip_to_segments`].
+//!
 //! Two extraction strategies:
 //!
 //! 1. **`strip_to_text`** (always available) -- fast tag stripping with
@@ -266,6 +269,8 @@ pub struct PathSpan {
     /// XPath-like element path, e.g. `html/body/article/p[2]`.
     pub path: String,
 }
+
+pub use crate::segment::{strip_to_segments, Segment, SegmentData, SegmentMetadata};
 
 /// Strip HTML and return text with structural path annotations.
 ///
