@@ -89,6 +89,38 @@ let result = deformat::pdf::extract_bytes(&pdf_bytes)?;
 
 `detect_str`, `detect_bytes`, `detect_path` return `Format`. Helpers: `is_html`, `is_pdf`.
 
+### Structured output (Unstructured.io-compatible)
+
+`html::strip_to_segments` returns a `Vec<Segment>` with typed variants
+(Title, NarrativeText, ListItem, Table, CodeSnippet, ...). With the
+`serde` feature, the JSON form matches the shape that
+`langchain-community`'s `UnstructuredLoader` and Haystack's
+`UnstructuredDocumentConverter` consume directly -- no adapter needed.
+
+```rust
+let segs = deformat::html::strip_to_segments(
+    "<article><h1>Greeting</h1><p>Hello, world!</p></article>",
+);
+assert_eq!(segs[0].type_name(), "Title");
+assert_eq!(segs[0].data().metadata.category_depth, Some(1));
+```
+
+With `serde`:
+
+```rust
+let json = serde_json::to_string(&segs)?;
+// Ships as: [{"type":"Title","element_id":"...","text":"Greeting","metadata":{"category_depth":1}}, ...]
+```
+
+### Additional feature flags
+
+| Feature | Adds |
+|---------|------|
+| `serde` | `Serialize`/`Deserialize` on `Extracted`, `Format`, `Extractor`, `Segment`, `HtmlMetadata` |
+| `whichlang` | `html::detect_language` — ISO 639-3 language detection |
+| `encoding_rs` | `detect::decode_bytes` — charset-aware decoding of non-UTF-8 HTML |
+| `pdf_oxide` | Alternative PDF backend (faster per vendor; unaudited here) |
+
 ## HTML tag stripping details
 
 `html::strip_to_text` handles: tag removal, script/style/noscript content removal,
@@ -132,8 +164,10 @@ Worth calling out so you can pick the right tool for the job:
 - **Table structure in PDF and DOCX is flattened to text**. Row/column
   relationships are lost. No Rust extractor currently reconstructs table structure
   from PDF line drawings; DOCX tables are emitted as tab-separated rows.
-- **Charset detection assumes UTF-8**. Legacy Windows-1252 / CJK-encoded
-  documents must be decoded upstream before calling extractors that take `&str`.
+- **Default charset is UTF-8**. Non-UTF-8 HTML (legacy Windows-1252, CJK)
+  needs the `encoding_rs` feature — call `detect::decode_bytes(bytes, "utf-8")`
+  before handing the result to `strip_to_text`. BOM and `<meta charset>`
+  are honored; caller's `default_label` is the fallback.
 - **No OCR**. Scanned PDFs yield empty text. Compose with `tesseract-sys`.
 - **No layout analysis**. Multi-column PDFs may read columns in presentation
   order rather than reading order. For typeset papers consider a vision-model

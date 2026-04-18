@@ -19,5 +19,6 @@ repository:
     - epub
     - rtf
     - xlsx
+    - pptx
     - text-extraction
     - rust
