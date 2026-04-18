@@ -1304,10 +1304,7 @@ fn find_icase(haystack: &str, needle: &str) -> Option<usize> {
 
 /// Compare two strings case-insensitively (ASCII).
 fn eq_icase(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+    a.eq_ignore_ascii_case(b)
 }
 
 /// Try readability extraction. Returns `Some((text, title, excerpt))` on
