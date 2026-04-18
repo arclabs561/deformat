@@ -1006,3 +1006,64 @@ fn decode_bytes_default_fallback() {
     let decoded = deformat::detect::decode_bytes(&bytes, "windows-1252");
     assert_eq!(decoded, "Caf\u{00E9}");
 }
+
+// =============================================================================
+// extract_from_bytes -- one-call dispatch over detected format
+// =============================================================================
+
+#[test]
+fn extract_from_bytes_plain_text() {
+    let result = deformat::extract_from_bytes(b"Hello, world.").unwrap();
+    assert_eq!(result.text, "Hello, world.");
+    assert_eq!(result.format, deformat::Format::PlainText);
+}
+
+#[test]
+fn extract_from_bytes_html() {
+    let result = deformat::extract_from_bytes(b"<p>Hi <b>there</b>!</p>").unwrap();
+    assert!(result.text.contains("Hi"));
+    assert!(result.text.contains("there"));
+    assert_eq!(result.format, deformat::Format::Html);
+}
+
+#[test]
+fn extract_from_bytes_non_utf8_is_parse_error() {
+    // Raw 0xE9 ('é' in cp1252) is not valid UTF-8; without the
+    // encoding_rs feature applied first, this should error.
+    let bytes = [b'C', b'a', b'f', 0xE9, b' ', b's', b'u', b'd'];
+    let err = deformat::extract_from_bytes(&bytes).unwrap_err();
+    match err {
+        deformat::Error::Parse(msg) => assert!(msg.contains("UTF-8")),
+        other => panic!("expected Error::Parse, got {other:?}"),
+    }
+}
+
+#[cfg(feature = "encoding_rs")]
+#[test]
+fn extract_from_bytes_end_to_end_charset() {
+    // Compose: detect-and-decode bytes, then extract. This is the
+    // blessed path for legacy cp1252 / CJK HTML.
+    let mut html = b"<html><head><meta charset=\"windows-1252\"></head><body><p>Caf".to_vec();
+    html.push(0xE9);
+    html.extend_from_slice(b" au lait</p></body></html>");
+    let decoded = deformat::detect::decode_bytes(&html, "utf-8");
+    let result = deformat::extract(&decoded).unwrap();
+    assert!(result.text.contains("Caf\u{00E9}"));
+    assert_eq!(result.format, deformat::Format::Html);
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn extract_from_bytes_pdf_magic_bytes_routed() {
+    // Raw "%PDF-" -- not a real PDF, but format detection should route
+    // to the pdf backend (which then errors). Confirms routing.
+    let err = deformat::extract_from_bytes(b"%PDF-1.4 fake").unwrap_err();
+    assert!(matches!(err, deformat::Error::Parse(_)));
+}
+
+#[cfg(not(feature = "pdf"))]
+#[test]
+fn extract_from_bytes_pdf_without_feature_is_unsupported() {
+    let err = deformat::extract_from_bytes(b"%PDF-1.4 fake").unwrap_err();
+    assert!(matches!(err, deformat::Error::UnsupportedFormat(_)));
+}

@@ -200,6 +200,84 @@ pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
     }
 }
 
+/// Extract plain text from raw bytes, auto-detecting the format.
+///
+/// One-call end-to-end convenience over [`detect::detect_bytes`] plus
+/// the per-format `extract_bytes` fns. Dispatches to the right backend:
+///
+/// - HTML / XML / plain text / markdown: decoded (UTF-8 assumed; use
+///   [`detect::decode_bytes`] first if the input is `windows-1252` /
+///   CJK / etc., with the `encoding_rs` feature) and fed to
+///   [`html::strip_to_text`] or passed through.
+/// - PDF (feature `pdf`): [`pdf::extract_bytes`].
+/// - DOCX (feature `docx`), EPUB (`epub`), RTF (`rtf`), XLSX
+///   (`xlsx`), PPTX (`pptx`): the matching module's `extract_bytes`.
+///
+/// # Errors
+///
+/// - [`Error::UnsupportedFormat`] if the detected format requires a
+///   crate feature that is not enabled in the current build.
+/// - [`Error::Io`] / [`Error::Parse`] / [`Error::EmptyResult`] from the
+///   underlying extractor.
+///
+/// # Examples
+///
+/// ```no_run
+/// let bytes = std::fs::read("document.docx")?;
+/// let result = deformat::extract_from_bytes(&bytes)?;
+/// println!("{}", result.text);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn extract_from_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
+    let format = detect::detect_bytes(bytes);
+    match format {
+        Format::Html | Format::Xml | Format::PlainText | Format::Markdown | Format::Unknown => {
+            let text = std::str::from_utf8(bytes).map_err(|e| {
+                Error::Parse(format!(
+                    "input is not valid UTF-8 ({e}); decode with the `encoding_rs` feature first"
+                ))
+            })?;
+            extract_as(text, format)
+        }
+        #[cfg(feature = "pdf")]
+        Format::Pdf => pdf::extract_bytes(bytes),
+        #[cfg(not(feature = "pdf"))]
+        Format::Pdf => Err(Error::UnsupportedFormat(
+            "PDF extraction requires the `pdf` feature".into(),
+        )),
+        #[cfg(feature = "docx")]
+        Format::Docx => docx::extract_bytes(bytes),
+        #[cfg(not(feature = "docx"))]
+        Format::Docx => Err(Error::UnsupportedFormat(
+            "DOCX extraction requires the `docx` feature".into(),
+        )),
+        #[cfg(feature = "epub")]
+        Format::Epub => epub::extract_bytes(bytes),
+        #[cfg(not(feature = "epub"))]
+        Format::Epub => Err(Error::UnsupportedFormat(
+            "EPUB extraction requires the `epub` feature".into(),
+        )),
+        #[cfg(feature = "rtf")]
+        Format::Rtf => rtf::extract_bytes(bytes),
+        #[cfg(not(feature = "rtf"))]
+        Format::Rtf => Err(Error::UnsupportedFormat(
+            "RTF extraction requires the `rtf` feature".into(),
+        )),
+        #[cfg(feature = "xlsx")]
+        Format::Xlsx => xlsx::extract_bytes(bytes),
+        #[cfg(not(feature = "xlsx"))]
+        Format::Xlsx => Err(Error::UnsupportedFormat(
+            "XLSX extraction requires the `xlsx` feature".into(),
+        )),
+        #[cfg(feature = "pptx")]
+        Format::Pptx => pptx::extract_bytes(bytes),
+        #[cfg(not(feature = "pptx"))]
+        Format::Pptx => Err(Error::UnsupportedFormat(
+            "PPTX extraction requires the `pptx` feature".into(),
+        )),
+    }
+}
+
 /// Extract article content from HTML using readability analysis.
 ///
 /// Attempts Mozilla Readability extraction first (content-focused,
