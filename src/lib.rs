@@ -43,6 +43,7 @@
 pub mod detect;
 pub mod error;
 pub mod html;
+pub mod segment;
 
 #[cfg(feature = "pdf")]
 pub mod pdf;

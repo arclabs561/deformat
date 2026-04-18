@@ -33,7 +33,7 @@ cargo add deformat --features readability,html2text,pdf   # all extractors
 
 ```toml
 [dependencies]
-deformat = { version = "0.8.0", features = ["readability", "html2text"] }
+deformat = { version = "0.9.0", features = ["readability", "html2text"] }
 ```
 
 ## Usage
@@ -98,15 +98,37 @@ references, Windows-1252 C1 range mapping, CJK ruby annotation stripping, Wikipe
 boilerplate removal, reference marker stripping (`[1]`, `[edit]`), image alt text
 extraction, and whitespace collapsing.
 
+## Benchmark (WCXB dev split, 1,497 pages)
+
+`cargo run --release --example bench_wcxb` — word-level F1 against the
+`ground_truth.main_content` field from the
+[WCXB](https://webcontentextraction.org) benchmark (CC-BY-4.0).
+
+| page_type      |    N |    F1 |     P |     R |
+|----------------|-----:|------:|------:|------:|
+| article        |  792 | 0.851 | 0.778 | 0.986 |
+| documentation  |   91 | 0.891 | 0.855 | 0.964 |
+| service        |  165 | 0.730 | 0.648 | 0.951 |
+| listing        |   99 | 0.602 | 0.524 | 0.942 |
+| collection     |  117 | 0.532 | 0.415 | 0.966 |
+| forum          |  112 | 0.504 | 0.610 | 0.755 |
+| product        |  119 | 0.438 | 0.330 | 0.958 |
+| **overall**    | 1495 | 0.740 | 0.675 | 0.957 |
+
+Recall is strong across all page types; precision is the gap. Articles
+and documentation are competitive; commerce / forum / listing pages
+over-include boilerplate. Reproduce with `scripts/fetch_wcxb.py` +
+the `bench_wcxb` example.
+
 ## Known limitations
 
 Worth calling out so you can pick the right tool for the job:
 
-- **Article-extraction accuracy on crawled HTML**: on the Scrapinghub benchmark
-  `deformat` scores F1 ≈ 0.79 (recall 0.997, precision 0.68). Trafilatura-class
-  Python extractors reach F1 ≈ 0.94; Rust ports (`trafilatura`, `rs-trafilatura`,
-  `justext`) are now available if highest precision matters more than multi-format
-  coverage. Text-density boilerplate detection is not yet implemented here.
+- **Article-extraction precision**: see the WCXB table above. Trafilatura-class
+  Python extractors reach F1 ≈ 0.94 on articles via text-density / link-density
+  scoring; deformat has not implemented that yet. If you need highest precision
+  for HTML-only pipelines, see `trafilatura`, `rs-trafilatura`, or `justext`
+  on crates.io.
 - **Table structure in PDF and DOCX is flattened to text**. Row/column
   relationships are lost. No Rust extractor currently reconstructs table structure
   from PDF line drawings; DOCX tables are emitted as tab-separated rows.
