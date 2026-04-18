@@ -291,9 +291,7 @@ fn extract_meta_charset(bytes: &[u8]) -> Option<String> {
         if let Some(cs_rel) = tag.find("charset") {
             let after = tag[cs_rel + "charset".len()..].trim_start();
             if let Some(rest) = after.strip_prefix('=') {
-                let rest = rest
-                    .trim_start()
-                    .trim_start_matches(['"', '\'']);
+                let rest = rest.trim_start().trim_start_matches(['"', '\'']);
                 let end = rest
                     .find(|c: char| c.is_ascii_whitespace() || matches!(c, '"' | '\'' | ';' | '/'))
                     .unwrap_or(rest.len());
