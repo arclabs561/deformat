@@ -56,7 +56,7 @@ fn extract_doc(doc: &mut pdf_oxide::PdfDocument) -> Result<Extracted, Error> {
     Ok(Extracted {
         text,
         format: Format::Pdf,
-        extractor: Extractor::PdfExtract,
+        extractor: Extractor::PdfOxide,
         title: None,
         excerpt: None,
         fallback: false,

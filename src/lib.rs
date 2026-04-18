@@ -80,8 +80,10 @@ pub enum Extractor {
     Readability,
     /// DOM-based HTML-to-text with layout awareness (feature `html2text`).
     Html2text,
-    /// PDF text extraction (feature `pdf`).
+    /// PDF text extraction via `pdf-extract` (feature `pdf`).
     PdfExtract,
+    /// PDF text extraction via `pdf_oxide` (feature `pdf_oxide`).
+    PdfOxide,
     /// Input passed through unchanged (plain text, markdown, unknown).
     Passthrough,
 }
@@ -93,6 +95,7 @@ impl std::fmt::Display for Extractor {
             Extractor::Readability => write!(f, "readability"),
             Extractor::Html2text => write!(f, "html2text"),
             Extractor::PdfExtract => write!(f, "pdf-extract"),
+            Extractor::PdfOxide => write!(f, "pdf-oxide"),
             Extractor::Passthrough => write!(f, "passthrough"),
         }
     }
