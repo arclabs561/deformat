@@ -101,27 +101,73 @@ pub fn strip_to_text_with_options(html: &str, options: &StripOptions) -> String 
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct SpanMap {
-    /// (output_byte_start, output_byte_end, source_byte_start, source_byte_end)
-    spans: Vec<(usize, usize, usize, usize)>,
+    /// Spans are appended in output order, so `spans` is sorted by
+    /// `output_start` and non-overlapping in the output direction.
+    spans: Vec<Span>,
+}
+
+/// One contiguous output run paired with its source range and origin kind.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct Span {
+    /// Start byte offset in the output text.
+    pub output_start: usize,
+    /// End byte offset in the output text (exclusive).
+    pub output_end: usize,
+    /// Start byte offset in the source HTML.
+    pub source_start: usize,
+    /// End byte offset in the source HTML (exclusive).
+    pub source_end: usize,
+    /// How the output text relates to the source range.
+    pub kind: SpanKind,
+}
+
+/// Classifies how a [`Span`]'s output was produced from its source range.
+///
+/// Consumers that highlight or transform extracted text use the kind to
+/// decide whether a span's output bytes can be linearly projected onto its
+/// source range ([`SpanKind::Direct`]) or whether the output is a
+/// substitution ([`SpanKind::EntityDecoded`]) or a fabrication
+/// ([`SpanKind::Synthetic`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SpanKind {
+    /// Output bytes are a verbatim copy of the source range. Output
+    /// position `p` corresponds to source position
+    /// `source_start + (p - output_start)`.
+    Direct,
+    /// Output is a decoded HTML entity (`&eacute;` → `é`). Source range
+    /// points at the entity reference; byte widths differ.
+    EntityDecoded,
+    /// Output has no literal counterpart in the source range (e.g. an
+    /// `<img alt>` value exposed as text, or an inserted block-boundary
+    /// newline). `source_start..source_end` points at the originating
+    /// construct but cannot be indexed into byte-for-byte.
+    Synthetic,
 }
 
 impl SpanMap {
-    /// Find the source HTML byte range for a given output byte range.
+    /// Find the source HTML byte range that covers every span overlapping
+    /// the given output range. Returns `None` if no spans overlap.
     ///
-    /// Returns the smallest source range that covers all source spans
-    /// overlapping with `output_start..output_end`. Returns `None` if
-    /// no spans overlap the requested range.
+    /// The returned range is the union of the overlapping spans' source
+    /// ranges, so it can be wider than the literal bytes that produced the
+    /// queried output range — that is the correct behavior when the output
+    /// range straddles multiple source regions or entity decodings.
     #[must_use]
     pub fn source_range(&self, output_start: usize, output_end: usize) -> Option<(usize, usize)> {
+        // Binary search: skip spans that end before the query starts.
+        let start_idx = self.spans.partition_point(|s| s.output_end <= output_start);
         let mut src_start = usize::MAX;
         let mut src_end = 0;
         let mut found = false;
-        for &(os, oe, ss, se) in &self.spans {
-            if oe > output_start && os < output_end {
-                src_start = src_start.min(ss);
-                src_end = src_end.max(se);
-                found = true;
+        for span in &self.spans[start_idx..] {
+            if span.output_start >= output_end {
+                break;
             }
+            src_start = src_start.min(span.source_start);
+            src_end = src_end.max(span.source_end);
+            found = true;
         }
         if found {
             Some((src_start, src_end))
@@ -130,10 +176,30 @@ impl SpanMap {
         }
     }
 
-    /// Iterate over all span mappings.
+    /// Map a single output byte position to its source byte position.
     ///
-    /// Each tuple is `(output_start, output_end, source_start, source_end)`.
-    pub fn iter(&self) -> impl Iterator<Item = &(usize, usize, usize, usize)> {
+    /// For [`SpanKind::Direct`] runs, the result is byte-exact via linear
+    /// interpolation. For [`SpanKind::EntityDecoded`] and
+    /// [`SpanKind::Synthetic`] runs the output byte cannot be projected
+    /// onto a single source byte, so the span's `source_start` is returned
+    /// as a pointer to the originating construct.
+    ///
+    /// Returns `None` if `output_pos` is not covered by any span.
+    #[must_use]
+    pub fn source_position(&self, output_pos: usize) -> Option<usize> {
+        let idx = self.spans.partition_point(|s| s.output_end <= output_pos);
+        let span = self.spans.get(idx)?;
+        if output_pos < span.output_start {
+            return None;
+        }
+        match span.kind {
+            SpanKind::Direct => Some(span.source_start + (output_pos - span.output_start)),
+            SpanKind::EntityDecoded | SpanKind::Synthetic => Some(span.source_start),
+        }
+    }
+
+    /// Iterate over every span, in output order.
+    pub fn iter(&self) -> impl Iterator<Item = &Span> {
         self.spans.iter()
     }
 
@@ -185,6 +251,7 @@ pub fn strip_to_text_with_spans(html: &str) -> (String, SpanMap) {
 /// assert!(path.contains("p"), "path has p: {path}");
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PathSpan {
     /// Start byte offset in the output text.
     pub output_start: usize,
@@ -194,6 +261,8 @@ pub struct PathSpan {
     pub source_start: usize,
     /// End byte offset in the source HTML.
     pub source_end: usize,
+    /// How the output text relates to the source range (see [`SpanKind`]).
+    pub kind: SpanKind,
     /// XPath-like element path, e.g. `html/body/article/p[2]`.
     pub path: String,
 }
@@ -245,6 +314,7 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                             output_end: text.len(),
                             source_start: pos,
                             source_end: len,
+                            kind: SpanKind::Direct,
                             path: build_path(&path_stack),
                         });
                     }
@@ -261,6 +331,7 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                             output_end: text.len(),
                             source_start: pos,
                             source_end: marker_pos,
+                            kind: SpanKind::Direct,
                             path: build_path(&path_stack),
                         });
                     }
@@ -480,6 +551,7 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                                 output_end: text.len(),
                                 source_start: tag_buf_start,
                                 source_end: pos.min(len),
+                                kind: SpanKind::Synthetic,
                                 path: build_path(&path_stack),
                             });
                             text.push(' ');
@@ -492,11 +564,18 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                 let out_start = text.len();
                 pos = decode_entity_bytes(html, bytes, pos, &mut text);
                 if text.len() > out_start {
+                    let matched_entity = pos > entity_start + 1;
+                    let kind = if matched_entity {
+                        SpanKind::EntityDecoded
+                    } else {
+                        SpanKind::Direct
+                    };
                     path_spans.push(PathSpan {
                         output_start: out_start,
                         output_end: text.len(),
                         source_start: entity_start,
                         source_end: pos,
+                        kind,
                         path: build_path(&path_stack),
                     });
                 }
@@ -1340,11 +1419,7 @@ pub fn extract_with_readability(
 // Core strip implementation
 // ---------------------------------------------------------------------------
 
-fn strip_impl(
-    html: &str,
-    options: &StripOptions,
-    mut spans: Option<&mut Vec<(usize, usize, usize, usize)>>,
-) -> String {
+fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Span>>) -> String {
     let bytes = html.as_bytes();
     let len = bytes.len();
 
@@ -1386,7 +1461,13 @@ fn strip_impl(
                     let out_start = text.len();
                     text.push_str(&html[pos..]);
                     if let Some(ref mut s) = spans {
-                        s.push((out_start, text.len(), pos, len));
+                        s.push(Span {
+                            output_start: out_start,
+                            output_end: text.len(),
+                            source_start: pos,
+                            source_end: len,
+                            kind: SpanKind::Direct,
+                        });
                     }
                 }
                 break;
@@ -1398,7 +1479,13 @@ fn strip_impl(
                     let out_start = text.len();
                     text.push_str(&html[pos..marker_pos]);
                     if let Some(ref mut s) = spans {
-                        s.push((out_start, text.len(), pos, marker_pos));
+                        s.push(Span {
+                            output_start: out_start,
+                            output_end: text.len(),
+                            source_start: pos,
+                            source_end: marker_pos,
+                            kind: SpanKind::Direct,
+                        });
                     }
                 }
                 pos = marker_pos;
@@ -1630,7 +1717,13 @@ fn strip_impl(
                             text.push_str(&decoded);
                             if let Some(ref mut s) = spans {
                                 // Map alt text to the <img> tag's source range
-                                s.push((out_start, text.len(), tag_buf_start, pos.min(len)));
+                                s.push(Span {
+                                    output_start: out_start,
+                                    output_end: text.len(),
+                                    source_start: tag_buf_start,
+                                    source_end: pos.min(len),
+                                    kind: SpanKind::Synthetic,
+                                });
                             }
                             text.push(' ');
                         }
@@ -1645,7 +1738,23 @@ fn strip_impl(
                 pos = decode_entity_bytes(html, bytes, pos, &mut text);
                 if let Some(ref mut s) = spans {
                     if text.len() > out_start {
-                        s.push((out_start, text.len(), entity_start, pos));
+                        // If decode_entity_bytes didn't consume the '&' (no
+                        // entity matched), the output byte is a verbatim '&'
+                        // and maps 1:1 to the source. Otherwise it is a
+                        // decoded entity with differing byte widths.
+                        let matched_entity = pos > entity_start + 1;
+                        let kind = if matched_entity {
+                            SpanKind::EntityDecoded
+                        } else {
+                            SpanKind::Direct
+                        };
+                        s.push(Span {
+                            output_start: out_start,
+                            output_end: text.len(),
+                            source_start: entity_start,
+                            source_end: pos,
+                            kind,
+                        });
                     }
                 }
             }
@@ -1655,20 +1764,26 @@ fn strip_impl(
         }
     }
 
-    // When span tracking is active, skip cleanup_whitespace to preserve
-    // exact output byte positions. Adjust spans for leading whitespace trim.
+    // When span tracking is active, run cleanup_whitespace with a position
+    // map so the returned text matches strip_to_text while span positions
+    // remain accurate against the cleaned output.
     if let Some(ref mut s) = spans {
-        let trimmed = text.trim_start();
-        let trim_offset = text.len() - trimmed.len();
-        if trim_offset > 0 {
-            for span in s.iter_mut() {
-                span.0 = span.0.saturating_sub(trim_offset);
-                span.1 = span.1.saturating_sub(trim_offset);
-            }
-            // Remove spans that collapsed to zero length
-            s.retain(|&(os, oe, _, _)| os < oe);
+        let (cleaned, map) = cleanup_whitespace_with_map(&text);
+        // Leading trim: drop output bytes whose character is whitespace at
+        // the start of the string.
+        let lead_trim = cleaned.len() - cleaned.trim_start().len();
+        // Trailing trim: same on the other side.
+        let trail_start = cleaned.trim_end().len();
+
+        if lead_trim > 0 || trail_start < cleaned.len() {
+            // Shift the map to align with the trimmed output.
+            // effective map is map[lead_trim..trail_start]
+            let effective_map = &map[lead_trim..trail_start];
+            remap_spans(s, effective_map);
+            return cleaned[lead_trim..trail_start].to_string();
         }
-        return text.trim().to_string();
+        remap_spans(s, &map);
+        return cleaned;
     }
 
     // Optionally strip Wikipedia reference markers [1], [edit], [citation needed].
@@ -1781,6 +1896,126 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
         cleaned.pop();
     }
     Cow::Owned(cleaned)
+}
+
+/// Rewrite each span's output range from pre-cleanup positions to the
+/// post-cleanup positions defined by `map`.
+///
+/// `map[j]` is the pre-cleanup byte that produced output byte `j`; the map
+/// is monotone non-decreasing, so each boundary is recovered by
+/// `partition_point`. Spans that collapse entirely into whitespace are
+/// dropped. The caller may pass `map` truncated at the trim window, in
+/// which case spans outside that window are dropped or clamped.
+fn remap_spans(spans: &mut Vec<Span>, map: &[u32]) {
+    spans.retain_mut(|span| {
+        let pre_start = span.output_start as u32;
+        let pre_end = span.output_end as u32;
+        let new_start = map.partition_point(|&m| m < pre_start);
+        let new_end = map.partition_point(|&m| m < pre_end);
+        if new_start >= new_end {
+            return false;
+        }
+        // If whitespace cleanup collapsed bytes inside a Direct run, the
+        // post-cleanup output is shorter than the pre-cleanup source, so
+        // byte-level interpolation would skew. Demote to EntityDecoded,
+        // which documents that source bytes are not indexable byte-for-byte.
+        if span.kind == SpanKind::Direct && (pre_end - pre_start) as usize != new_end - new_start {
+            span.kind = SpanKind::EntityDecoded;
+        }
+        span.output_start = new_start;
+        span.output_end = new_end;
+        true
+    });
+}
+
+/// Same semantics as [`cleanup_whitespace`], but also returns a `map`
+/// such that `map[j]` is the byte position in the pre-cleanup input that
+/// produced output byte `j`. The map has the same length as the returned
+/// string; the two move together under subsequent trimming.
+///
+/// The map is monotone non-decreasing, which makes remapping pre-cleanup
+/// byte positions to post-cleanup positions a `partition_point` search.
+fn cleanup_whitespace_with_map(text: &str) -> (String, Vec<u32>) {
+    let text_bytes = text.as_bytes();
+    let text_len = text_bytes.len();
+    let mut cleaned = String::with_capacity(text_len);
+    let mut map: Vec<u32> = Vec::with_capacity(text_len);
+    let mut last_was_space = true;
+    let mut i = 0;
+
+    while i < text_len {
+        let b = text_bytes[i];
+        if b > 0x20 && b < 0x7F {
+            let run_start = i;
+            i += 1;
+            while i < text_len {
+                let b2 = text_bytes[i];
+                if b2 <= 0x20 || b2 >= 0x7F {
+                    break;
+                }
+                i += 1;
+            }
+            cleaned.push_str(&text[run_start..i]);
+            for k in run_start..i {
+                map.push(k as u32);
+            }
+            last_was_space = false;
+        } else if b <= 0x20 {
+            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
+                let run_start = i;
+                let mut has_newline = b == b'\n';
+                i += 1;
+                while i < text_len {
+                    let b2 = text_bytes[i];
+                    if b2 == b'\n' {
+                        has_newline = true;
+                    } else if b2 != b' ' && b2 != b'\t' && b2 != b'\r' {
+                        break;
+                    }
+                    i += 1;
+                }
+                cleaned.push(if has_newline { '\n' } else { ' ' });
+                map.push(run_start as u32);
+                last_was_space = true;
+                continue;
+            }
+            i += 1;
+        } else {
+            if b == 0x7F {
+                i += 1;
+                continue;
+            }
+            let Some(ch) = text[i..].chars().next() else {
+                break;
+            };
+            let ch_len = ch.len_utf8();
+            if is_invisible_char(ch) {
+                // skip
+            } else if ch.is_whitespace() || is_nbsp(ch) {
+                if !last_was_space {
+                    cleaned.push(' ');
+                    map.push(i as u32);
+                    last_was_space = true;
+                }
+            } else {
+                let out_before = cleaned.len();
+                cleaned.push(ch);
+                for _ in out_before..cleaned.len() {
+                    map.push(i as u32);
+                }
+                last_was_space = false;
+            }
+            i += ch_len;
+        }
+    }
+
+    // Trim trailing spaces in-place; keep map in sync.
+    while cleaned.ends_with(' ') {
+        cleaned.pop();
+        map.pop();
+    }
+    debug_assert_eq!(cleaned.len(), map.len());
+    (cleaned, map)
 }
 
 /// Check if a byte slice represents "clean" ASCII text: no leading/trailing

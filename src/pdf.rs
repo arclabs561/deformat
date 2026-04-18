@@ -10,10 +10,10 @@ use std::path::Path;
 ///
 /// # Errors
 ///
-/// Returns [`Error::PdfExtract`] if the file cannot be read or parsed, or
+/// Returns [`Error::Parse`] if the file cannot be read or parsed, or
 /// [`Error::EmptyResult`] if extraction produces no text.
 pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
-    let text = pdf_extract::extract_text(path).map_err(|e| Error::PdfExtract(e.to_string()))?;
+    let text = pdf_extract::extract_text(path).map_err(|e| Error::Parse(format!("PDF: {e}")))?;
 
     if text.trim().is_empty() {
         return Err(Error::EmptyResult);
@@ -33,11 +33,11 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::PdfExtract`] if parsing fails, or [`Error::EmptyResult`]
+/// Returns [`Error::Parse`] if parsing fails, or [`Error::EmptyResult`]
 /// if extraction produces no text.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
     let text =
-        pdf_extract::extract_text_from_mem(bytes).map_err(|e| Error::PdfExtract(e.to_string()))?;
+        pdf_extract::extract_text_from_mem(bytes).map_err(|e| Error::Parse(format!("PDF: {e}")))?;
 
     if text.trim().is_empty() {
         return Err(Error::EmptyResult);
@@ -60,13 +60,13 @@ mod tests {
     #[test]
     fn extract_pdf_invalid_bytes() {
         let result = extract_bytes(b"not a pdf");
-        assert!(matches!(result, Err(Error::PdfExtract(_))));
+        assert!(matches!(result, Err(Error::Parse(_))));
     }
 
     #[test]
     fn extract_pdf_empty_bytes() {
         let result = extract_bytes(b"");
-        assert!(matches!(result, Err(Error::PdfExtract(_))));
+        assert!(matches!(result, Err(Error::Parse(_))));
     }
 
     #[test]
