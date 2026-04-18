@@ -1,5 +1,3 @@
-#![cfg(all(feature = "docx", feature = "epub", feature = "rtf"))]
-
 //! Comprehensive cross-feature tests.
 //!
 //! Tests that exercise multiple deformat features together and verify
