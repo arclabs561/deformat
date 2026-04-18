@@ -10,7 +10,7 @@ use std::path::Path;
 ///
 /// # Errors
 ///
-/// Returns [`Error::Io`] if the file cannot be read, [`Error::PdfExtract`]
+/// Returns [`Error::Io`] if the file cannot be read, [`Error::Parse`]
 /// if RTF parsing fails, or [`Error::EmptyResult`] if no text is extracted.
 pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
     let content = std::fs::read_to_string(path)?;
@@ -21,17 +21,17 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::PdfExtract`] if the input is not valid UTF-8 or RTF
+/// Returns [`Error::Parse`] if the input is not valid UTF-8 or RTF
 /// parsing fails, or [`Error::EmptyResult`] if no text is extracted.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
     let content = std::str::from_utf8(bytes)
-        .map_err(|e| Error::PdfExtract(format!("RTF is not valid UTF-8: {e}")))?;
+        .map_err(|e| Error::Parse(format!("RTF is not valid UTF-8: {e}")))?;
     extract_string(content)
 }
 
 fn extract_string(content: &str) -> Result<Extracted, Error> {
     let doc = rtf_parser_tt::RtfDocument::try_from(content.to_string())
-        .map_err(|e| Error::PdfExtract(format!("RTF parsing failed: {e}")))?;
+        .map_err(|e| Error::Parse(format!("RTF parsing failed: {e}")))?;
     let text = doc.get_text();
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() {

@@ -18,11 +18,11 @@ use std::path::Path;
 /// # Errors
 ///
 /// Returns [`Error::Io`] if the file cannot be read,
-/// [`Error::PdfExtract`] if spreadsheet parsing fails, or
+/// [`Error::Parse`] if spreadsheet parsing fails, or
 /// [`Error::EmptyResult`] if no cells contain text.
 pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
     let mut workbook: calamine::Sheets<_> = calamine::open_workbook_auto(path)
-        .map_err(|e| Error::PdfExtract(format!("spreadsheet open failed: {e}")))?;
+        .map_err(|e| Error::Parse(format!("spreadsheet open failed: {e}")))?;
 
     extract_workbook(&mut workbook)
 }
@@ -31,12 +31,12 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::PdfExtract`] if parsing fails, or
+/// Returns [`Error::Parse`] if parsing fails, or
 /// [`Error::EmptyResult`] if no cells contain text.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
     let cursor = std::io::Cursor::new(bytes);
     let mut workbook: calamine::Sheets<_> = calamine::open_workbook_auto_from_rs(cursor)
-        .map_err(|e| Error::PdfExtract(format!("spreadsheet parse failed: {e}")))?;
+        .map_err(|e| Error::Parse(format!("spreadsheet parse failed: {e}")))?;
 
     extract_workbook(&mut workbook)
 }
@@ -50,7 +50,7 @@ fn extract_workbook<RS: std::io::Read + std::io::Seek>(
     for name in &sheet_names {
         let range = workbook
             .worksheet_range(name)
-            .map_err(|e| Error::PdfExtract(format!("failed to read sheet '{name}': {e}")))?;
+            .map_err(|e| Error::Parse(format!("failed to read sheet '{name}': {e}")))?;
 
         let mut sheet_text = String::new();
         for row in range.rows() {

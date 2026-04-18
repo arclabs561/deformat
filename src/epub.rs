@@ -12,7 +12,7 @@ use std::path::Path;
 ///
 /// # Errors
 ///
-/// Returns [`Error::Io`] if the file cannot be read, [`Error::PdfExtract`]
+/// Returns [`Error::Io`] if the file cannot be read, [`Error::Parse`]
 /// if the ZIP/EPUB structure is invalid, or [`Error::EmptyResult`] if
 /// extraction produces no text.
 pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
@@ -24,7 +24,7 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::PdfExtract`] if the ZIP archive is invalid, or
+/// Returns [`Error::Parse`] if the ZIP archive is invalid, or
 /// [`Error::EmptyResult`] if extraction produces no text.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
     let cursor = std::io::Cursor::new(bytes);
@@ -32,8 +32,8 @@ pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
 }
 
 fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
-    let mut archive = zip::ZipArchive::new(reader)
-        .map_err(|e| Error::PdfExtract(format!("invalid EPUB ZIP: {e}")))?;
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|e| Error::Parse(format!("invalid EPUB ZIP: {e}")))?;
 
     // Find content files: look for .xhtml, .html, .htm files in the archive
     let mut content_files: Vec<String> = Vec::new();

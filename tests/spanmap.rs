@@ -3,7 +3,7 @@
 //! These tests verify that every piece of extracted text can be traced
 //! back to its correct source position in the original HTML.
 
-use deformat::html::{strip_to_text_with_paths, strip_to_text_with_spans};
+use deformat::html::{strip_to_text_with_paths, strip_to_text_with_spans, SpanKind};
 
 // =============================================================================
 // Basic text tracing
@@ -159,7 +159,8 @@ fn nav_content_not_in_spans() {
 
     // All spans should point to the <p> area, not the <nav> area
     let nav_end = html.find("</nav>").unwrap() + 6; // byte after </nav>
-    for &(_, _, ss, _) in spans.iter() {
+    for span in spans.iter() {
+        let ss = span.source_start;
         assert!(
             ss >= nav_end || ss < 5,
             "span source {ss} should not be inside nav (nav ends at {nav_end})"
@@ -175,7 +176,8 @@ fn script_content_not_in_spans() {
     assert!(!text.contains("var x"));
 
     let script_end = html.find("</script>").unwrap() + 9;
-    for &(_, _, ss, _) in spans.iter() {
+    for span in spans.iter() {
+        let ss = span.source_start;
         assert!(
             ss >= script_end,
             "span at source {ss} should be after script (ends at {script_end})"
@@ -285,7 +287,13 @@ fn span_map_iter() {
     let (text, spans) = strip_to_text_with_spans(html);
 
     // Iterate and verify all spans are valid
-    for &(os, oe, ss, se) in spans.iter() {
+    for span in spans.iter() {
+        let (os, oe, ss, se) = (
+            span.output_start,
+            span.output_end,
+            span.source_start,
+            span.source_end,
+        );
         assert!(os <= oe, "output range valid: {os}..{oe}");
         assert!(ss <= se, "source range valid: {ss}..{se}");
         assert!(
@@ -353,7 +361,7 @@ fn only_tags_no_text() {
     let html = "<div><span></span></div>";
     let (text, spans) = strip_to_text_with_spans(html);
     assert!(text.trim().is_empty());
-    assert!(spans.is_empty() || spans.iter().all(|&(os, oe, _, _)| os == oe));
+    assert!(spans.is_empty() || spans.iter().all(|s| s.output_start == s.output_end));
 }
 
 #[test]
@@ -603,5 +611,101 @@ fn path_realistic_article() {
         !div_p_spans.is_empty(),
         "should have div/p path spans, all paths: {:?}",
         spans.iter().map(|s| &s.path).collect::<Vec<_>>()
+    );
+}
+
+// =============================================================================
+// source_position: byte-level mapping with intra-run interpolation
+// =============================================================================
+
+#[test]
+fn source_position_direct_run_interpolates() {
+    let html = "<p>ABCDEFGHIJ</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "ABCDEFGHIJ");
+
+    // Each output byte should map to its exact source byte.
+    let abc_src = html.find("ABCDEFGHIJ").unwrap();
+    for i in 0..text.len() {
+        let src = spans.source_position(i).expect("every byte has a source");
+        assert_eq!(src, abc_src + i, "byte {i} should map to {}", abc_src + i);
+    }
+}
+
+#[test]
+fn source_position_out_of_bounds_returns_none() {
+    let (text, spans) = strip_to_text_with_spans("<p>hi</p>");
+    assert!(spans.source_position(text.len() + 5).is_none());
+}
+
+#[test]
+fn source_position_on_entity_returns_entity_start() {
+    let html = "<p>X &amp; Y</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    // Text is "X & Y"; the '&' byte is at position 2.
+    let amp_pos = text.find('&').unwrap();
+    let src = spans.source_position(amp_pos).unwrap();
+    // Source should point at the '&' that starts "&amp;".
+    assert_eq!(&html[src..src + 5], "&amp;");
+}
+
+// =============================================================================
+// SpanKind classification
+// =============================================================================
+
+#[test]
+fn span_kinds_are_tagged() {
+    let html = r#"<p>Direct &amp; <img alt="photo"> text</p>"#;
+    let (_text, spans) = strip_to_text_with_spans(html);
+
+    let has_direct = spans.iter().any(|s| s.kind == SpanKind::Direct);
+    let has_entity = spans.iter().any(|s| s.kind == SpanKind::EntityDecoded);
+    let has_synthetic = spans.iter().any(|s| s.kind == SpanKind::Synthetic);
+    assert!(has_direct, "expected a Direct span");
+    assert!(has_entity, "expected an EntityDecoded span");
+    assert!(has_synthetic, "expected a Synthetic (img alt) span");
+}
+
+// =============================================================================
+// Output parity: strip_to_text_with_spans matches strip_to_text
+// =============================================================================
+
+#[test]
+fn spans_output_matches_strip_to_text() {
+    // Prior behavior: the spans path skipped cleanup_whitespace, producing
+    // different text than strip_to_text. Now they should agree byte-for-byte.
+    let cases = [
+        "<p>Hello    world</p>",
+        "<article><p>One.</p>\n\n\n<p>Two.</p></article>",
+        "<p>  leading  and  trailing  </p>",
+        "<p>Mix\t\t\ntabs</p>",
+    ];
+    for html in cases {
+        let plain = deformat::html::strip_to_text(html);
+        let (spanned, _) = strip_to_text_with_spans(html);
+        assert_eq!(spanned, plain, "mismatch for {html:?}");
+    }
+}
+
+#[test]
+fn spans_survive_whitespace_collapse() {
+    // "Hello" and "world" are separated by multiple spaces in source; after
+    // cleanup the output contains a single space. The span covering the
+    // whole run is demoted from Direct to EntityDecoded (byte counts
+    // differ), so we verify via source_range rather than per-byte
+    // interpolation.
+    let html = "<p>Hello    world</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "Hello world");
+
+    let src = spans.source_range(0, text.len()).unwrap();
+    let source = &html[src.0..src.1];
+    assert!(
+        source.contains("Hello"),
+        "source contains Hello: {source:?}"
+    );
+    assert!(
+        source.contains("world"),
+        "source contains world: {source:?}"
     );
 }

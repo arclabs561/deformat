@@ -1,3 +1,5 @@
+#![cfg(all(feature = "docx", feature = "epub", feature = "rtf"))]
+
 //! Comprehensive cross-feature tests.
 //!
 //! Tests that exercise multiple deformat features together and verify
@@ -198,7 +200,7 @@ fn error_display_and_source() {
     assert!(err.to_string().contains("I/O"));
     assert!(std::error::Error::source(&err).is_some());
 
-    let err = deformat::Error::PdfExtract("bad pdf".into());
+    let err = deformat::Error::Parse("bad pdf".into());
     assert!(err.to_string().contains("bad pdf"));
 
     let err = deformat::Error::EmptyResult;

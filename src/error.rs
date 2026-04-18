@@ -8,10 +8,12 @@ use std::fmt;
 pub enum Error {
     /// The input format is not supported for extraction.
     UnsupportedFormat(String),
-    /// An I/O error occurred (e.g., reading a PDF file).
+    /// An I/O error occurred (e.g., reading a file).
     Io(std::io::Error),
-    /// PDF parsing or extraction failed.
-    PdfExtract(String),
+    /// Parsing a format-specific document failed (PDF, DOCX, EPUB, RTF, XLSX).
+    ///
+    /// The message starts with the originating format name.
+    Parse(String),
     /// The extraction produced no usable text.
     EmptyResult,
 }
@@ -23,7 +25,7 @@ impl fmt::Display for Error {
                 write!(f, "unsupported format: {fmt_name}")
             }
             Error::Io(e) => write!(f, "I/O error: {e}"),
-            Error::PdfExtract(msg) => write!(f, "PDF extraction failed: {msg}"),
+            Error::Parse(msg) => write!(f, "parse error: {msg}"),
             Error::EmptyResult => write!(f, "extraction produced no text"),
         }
     }

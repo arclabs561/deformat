@@ -12,7 +12,7 @@ use std::path::Path;
 ///
 /// # Errors
 ///
-/// Returns [`Error::Io`] if the file cannot be read, [`Error::PdfExtract`]
+/// Returns [`Error::Io`] if the file cannot be read, [`Error::Parse`]
 /// if the ZIP archive is invalid or missing `word/document.xml`, or
 /// [`Error::EmptyResult`] if extraction produces no text.
 pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
@@ -24,7 +24,7 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::PdfExtract`] if the ZIP archive is invalid, or
+/// Returns [`Error::Parse`] if the ZIP archive is invalid, or
 /// [`Error::EmptyResult`] if extraction produces no text.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
     let cursor = std::io::Cursor::new(bytes);
@@ -32,8 +32,8 @@ pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
 }
 
 fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
-    let mut archive = zip::ZipArchive::new(reader)
-        .map_err(|e| Error::PdfExtract(format!("invalid DOCX ZIP: {e}")))?;
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|e| Error::Parse(format!("invalid DOCX ZIP: {e}")))?;
 
     let mut text_parts = Vec::new();
 
@@ -42,13 +42,13 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
         let mut xml = String::new();
         entry
             .read_to_string(&mut xml)
-            .map_err(|e| Error::PdfExtract(format!("failed to read document.xml: {e}")))?;
+            .map_err(|e| Error::Parse(format!("failed to read document.xml: {e}")))?;
         let text = html::strip_to_text(&xml);
         if !text.is_empty() {
             text_parts.push(text);
         }
     } else {
-        return Err(Error::PdfExtract("DOCX missing word/document.xml".into()));
+        return Err(Error::Parse("DOCX missing word/document.xml".into()));
     }
 
     let text = text_parts.join("\n");

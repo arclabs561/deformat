@@ -15,5 +15,9 @@ repository:
   topics:
     - html
     - pdf
+    - docx
+    - epub
+    - rtf
+    - xlsx
     - text-extraction
     - rust
