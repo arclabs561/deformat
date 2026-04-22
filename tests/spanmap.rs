@@ -346,14 +346,43 @@ fn empty_html() {
 
 #[test]
 fn no_tags_plain_text() {
+    // Plain text (no '<') goes through the fast path. As of v0.11.1 the fast
+    // path emits a single whole-input span so callers get a consistent API.
     let html = "Just plain text.";
-    let (text, _spans) = strip_to_text_with_spans(html);
-    // Plain text without tags goes through the fast path (no '<')
-    // This path doesn't track spans (it goes through decode_entities_in_str + cleanup_whitespace)
-    // Document the behavior: fast path produces empty spans
+    let (text, spans) = strip_to_text_with_spans(html);
     assert_eq!(text, "Just plain text.");
-    // Fast path doesn't populate spans -- this is a known limitation
-    // for plain text input without any HTML tags
+    assert_eq!(spans.len(), 1, "fast path emits single whole-input span");
+    let src = spans.source_range(0, text.len()).unwrap();
+    assert_eq!(src, (0, html.len()));
+    // No entities or collapse → Direct; byte counts match.
+    assert_eq!(spans.iter().next().unwrap().kind, SpanKind::Direct);
+}
+
+#[test]
+fn plain_text_with_entities_fast_path_span_is_entity_decoded() {
+    let html = "AT&amp;T";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "AT&T");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans.iter().next().unwrap().kind, SpanKind::EntityDecoded);
+    let src = spans.source_range(0, text.len()).unwrap();
+    assert_eq!(src, (0, html.len()));
+}
+
+#[test]
+fn plain_text_with_whitespace_collapse_fast_path_span_is_entity_decoded() {
+    let html = "  lots   of   spaces  ";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "lots of spaces");
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans.iter().next().unwrap().kind, SpanKind::EntityDecoded);
+}
+
+#[test]
+fn plain_text_all_whitespace_fast_path_emits_no_spans() {
+    let (text, spans) = strip_to_text_with_spans("   \t\n  ");
+    assert!(text.is_empty());
+    assert!(spans.is_empty());
 }
 
 #[test]
@@ -574,9 +603,26 @@ fn path_img_alt_text() {
 }
 
 #[test]
-fn path_empty_for_plain_text() {
-    let (_text, spans) = strip_to_text_with_paths("No tags here.");
-    // Plain text fast path produces no spans
+fn path_fast_path_emits_whole_input_span_with_empty_path() {
+    // As of v0.11.1 the plain-text fast path in strip_to_text_with_paths
+    // emits a single whole-input span with an empty path (no surrounding tags).
+    let (text, spans) = strip_to_text_with_paths("No tags here.");
+    assert_eq!(text, "No tags here.");
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert_eq!(span.output_start, 0);
+    assert_eq!(span.output_end, text.len());
+    assert!(
+        span.path.is_empty(),
+        "path should be empty: {:?}",
+        span.path
+    );
+}
+
+#[test]
+fn path_fast_path_empty_for_all_whitespace() {
+    let (text, spans) = strip_to_text_with_paths("   ");
+    assert!(text.is_empty());
     assert!(spans.is_empty());
 }
 

@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc d0f39e1b3f313169d91befec53d568e9e88fbb49e9855f46e44f3508e86b412d # shrinks to html = "&lt;a<p></p>&gt;"
+cc a08de7f527b8541d2424c338d01aac0fbc7ee914ee56be67aef056e4b0093816 # shrinks to html = "a<span> </span><h1 />'"

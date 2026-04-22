@@ -284,10 +284,24 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
     let len = bytes.len();
 
     if memchr::memchr(b'<', bytes).is_none() {
-        return (
-            cleanup_whitespace(&decode_entities_in_str(html)).into_owned(),
-            Vec::new(),
-        );
+        let cleaned = cleanup_whitespace(&decode_entities_in_str(html)).into_owned();
+        let mut out = Vec::new();
+        if !cleaned.is_empty() {
+            let kind = if cleaned.len() == len {
+                SpanKind::Direct
+            } else {
+                SpanKind::EntityDecoded
+            };
+            out.push(PathSpan {
+                output_start: 0,
+                output_end: cleaned.len(),
+                source_start: 0,
+                source_end: len,
+                kind,
+                path: String::new(),
+            });
+        }
+        return (cleaned, out);
     }
 
     let mut pos = 0;
@@ -1485,11 +1499,33 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
     // Skip the entire tag-processing loop; just decode entities + cleanup.
     if memchr::memchr(b'<', bytes).is_none() {
         let decoded = decode_entities_in_str(html);
-        if options.strip_wiki_ref_markers {
+        let cleaned = if options.strip_wiki_ref_markers {
             let stripped = strip_wiki_ref_markers(&decoded);
-            return cleanup_whitespace(&stripped).into_owned();
+            cleanup_whitespace(&stripped).into_owned()
+        } else {
+            cleanup_whitespace(&decoded).into_owned()
+        };
+        if let Some(s) = spans.as_deref_mut() {
+            if !cleaned.is_empty() {
+                // The whole input produces the whole output. Byte counts
+                // match only when there were no entities, no whitespace
+                // collapse, and no trimming; otherwise downstream consumers
+                // cannot project output bytes onto source bytes.
+                let kind = if cleaned.len() == len {
+                    SpanKind::Direct
+                } else {
+                    SpanKind::EntityDecoded
+                };
+                s.push(Span {
+                    output_start: 0,
+                    output_end: cleaned.len(),
+                    source_start: 0,
+                    source_end: len,
+                    kind,
+                });
+            }
         }
-        return cleanup_whitespace(&decoded).into_owned();
+        return cleaned;
     }
 
     let mut pos = 0;
@@ -1833,14 +1869,16 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
         // Trailing trim: same on the other side.
         let trail_start = cleaned.trim_end().len();
 
+        let pre_bytes = text.as_bytes();
         if lead_trim > 0 || trail_start < cleaned.len() {
             // Shift the map to align with the trimmed output.
             // effective map is map[lead_trim..trail_start]
             let effective_map = &map[lead_trim..trail_start];
-            remap_spans(s, effective_map);
-            return cleaned[lead_trim..trail_start].to_string();
+            let trimmed = &cleaned[lead_trim..trail_start];
+            remap_spans(s, effective_map, pre_bytes, trimmed.as_bytes());
+            return trimmed.to_string();
         }
-        remap_spans(s, &map);
+        remap_spans(s, &map, pre_bytes, cleaned.as_bytes());
         return cleaned;
     }
 
@@ -1964,7 +2002,7 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
 /// `partition_point`. Spans that collapse entirely into whitespace are
 /// dropped. The caller may pass `map` truncated at the trim window, in
 /// which case spans outside that window are dropped or clamped.
-fn remap_spans(spans: &mut Vec<Span>, map: &[u32]) {
+fn remap_spans(spans: &mut Vec<Span>, map: &[u32], pre: &[u8], post: &[u8]) {
     spans.retain_mut(|span| {
         let pre_start = span.output_start as u32;
         let pre_end = span.output_end as u32;
@@ -1977,8 +2015,28 @@ fn remap_spans(spans: &mut Vec<Span>, map: &[u32]) {
         // post-cleanup output is shorter than the pre-cleanup source, so
         // byte-level interpolation would skew. Demote to EntityDecoded,
         // which documents that source bytes are not indexable byte-for-byte.
-        if span.kind == SpanKind::Direct && (pre_end - pre_start) as usize != new_end - new_start {
-            span.kind = SpanKind::EntityDecoded;
+        //
+        // Byte-count equality alone isn't sufficient: a whitespace run
+        // like ` \n` collapses to `\n`, which preserves the count but
+        // changes which byte value lives at each position. Verify the
+        // actual bytes match across the whole run before keeping Direct.
+        if span.kind == SpanKind::Direct {
+            let pre_len = (pre_end - pre_start) as usize;
+            let post_len = new_end - new_start;
+            let mut is_direct = pre_len == post_len;
+            if is_direct {
+                for i in 0..pre_len {
+                    let pi = (pre_start as usize) + i;
+                    let qi = new_start + i;
+                    if pre.get(pi) != post.get(qi) {
+                        is_direct = false;
+                        break;
+                    }
+                }
+            }
+            if !is_direct {
+                span.kind = SpanKind::EntityDecoded;
+            }
         }
         span.output_start = new_start;
         span.output_end = new_end;
