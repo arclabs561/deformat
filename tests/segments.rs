@@ -250,6 +250,110 @@ fn docx_segments_one_per_paragraph() {
 
 #[cfg(feature = "docx")]
 #[test]
+fn docx_segments_include_tables_with_text_as_html() {
+    use std::io::Write;
+    let xml = r#"<?xml version="1.0"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:r><w:t>Intro paragraph.</w:t></w:r></w:p>
+        <w:tbl>
+          <w:tblPr><w:tblStyle w:val="TableGrid"/></w:tblPr>
+          <w:tr>
+            <w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>Value</w:t></w:r></w:p></w:tc>
+          </w:tr>
+          <w:tr>
+            <w:tc><w:p><w:r><w:t>Alpha</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>1</w:t></w:r></w:p></w:tc>
+          </w:tr>
+          <w:tr>
+            <w:tc><w:p><w:r><w:t>Beta</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>2</w:t></w:r></w:p></w:tc>
+          </w:tr>
+        </w:tbl>
+        <w:p><w:r><w:t>After the table.</w:t></w:r></w:p>
+      </w:body>
+    </w:document>"#;
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("[Content_Types].xml", opts).unwrap();
+    write!(zip, r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#).unwrap();
+    zip.start_file("word/document.xml", opts).unwrap();
+    write!(zip, "{xml}").unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+
+    let segs = deformat::docx::extract_bytes_to_segments(&bytes).unwrap();
+    // Expect: intro, table, after.
+    let kinds: Vec<&str> = segs.iter().map(|s| s.type_name()).collect();
+    assert_eq!(kinds, vec!["NarrativeText", "Table", "NarrativeText"]);
+
+    let table = segs.iter().find(|s| s.type_name() == "Table").unwrap();
+    let data = table.data();
+    assert!(data.text.contains("Name"), "text: {:?}", data.text);
+    assert!(data.text.contains("Alpha"), "text: {:?}", data.text);
+    assert!(data.text.contains("Beta"), "text: {:?}", data.text);
+
+    let html = data
+        .metadata
+        .text_as_html
+        .as_deref()
+        .expect("table carries text_as_html");
+    assert!(html.starts_with("<table>"), "html: {html}");
+    assert!(html.ends_with("</table>"), "html: {html}");
+    assert_eq!(
+        html.matches("<tr>").count(),
+        3,
+        "three rows in html: {html}"
+    );
+    assert_eq!(html.matches("<td>").count(), 6, "six cells in html: {html}");
+    for expected in ["Name", "Value", "Alpha", "Beta"] {
+        assert!(
+            html.contains(expected),
+            "html must contain {expected}: {html}"
+        );
+    }
+}
+
+#[cfg(feature = "docx")]
+#[test]
+fn docx_table_with_special_chars_escapes_html() {
+    use std::io::Write;
+    let xml = r#"<?xml version="1.0"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:tbl>
+          <w:tr>
+            <w:tc><w:p><w:r><w:t>&lt;b&gt;bold&lt;/b&gt;</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>a &amp; b</w:t></w:r></w:p></w:tc>
+          </w:tr>
+        </w:tbl>
+      </w:body>
+    </w:document>"#;
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(buf);
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("[Content_Types].xml", opts).unwrap();
+    write!(zip, r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#).unwrap();
+    zip.start_file("word/document.xml", opts).unwrap();
+    write!(zip, "{xml}").unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+
+    let segs = deformat::docx::extract_bytes_to_segments(&bytes).unwrap();
+    let table = segs.iter().find(|s| s.type_name() == "Table").unwrap();
+    let html = table.data().metadata.text_as_html.as_deref().unwrap();
+    // Cell text was <b>bold</b> -- must be escaped in text_as_html.
+    assert!(
+        html.contains("&lt;b&gt;"),
+        "angle brackets must be escaped: {html}"
+    );
+    assert!(html.contains("&amp;"), "ampersands escaped: {html}");
+}
+
+#[cfg(feature = "docx")]
+#[test]
 fn docx_segments_empty_returns_empty_result() {
     use std::io::Write;
     let buf = std::io::Cursor::new(Vec::new());
