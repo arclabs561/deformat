@@ -592,18 +592,22 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
         }
     }
 
-    // Adjust for trim
-    let trimmed = text.trim_start();
-    let trim_offset = text.len() - trimmed.len();
-    if trim_offset > 0 {
+    // Adjust for trim on both sides: text.trim() removes leading AND trailing
+    // whitespace. Span output ranges must be rebased (shifted by the leading
+    // trim offset) and clamped to the new text length so callers indexing
+    // text[span.output_start..span.output_end] never go out of bounds.
+    let leading = text.len() - text.trim_start().len();
+    let trimmed = text.trim().to_string();
+    let new_len = trimmed.len();
+    if leading > 0 || new_len < text.len() {
         for span in &mut path_spans {
-            span.output_start = span.output_start.saturating_sub(trim_offset);
-            span.output_end = span.output_end.saturating_sub(trim_offset);
+            span.output_start = span.output_start.saturating_sub(leading).min(new_len);
+            span.output_end = span.output_end.saturating_sub(leading).min(new_len);
         }
         path_spans.retain(|s| s.output_start < s.output_end);
     }
 
-    (text.trim().to_string(), path_spans)
+    (trimmed, path_spans)
 }
 
 /// Build an XPath-like path string from the element stack.
