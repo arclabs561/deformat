@@ -170,6 +170,46 @@ fn extract(kind: &str, html: &str) -> String {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         }
+        "sentence" => {
+            // Sentence-density post-filter alone.
+            let segs = deformat::html::strip_to_segments(html);
+            deformat::html::filter_low_sentence_density(segs, 1.0)
+                .iter()
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        k if k.starts_with("sentence-") => {
+            // e.g. `sentence-2.0`
+            let cap: f32 = k.trim_start_matches("sentence-").parse().unwrap_or(1.0);
+            let segs = deformat::html::strip_to_segments(html);
+            deformat::html::filter_low_sentence_density(segs, cap)
+                .iter()
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        "triple" => {
+            // Full pipeline: link-density, then sentence-density, then boilerplate.
+            let segs = deformat::html::strip_to_segments_filtered(html, 0.45);
+            let segs = deformat::html::filter_low_sentence_density(segs, 1.0);
+            deformat::html::filter_boilerplate(segs, 40)
+                .iter()
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        k if k.starts_with("triple-") => {
+            // e.g. `triple-2.0` sets sentence-density cap at 2.0.
+            let cap: f32 = k.trim_start_matches("triple-").parse().unwrap_or(1.0);
+            let segs = deformat::html::strip_to_segments_filtered(html, 0.45);
+            let segs = deformat::html::filter_low_sentence_density(segs, cap);
+            deformat::html::filter_boilerplate(segs, 40)
+                .iter()
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
         #[cfg(feature = "readability")]
         "readable" => deformat::extract_readable(html, None).text,
         other => panic!("unknown extractor: {other}"),
