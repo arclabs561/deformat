@@ -709,3 +709,37 @@ fn spans_survive_whitespace_collapse() {
         "source contains world: {source:?}"
     );
 }
+
+// =============================================================================
+// Regression: trailing-whitespace trim in strip_to_text_with_paths
+// =============================================================================
+
+#[test]
+fn path_spans_indexable_after_trailing_whitespace_trim() {
+    // Regression: strip_to_text_with_paths used to only rebase spans for
+    // leading-whitespace trimming, not trailing. With trailing ws in the
+    // source, spans could end up with output_end > trimmed_text.len(),
+    // causing caller panics on text[os..oe].
+    use deformat::html::strip_to_text_with_paths;
+    let cases = [
+        "<article><p>Before <a>link</a> after </p></article>",
+        "<p>   hello world   </p>",
+        "<div><p>Leading trailing  </p></div>",
+        "<p>x  </p>",
+    ];
+    for html in cases {
+        let (text, spans) = strip_to_text_with_paths(html);
+        for s in &spans {
+            assert!(
+                s.output_end <= text.len(),
+                "span out {}..{} escapes trimmed text (len {}) for html {:?}",
+                s.output_start,
+                s.output_end,
+                text.len(),
+                html
+            );
+            // And indexing must not panic.
+            let _ = &text[s.output_start..s.output_end];
+        }
+    }
+}
