@@ -152,33 +152,69 @@ and documentation are competitive; commerce / forum / listing pages
 over-include boilerplate. Reproduce with `scripts/fetch_wcxb.py` +
 the `bench_wcxb` example.
 
-`html::filter_boilerplate` drops short label-like segments from
-`strip_to_segments` output. Measured delta on the same WCXB dev split:
-overall `without%` 56.5 → 64.3 (+7.8pp boilerplate removal), precision
-+1.1pp, recall −1.5pp. Opt in by calling
-`filter_boilerplate(segs, 40)` after `strip_to_segments`.
+Three composable filters sit on top of `strip_to_segments`:
 
-`html::strip_to_segments_filtered(html, link_ratio_cap)` applies a
-Trafilatura-style link-density pass: blocks whose output text is
-mostly inside `<a>` elements are dropped. Measured at `cap=0.45`:
-overall F1 0.740 → **0.748**, precision +2.2pp, recall −1.4pp.
-Per-type: article +1.2pp, forum +1.4pp, service +1.6pp; listing
-regresses (−3.4pp) because legitimate listing pages are link-heavy.
-Choose the threshold that fits your corpus — the helper sweeps in
-`examples/bench_wcxb.rs`.
+- `html::strip_to_segments_filtered(html, link_ratio_cap)` — drops
+  blocks whose output text is mostly inside `<a>` elements
+  (Trafilatura-style link density).
+- `html::filter_low_sentence_density(segments, min_per_100_words)` —
+  drops `NarrativeText` / `UncategorizedText` whose sentence count
+  per 100 words falls below the floor. Catches tag-cloud paragraphs
+  that link-density misses because they aren't wrapped in anchors.
+  Preserves structural kinds (Title, Header, ListItem, Table, …) and
+  short blocks (<15 words).
+- `html::filter_boilerplate(segments, min_chars)` — drops short
+  label-like fragments.
+
+Compose them — link-density (structural) → sentence-density
+(content-shape) → boilerplate (char-count). Measured on WCXB dev
+split (1,495 pages):
+
+| Pipeline | F1 | P | R | without% |
+|---|---|---|---|---|
+| `strip_to_text` (baseline) | 0.740 | 0.675 | 0.957 | 56.5% |
+| + link-density (cap 0.45) | 0.748 | 0.696 | 0.944 | 64.6% |
+| + sentence-density (1.0) | 0.740 | 0.678 | 0.952 | 59.2% |
+| **link + sentence + boilerplate** | **0.765** | **0.739** | 0.909 | **78.2%** |
+
+The triple pipeline lifts article F1 0.851 → 0.876, forum 0.504 →
+0.552, product 0.438 → 0.489, service 0.730 → 0.773. Listing
+regresses −2.6pp (link-heavy pages). Choose thresholds that fit your
+corpus — `examples/bench_wcxb.rs` sweeps both caps.
+
+### DOCX tables
+
+`docx::extract_to_segments` emits one segment per paragraph; `<w:tbl>`
+tables become `Segment::Table` with `metadata.text_as_html` populated
+from a normalized `<table><tr><td>…</td></tr></table>` shape. Cell
+text is HTML-escaped so `<`, `>`, `&`, `"` round-trip safely through
+JSON.
+
+### Source offset tracking
+
+`html::strip_to_text_with_spans` returns the cleaned text plus a
+`SpanMap` that maps output byte ranges back to source byte ranges.
+`strip_to_text_with_paths` adds an XPath-like path per span
+(`article/p[2]`). Each span carries a `SpanKind`: `Direct` when output
+bytes equal source bytes, `EntityDecoded` when entities or whitespace
+cleanup changed them, `Synthetic` when the text has no literal
+counterpart in source (e.g. `<img alt>`).
 
 ## Known limitations
 
 Worth calling out so you can pick the right tool for the job:
 
-- **Article-extraction precision**: see the WCXB table above. Trafilatura-class
-  Python extractors reach F1 ≈ 0.94 on articles via text-density / link-density
-  scoring; deformat has not implemented that yet. If you need highest precision
-  for HTML-only pipelines, see `trafilatura`, `rs-trafilatura`, or `justext`
-  on crates.io.
-- **Table structure in PDF and DOCX is flattened to text**. Row/column
-  relationships are lost. No Rust extractor currently reconstructs table structure
-  from PDF line drawings; DOCX tables are emitted as tab-separated rows.
+- **Article-extraction precision**: the baseline `strip_to_text`
+  hits F1 ≈ 0.85 on articles; the three-filter pipeline above pushes
+  it to 0.876. Trafilatura-class Python extractors reach F1 ≈ 0.94
+  via deeper text-density scoring and DOM-aware heuristics. If you
+  need that last ceiling, compose deformat with `trafilatura`,
+  `rs-trafilatura`, or `justext`.
+- **Table structure**: PDF tables are flattened to text (no row/column
+  reconstruction from line drawings). DOCX tables via
+  `extract_to_segments` come through as `Segment::Table` with
+  `metadata.text_as_html` preserving the grid shape; the plain
+  `extract_file` / `extract_bytes` path still flattens to text.
 - **Default charset is UTF-8**. Non-UTF-8 HTML (legacy Windows-1252, CJK)
   needs the `encoding_rs` feature — call `detect::decode_bytes(bytes, "utf-8")`
   before handing the result to `strip_to_text`. BOM and `<meta charset>`
