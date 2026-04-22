@@ -3,6 +3,54 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## 0.12.0 — 2026-04-22
+
+### Fixed
+- `strip_to_text_with_paths`: span `output_end` was rebased only for
+  leading-whitespace trim, not trailing. With trailing whitespace in
+  source, `output_end` could exceed the returned trimmed text length
+  and panic callers on `text[span.output_start..span.output_end]`.
+  Spans are now clamped to the trimmed output length on both sides.
+- `remap_spans` demoted `SpanKind::Direct` → `EntityDecoded` only on
+  byte-count changes. Whitespace runs like `" \n"` collapse to `"\n"`
+  with the count preserved but the byte value swapped, leaving a
+  Direct span whose output `\n` claimed byte-exact correspondence to
+  source `' '`. Now also compares bytes and demotes on content
+  mismatch. Surfaced by proptest on `"a<span> </span><h1 />'"`.
+
+### Added
+- `strip_to_text_with_spans` and `strip_to_text_with_paths` now emit a
+  single whole-input span on the plain-text fast path (input with no
+  `<`). Kind is `Direct` when output bytes equal source, else
+  `EntityDecoded`. Previously the fast path returned an empty
+  `SpanMap`, which was API-inconsistent with the tagged path.
+- `html::filter_low_sentence_density(segments, min_sentences_per_100_words)`
+  drops `NarrativeText` / `UncategorizedText` segments whose
+  `(punctuation count) / (word count) * 100` falls below the floor.
+  Catches tag-cloud paragraphs that the link-density filter misses
+  because they aren't wrapped in anchors. Preserves Title, Header,
+  Footer, ListItem, Table, CodeSnippet, Formula, Image, FigureCaption,
+  PageBreak, and short blocks under 15 words.
+- DOCX tables emit `Segment::Table` with `metadata.text_as_html`
+  populated from a normalized `<table><tr><td>…</td></tr></table>`
+  representation that mirrors the HTML pre-pass. HTML-sensitive
+  characters in cell text (`<`, `>`, `&`, `"`) are escaped.
+
+### Tests
+- `tests/spanmap.rs` grew from 36 → 66 tests: regression guards for
+  the 0.11.0 `</a>` path-leak, sibling indexing in paths, UTF-8
+  char-boundary safety, per-`SpanKind` source_position semantics,
+  whitespace-collapse demotion, self-closing tags, unclosed tags,
+  multibyte text, trim-end OOB, and more.
+- `tests/proptest.rs` grew from 22 → 32 tests: invariants for span
+  bounds, sort order, non-overlap, source_range monotonicity,
+  Direct first-byte byte-exactness, and plain-strip output parity.
+- `tests/segments.rs` grew from 22 → 29 tests: DOCX table extraction,
+  escaped special chars in `text_as_html`, sentence-density filter
+  composing with link-density and boilerplate filters.
+- Total `cargo test --all-features --all-targets`: 467 (0.10.0) →
+  558 passing. 14 doc-tests.
+
 ## 0.11.0 — 2026-04-18
 
 ### Fixed
