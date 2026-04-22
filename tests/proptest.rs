@@ -567,3 +567,208 @@ proptest! {
         );
     }
 }
+
+// =============================================================================
+// SpanMap structural invariants
+// =============================================================================
+
+proptest! {
+    /// Every span's [output_start, output_end) is a valid byte range in text.
+    /// Every span's [source_start, source_end) is a valid byte range in html.
+    /// Both pairs sit on UTF-8 char boundaries.
+    #[test]
+    fn spans_have_valid_bounds_and_utf8_boundaries(html in arb_html_fragment()) {
+        let (text, spans) = deformat::html::strip_to_text_with_spans(&html);
+        for (i, s) in spans.iter().enumerate() {
+            prop_assert!(s.output_start <= s.output_end, "span {i} output inverted");
+            prop_assert!(s.source_start <= s.source_end, "span {i} source inverted");
+            prop_assert!(s.output_end <= text.len(), "span {i} output OOB");
+            prop_assert!(s.source_end <= html.len(), "span {i} source OOB");
+            prop_assert!(text.is_char_boundary(s.output_start), "span {i} output_start {} not on char boundary", s.output_start);
+            prop_assert!(text.is_char_boundary(s.output_end), "span {i} output_end {} not on char boundary", s.output_end);
+            prop_assert!(html.is_char_boundary(s.source_start), "span {i} source_start {} not on char boundary", s.source_start);
+            prop_assert!(html.is_char_boundary(s.source_end), "span {i} source_end {} not on char boundary", s.source_end);
+        }
+    }
+}
+
+proptest! {
+    /// Spans are in output order and do not overlap each other in output space.
+    #[test]
+    fn spans_are_sorted_and_non_overlapping(html in arb_html_fragment()) {
+        let (_text, spans) = deformat::html::strip_to_text_with_spans(&html);
+        let mut prev_end: usize = 0;
+        for (i, s) in spans.iter().enumerate() {
+            prop_assert!(s.output_start >= prev_end, "span {i} output_start {} < prev_end {prev_end}", s.output_start);
+            prev_end = s.output_end;
+        }
+    }
+}
+
+proptest! {
+    /// Widening an output-range query can never yield a strictly narrower
+    /// source range (union is monotone under widening).
+    #[test]
+    fn source_range_is_monotone_under_widening(html in arb_html_fragment()) {
+        let (text, spans) = deformat::html::strip_to_text_with_spans(&html);
+        if text.len() < 4 {
+            return Ok(());
+        }
+        let mid = text.len() / 2;
+        let narrow = spans.source_range(mid, mid + 1);
+        let wide = spans.source_range(mid.saturating_sub(1), mid + 2);
+        if let (Some(n), Some(w)) = (narrow, wide) {
+            prop_assert!(w.0 <= n.0, "wide.0 {} > narrow.0 {}", w.0, n.0);
+            prop_assert!(w.1 >= n.1, "wide.1 {} < narrow.1 {}", w.1, n.1);
+        }
+    }
+}
+
+proptest! {
+    /// source_position on any byte in a span's output range returns Some.
+    #[test]
+    fn every_covered_output_byte_has_source_position(html in arb_html_fragment()) {
+        let (_text, spans) = deformat::html::strip_to_text_with_spans(&html);
+        // Sample at most 32 spans to keep proptest fast.
+        for s in spans.iter().take(32) {
+            if s.output_end - s.output_start > 64 {
+                continue;
+            }
+            for p in s.output_start..s.output_end {
+                prop_assert!(
+                    spans.source_position(p).is_some(),
+                    "byte {p} in span {}..{} has no source position",
+                    s.output_start,
+                    s.output_end
+                );
+            }
+        }
+    }
+}
+
+proptest! {
+    /// For Direct spans, byte-level interpolation maps output byte to the
+    /// corresponding source byte. In particular, the first byte of the output
+    /// run must equal the first byte of the source run.
+    #[test]
+    fn direct_spans_first_byte_matches_source(html in arb_html_fragment()) {
+        use deformat::html::SpanKind;
+        let (text, spans) = deformat::html::strip_to_text_with_spans(&html);
+        for s in spans.iter().take(32) {
+            if s.kind != SpanKind::Direct {
+                continue;
+            }
+            if s.output_end <= s.output_start || s.source_end <= s.source_start {
+                continue;
+            }
+            if s.output_start >= text.len() || s.source_start >= html.len() {
+                continue;
+            }
+            let text_byte = text.as_bytes()[s.output_start];
+            let html_byte = html.as_bytes()[s.source_start];
+            prop_assert_eq!(
+                text_byte, html_byte,
+                "Direct span output byte {} != source byte {} at span {}..{} / src {}..{}",
+                text_byte, html_byte,
+                s.output_start, s.output_end,
+                s.source_start, s.source_end
+            );
+        }
+    }
+}
+
+proptest! {
+    /// strip_to_text_with_spans produces the same text as strip_to_text.
+    #[test]
+    fn spans_output_matches_plain_strip(html in arb_html_fragment()) {
+        let plain = deformat::html::strip_to_text(&html);
+        let (spanned, _) = deformat::html::strip_to_text_with_spans(&html);
+        prop_assert_eq!(plain, spanned);
+    }
+}
+
+proptest! {
+    /// source_range(0, text.len()) returns either None (empty) or a range
+    /// that lies within [0, html.len()].
+    #[test]
+    fn full_output_range_maps_into_source(html in arb_html_fragment()) {
+        let (text, spans) = deformat::html::strip_to_text_with_spans(&html);
+        if text.is_empty() {
+            return Ok(());
+        }
+        if let Some((ss, se)) = spans.source_range(0, text.len()) {
+            prop_assert!(se <= html.len(), "source_end {se} OOB ({} bytes html)", html.len());
+            prop_assert!(ss <= se, "inverted source range {ss}..{se}");
+        }
+    }
+}
+
+proptest! {
+    /// Every PathSpan from strip_to_text_with_paths has a non-empty path when
+    /// there is any surrounding tag in the source. Paths never contain empty
+    /// components (e.g., "//").
+    #[test]
+    fn path_spans_have_well_formed_paths(html in arb_html_fragment()) {
+        let (_text, spans) = deformat::html::strip_to_text_with_paths(&html);
+        for s in &spans {
+            prop_assert!(!s.path.contains("//"), "path contains empty component: {:?}", s.path);
+            for component in s.path.split('/').filter(|c| !c.is_empty()) {
+                // Components are either a bare tag name or tag[N].
+                let tag_part = component.split('[').next().unwrap();
+                prop_assert!(
+                    !tag_part.is_empty() && tag_part.bytes().all(|b| b.is_ascii_alphanumeric()),
+                    "malformed path component {:?} in path {:?}",
+                    component, s.path
+                );
+            }
+        }
+    }
+}
+
+proptest! {
+    /// Closing inline tags never leave their own name as the leaf of the next
+    /// text span's path. Regression guard for the 0.11.0 bug at src/html.rs:509.
+    /// Uses a distinctive `TAIL_` prefix so the find cannot collide with the
+    /// inner content.
+    #[test]
+    fn closing_inline_does_not_leak_into_following_path(
+        inner in "[a-z]{1,10}",
+        tail_suffix in "[a-z]{1,10}",
+        tag in prop::sample::select(vec!["a", "b", "i", "em", "strong", "span", "code", "u"])
+    ) {
+        let marker = format!("TAIL{tail_suffix}");
+        let html = format!("<article><p>Before <{tag}>{inner}</{tag}> {marker}</p></article>");
+        let (text, spans) = deformat::html::strip_to_text_with_paths(&html);
+        let span = spans
+            .iter()
+            .find(|s| text[s.output_start..s.output_end].contains(&marker));
+        if let Some(span) = span {
+            let leaf = span.path.rsplit('/').next().unwrap_or("");
+            let leaf_tag = leaf.split('[').next().unwrap_or("");
+            prop_assert_ne!(
+                leaf_tag, tag,
+                "closing <{}> leaked as leaf in path {:?} for marker {:?}",
+                tag, span.path, marker
+            );
+        }
+    }
+}
+
+proptest! {
+    /// For plain ASCII text inside a single <p>, the concatenated Direct
+    /// source slices of all spans must contain every word from the input.
+    /// This is a soft round-trip property.
+    #[test]
+    fn direct_spans_preserve_ascii_words(word in "[a-zA-Z]{3,12}") {
+        let html = format!("<p>{word}</p>");
+        let (_text, spans) = deformat::html::strip_to_text_with_spans(&html);
+        let concat: String = spans
+            .iter()
+            .map(|s| &html[s.source_start..s.source_end])
+            .collect();
+        prop_assert!(
+            concat.contains(&word),
+            "concatenated source slices must contain input word"
+        );
+    }
+}

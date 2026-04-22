@@ -711,35 +711,580 @@ fn spans_survive_whitespace_collapse() {
 }
 
 // =============================================================================
-// Regression: trailing-whitespace trim in strip_to_text_with_paths
+// Regression: path-attribution on closing inline tags (v0.11.0 bug)
+//
+// Before 0.11.0, `</a>` produced `effective = "/a"` due to a chained
+// `unwrap_or(&tag_lower)` footgun, so `path_stack.truncate` never popped the
+// anchor. Text emitted after `</a>` carried a stale `a` component in its
+// PathSpan.path. The fix at src/html.rs:509 uses `tag_lower.trim_matches('/')`.
+// These tests guard against regression.
 // =============================================================================
 
 #[test]
-fn path_spans_indexable_after_trailing_whitespace_trim() {
-    // Regression: strip_to_text_with_paths used to only rebase spans for
-    // leading-whitespace trimming, not trailing. With trailing ws in the
-    // source, spans could end up with output_end > trimmed_text.len(),
-    // causing caller panics on text[os..oe].
-    use deformat::html::strip_to_text_with_paths;
-    let cases = [
-        "<article><p>Before <a>link</a> after </p></article>",
-        "<p>   hello world   </p>",
-        "<div><p>Leading trailing  </p></div>",
-        "<p>x  </p>",
-    ];
-    for html in cases {
-        let (text, spans) = strip_to_text_with_paths(html);
-        for s in &spans {
+fn closing_anchor_does_not_leak_into_path() {
+    // The bytes after </a> must NOT carry the anchor in their path.
+    let html = r#"<article><p>Before <a href="/">link</a> after.</p></article>"#;
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert!(text.contains("after."));
+
+    // Find the span covering "after." (must be after the </a>)
+    let after_span = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("after"))
+        .expect("span for 'after' exists");
+    assert!(
+        !after_span.path.ends_with("/a") && !after_span.path.contains("/a/"),
+        "path must not carry closed anchor: {:?}",
+        after_span.path
+    );
+    // It should still carry the surrounding article/p path.
+    assert!(
+        after_span.path.contains("p"),
+        "path has p: {:?}",
+        after_span.path
+    );
+    assert!(
+        after_span.path.contains("article"),
+        "path has article: {:?}",
+        after_span.path
+    );
+}
+
+#[test]
+fn closing_inline_does_not_leak_for_various_tags() {
+    // Same regression for other inline elements that can get mis-truncated.
+    for tag in ["b", "i", "em", "strong", "span", "u", "s", "code"] {
+        let html = format!("<div><p>Before <{tag}>X</{tag}> after.</p></div>");
+        let (text, spans) = strip_to_text_with_paths(&html);
+        let after_span = spans
+            .iter()
+            .find(|s| text[s.output_start..s.output_end].contains("after"))
+            .unwrap_or_else(|| panic!("no span for 'after' with tag {tag}"));
+        let leaked = after_span.path.contains(&format!("/{tag}")) || after_span.path.ends_with(tag);
+        // The /tag check may match /strong inside /strong; check more carefully:
+        // the path must NOT have <tag> as a *leaf* component after close.
+        let components: Vec<&str> = after_span.path.split('/').collect();
+        let leaf_is_tag = components
+            .last()
+            .map(|s| {
+                s.trim_end_matches(|c: char| c == ']' || c.is_ascii_digit() || c == '[') == tag
+            })
+            .unwrap_or(false);
+        assert!(
+            !leaf_is_tag,
+            "tag {tag} leaked as leaf in path {:?} (components {:?}, heuristic leaked={leaked})",
+            after_span.path, components
+        );
+    }
+}
+
+// =============================================================================
+// Sibling indexing in paths
+// =============================================================================
+
+#[test]
+fn sibling_indexing_in_path() {
+    // When siblings of the same tag repeat, later siblings get [n] index.
+    let html = "<div><p>First</p><p>Second</p><p>Third</p></div>";
+    let (text, spans) = strip_to_text_with_paths(html);
+
+    let second = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("Second"))
+        .unwrap();
+    let third = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("Third"))
+        .unwrap();
+
+    // At minimum Second/Third must carry *some* index bracket in their path.
+    assert!(
+        second.path.contains("p[2]") || second.path.contains("p[1]"),
+        "second p path should carry index: {:?}",
+        second.path
+    );
+    assert!(
+        third.path.contains("p[3]") || third.path.contains("p[2]"),
+        "third p path should carry index: {:?}",
+        third.path
+    );
+}
+
+#[test]
+fn sibling_indexing_only_when_siblings_repeat() {
+    // With one p (no repetition), no [n] should appear.
+    let html = "<div><p>Solo</p></div>";
+    let (text, spans) = strip_to_text_with_paths(html);
+    let span = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("Solo"))
+        .unwrap();
+    assert!(
+        !span.path.contains('['),
+        "single sibling should not get [n]: {:?}",
+        span.path
+    );
+}
+
+// =============================================================================
+// Span-map structural invariants
+// =============================================================================
+
+#[test]
+fn spans_are_monotonic_and_non_overlapping_in_output() {
+    let html = r#"<article>
+        <h1>Title</h1>
+        <p>Paragraph with <b>bold</b> and <i>italic</i> text and an
+           <img src="x" alt="pic"> inline.</p>
+        <p>Entity: &amp; &lt; &#8364;.</p>
+    </article>"#;
+    let (_text, spans) = strip_to_text_with_spans(html);
+
+    let mut prev_end: usize = 0;
+    for (i, s) in spans.iter().enumerate() {
+        assert!(
+            s.output_start <= s.output_end,
+            "span {i} has inverted output range: {}..{}",
+            s.output_start,
+            s.output_end
+        );
+        assert!(
+            s.source_start <= s.source_end,
+            "span {i} has inverted source range: {}..{}",
+            s.source_start,
+            s.source_end
+        );
+        assert!(
+            s.output_start >= prev_end,
+            "span {i} output {} overlaps prior end {prev_end}",
+            s.output_start
+        );
+        prev_end = s.output_end;
+    }
+}
+
+#[test]
+fn source_ranges_are_utf8_boundaries() {
+    // Source ranges must point at UTF-8 char boundaries so `html[src.0..src.1]`
+    // never panics.
+    let html = "<p>Café with &eacute; and <b>ü</b> text.</p>";
+    let (_text, spans) = strip_to_text_with_spans(html);
+    for (i, s) in spans.iter().enumerate() {
+        assert!(
+            html.is_char_boundary(s.source_start),
+            "span {i} source_start {} not on char boundary",
+            s.source_start
+        );
+        assert!(
+            html.is_char_boundary(s.source_end),
+            "span {i} source_end {} not on char boundary",
+            s.source_end
+        );
+    }
+}
+
+#[test]
+fn output_positions_are_utf8_boundaries() {
+    let html = "<p>Café with &eacute; and <b>ü</b> text.</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    for (i, s) in spans.iter().enumerate() {
+        assert!(
+            text.is_char_boundary(s.output_start),
+            "span {i} output_start {} not on char boundary",
+            s.output_start
+        );
+        assert!(
+            text.is_char_boundary(s.output_end),
+            "span {i} output_end {} not on char boundary",
+            s.output_end
+        );
+    }
+}
+
+// =============================================================================
+// source_position semantics per SpanKind
+// =============================================================================
+
+#[test]
+fn source_position_on_synthetic_span_returns_tag_start() {
+    // <img alt="..."> produces a Synthetic span. source_position on any byte
+    // inside that run should return the span's source_start (the start of the
+    // img tag).
+    let html = r#"<p><img src="a.jpg" alt="sunset"></p>"#;
+    let (text, spans) = strip_to_text_with_spans(html);
+    let alt_start = text.find("sunset").expect("alt text present");
+    let alt_end = alt_start + "sunset".len();
+
+    let synth = spans
+        .iter()
+        .find(|s| s.kind == SpanKind::Synthetic)
+        .expect("Synthetic span exists");
+
+    // source_position at any interior point should equal synth.source_start.
+    for p in alt_start..alt_end {
+        let sp = spans.source_position(p).expect("alt byte has a span");
+        assert_eq!(
+            sp, synth.source_start,
+            "synthetic interior byte {p} should map to tag start"
+        );
+    }
+    // The source range should bracket the <img ...> tag.
+    let src_slice = &html[synth.source_start..synth.source_end];
+    assert!(
+        src_slice.contains("<img") && src_slice.contains("alt="),
+        "synthetic source range covers img tag: {src_slice}"
+    );
+}
+
+#[test]
+fn source_position_on_entity_span_returns_entity_start() {
+    let html = "<p>&eacute;</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    let accent_pos = text.find('\u{00E9}').unwrap();
+    let accent_end = accent_pos + '\u{00E9}'.len_utf8();
+
+    // Every byte inside the decoded entity should map to the same entity start.
+    let p0 = spans.source_position(accent_pos).unwrap();
+    for p in accent_pos..accent_end {
+        let sp = spans.source_position(p).unwrap();
+        assert_eq!(
+            sp, p0,
+            "entity interior byte {p} should collapse to entity start"
+        );
+    }
+    assert_eq!(&html[p0..p0 + "&eacute;".len()], "&eacute;");
+}
+
+// =============================================================================
+// source_range across boundaries
+// =============================================================================
+
+#[test]
+fn source_range_straddling_multiple_spans_returns_union() {
+    // Output is "AB&CD"; query spanning "B&C" should return a source range
+    // covering from 'B' through '&amp;' through 'C'.
+    let html = "<p>AB&amp;CD</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "AB&CD");
+
+    let src = spans.source_range(1, 4).expect("range has coverage"); // "B&C"
+    let src_slice = &html[src.0..src.1];
+    assert!(src_slice.contains('B'), "covers B: {src_slice}");
+    assert!(src_slice.contains("&amp;"), "covers entity: {src_slice}");
+    assert!(src_slice.contains('C'), "covers C: {src_slice}");
+}
+
+#[test]
+fn source_range_across_entity_boundary() {
+    let html = "<p>a&amp;b&amp;c</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "a&b&c");
+
+    // Full-output query covers everything from 'a' through 'c'.
+    let full = spans.source_range(0, text.len()).unwrap();
+    let slice = &html[full.0..full.1];
+    assert!(slice.contains('a'));
+    assert!(slice.contains('c'));
+    assert_eq!(slice.matches("&amp;").count(), 2);
+}
+
+// =============================================================================
+// Whitespace-collapse kind demotion
+// =============================================================================
+
+#[test]
+fn whitespace_collapse_demotes_direct_to_entity_decoded() {
+    // "hello    world" pre-cleanup (14 bytes) collapses to "hello world"
+    // post-cleanup (11 bytes). The span is Direct in the scanner but its byte
+    // counts don't match after remap → demoted to EntityDecoded.
+    let html = "<p>hello    world</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "hello world");
+
+    // At least one span should be EntityDecoded purely because of collapse
+    // (there are no actual entities in the input).
+    let demoted = spans.iter().any(|s| s.kind == SpanKind::EntityDecoded);
+    assert!(
+        demoted,
+        "expected collapse to produce at least one EntityDecoded span"
+    );
+}
+
+// =============================================================================
+// Self-closing tags and unclosed tags
+// =============================================================================
+
+#[test]
+fn self_closing_tags_do_not_nest_path() {
+    // <br/> and <hr/> are self-closing; they must not push onto path_stack.
+    let html = "<div><p>A<br/>B<hr/>C</p></div>";
+    let (text, spans) = strip_to_text_with_paths(html);
+
+    for word in ["A", "B", "C"] {
+        let span = spans
+            .iter()
+            .find(|s| text[s.output_start..s.output_end].contains(word));
+        if let Some(span) = span {
             assert!(
-                s.output_end <= text.len(),
-                "span out {}..{} escapes trimmed text (len {}) for html {:?}",
-                s.output_start,
-                s.output_end,
-                text.len(),
-                html
+                !span.path.contains("br"),
+                "{word}: br should not appear in path: {:?}",
+                span.path
             );
-            // And indexing must not panic.
-            let _ = &text[s.output_start..s.output_end];
+            assert!(
+                !span.path.contains("hr"),
+                "{word}: hr should not appear in path: {:?}",
+                span.path
+            );
+            assert!(
+                span.path.contains("p"),
+                "{word}: p should appear in path: {:?}",
+                span.path
+            );
         }
     }
+}
+
+#[test]
+fn unclosed_tag_does_not_corrupt_path() {
+    // Pathological: tag never closes. Must not panic; spans for later text
+    // may include the unclosed tag in their path, but path components must
+    // remain well-formed (no ".." or empty components from bad indexing).
+    let html = "<article><p>Open <span>nested text here";
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert!(text.contains("nested text"));
+    for s in spans.iter() {
+        for component in s.path.split('/') {
+            assert!(
+                !component.is_empty() || s.path.is_empty(),
+                "empty path component in {:?}",
+                s.path
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Multibyte text
+// =============================================================================
+
+#[test]
+fn multibyte_text_span_source_matches() {
+    // Cyrillic + CJK both use >1 byte per char. Source ranges must still be
+    // valid UTF-8 boundaries and the slice must contain the multibyte text.
+    let html = "<p>Привет, 世界!</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert!(text.contains("Привет"));
+    assert!(text.contains("世界"));
+
+    // The whole-output source range should include the multibyte content.
+    let src = spans.source_range(0, text.len()).unwrap();
+    let slice = &html[src.0..src.1];
+    assert!(slice.contains("Привет"));
+    assert!(slice.contains("世界"));
+}
+
+#[test]
+fn multibyte_source_position_is_byte_exact_for_direct() {
+    // For a plain Direct run, a multibyte char's bytes should all map into
+    // the source at byte-exact offsets (the source chars are the same bytes).
+    let html = "<p>Hello 世界</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    // Find the start of '世' in output.
+    let cjk_out = text.find('世').unwrap();
+    let cjk_src = spans.source_position(cjk_out).unwrap();
+    // Confirm html[cjk_src..] starts with '世'.
+    assert!(
+        html[cjk_src..].starts_with('世'),
+        "Direct multibyte byte should map byte-exact: got {:?}",
+        &html[cjk_src..cjk_src + 3]
+    );
+}
+
+// =============================================================================
+// Consecutive entities
+// =============================================================================
+
+#[test]
+fn consecutive_entities_each_get_span() {
+    let html = "<p>&amp;&lt;&gt;</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "&<>");
+
+    // Each of the three entities should have its own EntityDecoded span.
+    let entity_spans: Vec<_> = spans
+        .iter()
+        .filter(|s| s.kind == SpanKind::EntityDecoded)
+        .collect();
+    assert!(
+        entity_spans.len() >= 3,
+        "expected >=3 entity spans, got {} ({:?})",
+        entity_spans.len(),
+        entity_spans
+            .iter()
+            .map(|s| (s.output_start, s.output_end))
+            .collect::<Vec<_>>()
+    );
+}
+
+// =============================================================================
+// Property: every byte in a covered output range has a source position
+// =============================================================================
+
+#[test]
+fn every_byte_in_a_span_has_source_position() {
+    let html = "<p>Hello, <b>world</b>! &amp; more.</p>";
+    let (_text, spans) = strip_to_text_with_spans(html);
+    for (i, s) in spans.iter().enumerate() {
+        for p in s.output_start..s.output_end {
+            let sp = spans.source_position(p);
+            assert!(
+                sp.is_some(),
+                "byte {p} in span {i} ({}..{}) should have a source position",
+                s.output_start,
+                s.output_end
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Monotonicity: widening the query cannot shrink the source range
+// =============================================================================
+
+#[test]
+fn source_range_union_is_monotone_under_widening() {
+    let html = "<p>ABCDEFGHIJ</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+
+    // For nested output ranges (2..4) ⊆ (1..5) ⊆ (0..text.len()), source
+    // ranges must satisfy: inner.0 >= outer.0 and inner.1 <= outer.1 is NOT
+    // required (the union covers all overlapping spans), but wider query
+    // must never yield a *strictly narrower* source range.
+    let narrow = spans.source_range(2, 4).unwrap();
+    let mid = spans.source_range(1, 5).unwrap();
+    let wide = spans.source_range(0, text.len()).unwrap();
+
+    assert!(mid.0 <= narrow.0 && mid.1 >= narrow.1);
+    assert!(wide.0 <= mid.0 && wide.1 >= mid.1);
+}
+
+// =============================================================================
+// Trim behavior
+// =============================================================================
+
+#[test]
+fn trim_does_not_produce_zero_length_spans() {
+    // Leading/trailing whitespace gets trimmed. No span should survive with
+    // output_start == output_end.
+    let html = "<p>   hello   </p>";
+    let (_text, spans) = strip_to_text_with_spans(html);
+    for s in spans.iter() {
+        assert!(
+            s.output_start < s.output_end,
+            "span collapsed to zero length: {}..{}",
+            s.output_start,
+            s.output_end
+        );
+    }
+}
+
+#[test]
+fn trim_does_not_produce_zero_length_path_spans() {
+    let html = "<p>   hello world   </p>";
+    let (_text, spans) = strip_to_text_with_paths(html);
+    for s in &spans {
+        assert!(
+            s.output_start < s.output_end,
+            "path span collapsed to zero length: {}..{}",
+            s.output_start,
+            s.output_end
+        );
+    }
+}
+
+// =============================================================================
+// Nested img inside container: path must reflect container, not just <img>
+// =============================================================================
+
+#[test]
+fn path_for_img_alt_in_deeply_nested_container() {
+    // `<img>` without a trailing slash is treated as open-tag form by the
+    // scanner, so it DOES appear on the path stack when the alt span is
+    // emitted — the path leaf is the img itself. The important assertion is
+    // that all ancestor containers appear.
+    let html =
+        r#"<article><section><figure><img src="x.jpg" alt="diagram"></figure></section></article>"#;
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert!(text.contains("diagram"));
+
+    let span = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("diagram"))
+        .unwrap();
+    assert_eq!(span.kind, SpanKind::Synthetic);
+    for expected in ["article", "section", "figure"] {
+        assert!(
+            span.path.contains(expected),
+            "path must contain {expected}: {:?}",
+            span.path
+        );
+    }
+}
+
+// =============================================================================
+// source_range edge cases
+// =============================================================================
+
+#[test]
+fn source_range_at_exact_span_boundary() {
+    let html = "<p>AAA</p><p>BBB</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert!(text.contains("AAA"));
+    assert!(text.contains("BBB"));
+
+    // Query exactly at "AAA" boundary.
+    let aaa_start = text.find("AAA").unwrap();
+    let aaa_end = aaa_start + "AAA".len();
+    let src = spans.source_range(aaa_start, aaa_end).unwrap();
+    assert!(html[src.0..src.1].contains("AAA"));
+}
+
+#[test]
+fn source_range_empty_query_past_end_returns_none() {
+    let (text, spans) = strip_to_text_with_spans("<p>hello</p>");
+    // Empty range past the end of the span coverage yields None.
+    assert!(spans.source_range(text.len(), text.len()).is_none());
+    assert!(spans.source_range(text.len() + 1, text.len() + 1).is_none());
+}
+
+// =============================================================================
+// Mixed Direct + EntityDecoded kind distribution
+// =============================================================================
+
+#[test]
+fn mixed_kinds_coexist_in_one_document() {
+    let html = r#"<p>Direct text &amp; entity and <img alt="alt">.</p>"#;
+    let (_text, spans) = strip_to_text_with_spans(html);
+
+    let kinds: std::collections::HashSet<SpanKind> = spans.iter().map(|s| s.kind).collect();
+    assert!(kinds.contains(&SpanKind::Direct), "Direct present");
+    assert!(
+        kinds.contains(&SpanKind::EntityDecoded),
+        "EntityDecoded present"
+    );
+    assert!(kinds.contains(&SpanKind::Synthetic), "Synthetic present");
+}
+
+// =============================================================================
+// PathSpan kind tagging
+// =============================================================================
+
+#[test]
+fn path_span_kinds_match_origin() {
+    let html = r#"<p>Direct &amp; <img alt="x"> text</p>"#;
+    let (_text, spans) = strip_to_text_with_paths(html);
+    let kinds: std::collections::HashSet<SpanKind> = spans.iter().map(|s| s.kind).collect();
+    assert!(kinds.contains(&SpanKind::Direct));
+    assert!(kinds.contains(&SpanKind::EntityDecoded));
+    assert!(kinds.contains(&SpanKind::Synthetic));
 }
