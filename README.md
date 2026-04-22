@@ -112,6 +112,38 @@ let json = serde_json::to_string(&segs)?;
 // Ships as: [{"type":"Title","element_id":"...","text":"Greeting","metadata":{"category_depth":1}}, ...]
 ```
 
+On the Python side, the same JSON deserializes directly into LangChain
+`Document`s without an adapter:
+
+```python
+import json, subprocess
+from langchain_core.documents import Document
+
+# Call the Rust binary that emits Unstructured-shaped JSON.
+raw = subprocess.check_output(["./deformat-extract", "page.html"])
+segments = json.loads(raw)
+
+docs = [
+    Document(
+        page_content=s["text"],
+        metadata={
+            "category": s["type"],              # Title / NarrativeText / ListItem / Table / ...
+            "element_id": s["element_id"],
+            "parent_id": s["metadata"].get("parent_id"),
+            "category_depth": s["metadata"].get("category_depth"),
+            "text_as_html": s["metadata"].get("text_as_html"),
+        },
+    )
+    for s in segments
+]
+# Feed `docs` into any LangChain retriever / splitter / VectorStore.
+```
+
+The `type` field is the Unstructured element category, so code written
+against `langchain-community.UnstructuredLoader` (element mode) ports
+over by swapping the loader for this snippet — same
+`(page_content, metadata)` shape comes out the other end.
+
 ### Additional feature flags
 
 | Feature | Adds |
