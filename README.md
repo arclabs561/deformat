@@ -115,23 +115,31 @@ let json = serde_json::to_string(&segs)?;
 On the Python side, the same JSON deserializes directly into LangChain
 `Document`s without an adapter:
 
-```python
-import json, subprocess
-from langchain_core.documents import Document
+```sh
+cargo run --example segments_json --features serde > /tmp/segments.json
+python3 scripts/langchain_interop.py /tmp/segments.json
+```
 
-# Call the Rust binary that emits Unstructured-shaped JSON.
-raw = subprocess.check_output(["./deformat-extract", "page.html"])
-segments = json.loads(raw)
+Inside `scripts/langchain_interop.py`:
+
+```python
+import json
+from langchain_core.documents import Document  # or the stdlib stand-in
+
+with open("segments.json") as f:
+    segments = json.load(f)
 
 docs = [
     Document(
         page_content=s["text"],
         metadata={
-            "category": s["type"],              # Title / NarrativeText / ListItem / Table / ...
+            "category": s["type"],          # Title / NarrativeText / ListItem / Table / Image / ...
             "element_id": s["element_id"],
-            "parent_id": s["metadata"].get("parent_id"),
-            "category_depth": s["metadata"].get("category_depth"),
-            "text_as_html": s["metadata"].get("text_as_html"),
+            **{k: s["metadata"][k]
+               for k in ("parent_id", "category_depth", "text_as_html",
+                         "page_number", "filename", "filetype",
+                         "languages", "coordinates")
+               if k in s["metadata"] and s["metadata"][k] is not None},
         },
     )
     for s in segments
