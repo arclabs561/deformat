@@ -533,7 +533,15 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                         {
                             path_stack.truncate(idx);
                         }
-                    } else if !tag_lower.ends_with('/') {
+                    } else if !tag_lower.ends_with('/') && !is_void_element(effective) {
+                        // HTML5 void elements (img, br, hr, input, ...) never
+                        // have a closing tag, so pushing them onto the path
+                        // stack would leave them there indefinitely — the
+                        // next text sibling would inherit the void element in
+                        // its path. Skip the push; any attribute-derived
+                        // span (e.g., img alt) is emitted within this
+                        // iteration while path_stack still reflects the
+                        // surrounding container.
                         if let Some(parent) = path_stack.last_mut() {
                             let count = parent.1.entry(effective.to_string()).or_insert(0);
                             *count += 1;
@@ -2334,6 +2342,28 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
 
 /// Returns true if the tag name is a semantic skip element whose content
 /// should be excluded from text output.
+/// HTML5 void elements: tags that never have a closing tag.
+/// Reference: <https://html.spec.whatwg.org/multipage/syntax.html#void-elements>
+fn is_void_element(tag: &str) -> bool {
+    matches!(
+        tag,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
 fn is_skip_tag(tag: &str) -> bool {
     // Note: <form> and <header> are intentionally NOT skip tags.
     // - <form>: many CMS frameworks (ASP.NET, Al Jazeera) wrap the entire

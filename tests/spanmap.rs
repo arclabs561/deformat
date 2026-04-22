@@ -1284,10 +1284,10 @@ fn path_spans_indexable_after_trailing_whitespace_trim() {
 
 #[test]
 fn path_for_img_alt_in_deeply_nested_container() {
-    // `<img>` without a trailing slash is treated as open-tag form by the
-    // scanner, so it DOES appear on the path stack when the alt span is
-    // emitted — the path leaf is the img itself. The important assertion is
-    // that all ancestor containers appear.
+    // As of v0.12.1, void elements (img, br, hr, input, ...) are NOT pushed
+    // onto the path stack, so the alt span's path is the surrounding
+    // container. Path must contain the outer containers; the leaf should
+    // NOT be `img` itself.
     let html =
         r#"<article><section><figure><img src="x.jpg" alt="diagram"></figure></section></article>"#;
     let (text, spans) = strip_to_text_with_paths(html);
@@ -1303,6 +1303,51 @@ fn path_for_img_alt_in_deeply_nested_container() {
             span.path.contains(expected),
             "path must contain {expected}: {:?}",
             span.path
+        );
+    }
+    assert!(
+        !span.path.ends_with("img"),
+        "void element img must not appear as path leaf: {:?}",
+        span.path
+    );
+}
+
+#[test]
+fn void_element_does_not_leak_into_following_path() {
+    // Regression: <img> is a void HTML5 element (no closing tag). Before
+    // v0.12.1 the scanner pushed it onto the path_stack and never popped,
+    // so text after the <img> within the same block inherited `img` in
+    // its path. Now void elements aren't pushed at all.
+    let html = "<article><p>Before <img alt='pic'> between</p></article>";
+    let (text, spans) = strip_to_text_with_paths(html);
+
+    let between = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].contains("between"))
+        .unwrap();
+    assert!(
+        !between.path.contains("img"),
+        "void element leaked into following text's path: {:?}",
+        between.path
+    );
+    assert!(
+        between.path.ends_with("p"),
+        "text should still have p as path leaf: {:?}",
+        between.path
+    );
+}
+
+#[test]
+fn void_elements_br_hr_also_do_not_push() {
+    // Same rule applies to <br> and <hr>.
+    let html = "<article><p>Before<br>middle<hr>after text</p></article>";
+    let (text, spans) = strip_to_text_with_paths(html);
+    for s in &spans {
+        assert!(
+            !s.path.contains("br") && !s.path.contains("hr"),
+            "<br>/<hr> must not appear in path: {:?} for text {:?}",
+            s.path,
+            &text[s.output_start..s.output_end]
         );
     }
 }
