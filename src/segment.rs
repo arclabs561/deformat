@@ -614,6 +614,90 @@ fn keep_segment(seg: &Segment, min_chars: usize) -> bool {
     }
 }
 
+/// Drop [`Segment::NarrativeText`] / [`Segment::UncategorizedText`]
+/// segments whose *sentence density* falls below
+/// `min_sentences_per_100_words`.
+///
+/// Sentence density = count of `.`, `?`, `!` per 100 words. Typical
+/// prose clocks in around 4-8 sentences per 100 words; navigation lists,
+/// tag clouds, and pasted metadata usually score 0 because they have
+/// many words but no sentence-ending punctuation. The link-density
+/// filter catches anchor-heavy boilerplate; this filter catches text
+/// blocks that look prose-shaped on the surface but lack sentence
+/// structure.
+///
+/// This complements [`strip_to_segments_filtered`] (which drops blocks
+/// by link ratio) and [`filter_boilerplate`] (which drops short
+/// label-like fragments). A typical pipeline:
+///
+/// ```
+/// use deformat::html::{filter_boilerplate, filter_low_sentence_density, strip_to_segments_filtered};
+///
+/// let html = "<nav><a href='/'>Home</a></nav>\
+///             <article><p>The real article content goes here, with sentences.</p></article>";
+/// let segs = strip_to_segments_filtered(html, 0.45);
+/// let segs = filter_low_sentence_density(segs, 1.0);
+/// let segs = filter_boilerplate(segs, 40);
+/// assert!(segs.iter().all(|s| !s.data().text.contains("Home")));
+/// ```
+///
+/// Preserved regardless of density:
+/// [`Segment::Title`], [`Segment::Header`], [`Segment::Footer`],
+/// [`Segment::ListItem`], [`Segment::Table`], [`Segment::CodeSnippet`],
+/// [`Segment::Formula`], [`Segment::Image`], [`Segment::FigureCaption`],
+/// [`Segment::PageBreak`]. These categories legitimately lack sentence
+/// punctuation (list bullets, code, captions) or carry their own
+/// structural signal.
+///
+/// Very short blocks (< `MIN_WORDS_FOR_DENSITY` words) are also
+/// preserved because sentence density is noisy below that threshold.
+///
+/// `min_sentences_per_100_words` is a value in `[0.0, 100.0]`. Sensible
+/// starting points:
+/// - `0.5`  — very permissive; drops only true zero-punctuation blobs.
+/// - `1.0`  — a reasonable default on article-heavy corpora.
+/// - `2.0`  — aggressive; expect some real paragraphs to be dropped.
+///
+/// Measure before committing a threshold on your own corpus — content
+/// distributions vary (docs pages are heavier on code blocks and
+/// bulleted lists than blog posts).
+#[must_use]
+pub fn filter_low_sentence_density(
+    segments: Vec<Segment>,
+    min_sentences_per_100_words: f32,
+) -> Vec<Segment> {
+    let cap = min_sentences_per_100_words.max(0.0);
+    segments
+        .into_iter()
+        .filter(|seg| keep_by_sentence_density(seg, cap))
+        .collect()
+}
+
+/// Minimum word count below which sentence-density gating is skipped.
+/// Short text blocks have too small a denominator for the density ratio
+/// to be a reliable signal.
+const MIN_WORDS_FOR_DENSITY: usize = 15;
+
+fn keep_by_sentence_density(seg: &Segment, cap: f32) -> bool {
+    if !matches!(
+        seg,
+        Segment::NarrativeText(_) | Segment::UncategorizedText(_)
+    ) {
+        return true;
+    }
+    let text = seg.data().text.trim();
+    let words = text.split_whitespace().count();
+    if words < MIN_WORDS_FOR_DENSITY {
+        return true;
+    }
+    let sentences = text
+        .chars()
+        .filter(|c| matches!(c, '.' | '?' | '!'))
+        .count();
+    let density = (sentences as f32) * 100.0 / (words as f32);
+    density >= cap
+}
+
 fn block_tag_to_type(tag: &str) -> &'static str {
     match tag {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "Title",

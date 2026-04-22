@@ -459,3 +459,116 @@ fn density_filter_preserves_titles() {
     let segs = deformat::html::strip_to_segments_filtered(html, 0.5);
     assert!(segs.iter().any(|s| s.type_name() == "Title"));
 }
+
+// =============================================================================
+// Sentence-density filter
+// =============================================================================
+
+#[test]
+fn sentence_density_drops_punctuationless_prose_block() {
+    // A long block of words with zero sentence punctuation — the textual
+    // shape of a tag-cloud-as-paragraph that link-density misses when the
+    // words aren't wrapped in <a>.
+    let html = r#"
+        <article>
+            <p>ruby python javascript rust golang kotlin scala haskell typescript elixir clojure ocaml fsharp erlang zig nim crystal dart</p>
+            <p>The article begins with an actual paragraph containing multiple sentences. It develops ideas over time. The writing has proper punctuation.</p>
+        </article>
+    "#;
+    let segs = deformat::html::strip_to_segments(html);
+    let filtered = deformat::html::filter_low_sentence_density(segs, 1.0);
+    // The tag list should be dropped; the prose paragraph kept.
+    let texts: Vec<&str> = filtered.iter().map(|s| s.data().text.as_str()).collect();
+    assert!(
+        !texts.iter().any(|t| t.contains("python javascript")),
+        "tag-cloud paragraph kept: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("article begins")),
+        "prose paragraph dropped: {texts:?}"
+    );
+}
+
+#[test]
+fn sentence_density_preserves_short_blocks() {
+    // Short blocks (< MIN_WORDS_FOR_DENSITY words) are not gated on density
+    // because the ratio is noisy. Wrap in <article> so the two <p>s get
+    // distinct block keys via sibling indexing.
+    let html = "<article><p>Intro paragraph here</p><p>Proper sentence follows. And another.</p></article>";
+    let segs = deformat::html::strip_to_segments(html);
+    let filtered = deformat::html::filter_low_sentence_density(segs, 2.0);
+    assert_eq!(
+        filtered.len(),
+        2,
+        "both blocks preserved: {:?}",
+        filtered.iter().map(|s| &s.data().text).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn sentence_density_preserves_titles_headers_lists_tables() {
+    // Note: <footer> is in deformat's scanner-level skip list so Footer
+    // segments are never emitted from HTML. This test covers the kinds
+    // that DO emerge from HTML.
+    let html = r#"
+        <header>Site name goes here in header block with many more words</header>
+        <h1>Title with many words but zero real sentences in it overall</h1>
+        <ul>
+            <li>First list item word word word word word word word word word word word word</li>
+        </ul>
+        <table><tr><td>many words in table cell without punctuation at all in this table</td></tr></table>
+    "#;
+    let segs = deformat::html::strip_to_segments(html);
+    let filtered = deformat::html::filter_low_sentence_density(segs, 10.0); // very aggressive
+    let kinds: Vec<&str> = filtered.iter().map(|s| s.type_name()).collect();
+    for expected in ["Title", "Header", "ListItem", "Table"] {
+        assert!(
+            kinds.contains(&expected),
+            "expected {expected} in {kinds:?}"
+        );
+    }
+}
+
+#[test]
+fn sentence_density_composes_with_link_filter_and_boilerplate() {
+    let html = r#"
+        <nav><a href="/">Home</a> <a href="/a">About</a> <a href="/b">Contact</a></nav>
+        <article>
+            <h1>The Headline</h1>
+            <p>ruby python rust go kotlin scala clojure ocaml haskell elixir zig nim crystal dart swift lua perl bash</p>
+            <p>This is the actual article prose. It has several sentences. Each terminator counts toward the density score.</p>
+        </article>
+    "#;
+    let pipeline = deformat::html::filter_boilerplate(
+        deformat::html::filter_low_sentence_density(
+            deformat::html::strip_to_segments_filtered(html, 0.45),
+            1.0,
+        ),
+        20,
+    );
+    let texts: Vec<&str> = pipeline.iter().map(|s| s.data().text.as_str()).collect();
+    assert!(
+        !texts.iter().any(|t| t.contains("Home")),
+        "nav dropped by link-density: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.contains("python rust")),
+        "tag-cloud dropped by sentence-density: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("actual article prose")),
+        "prose kept: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("The Headline")),
+        "title kept: {texts:?}"
+    );
+}
+
+#[test]
+fn sentence_density_zero_cap_keeps_everything() {
+    let html = "<p>ruby python rust go kotlin scala clojure ocaml haskell elixir zig nim crystal dart swift lua perl bash awk sed tcl vim emacs</p>";
+    let segs = deformat::html::strip_to_segments(html);
+    let filtered = deformat::html::filter_low_sentence_density(segs, 0.0);
+    assert_eq!(filtered.len(), 1);
+}
