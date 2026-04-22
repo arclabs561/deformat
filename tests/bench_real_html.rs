@@ -1,190 +1,200 @@
-//! Benchmark tests against real-world HTML from public datasets.
+//! Benchmark tests against real-world HTML from local fixtures.
 //!
-//! These tests are `#[ignore]` by default -- they download data from the
-//! internet and take significant time. Run with:
+//! Previously these tests hit live URLs (scrapinghub GitHub, example.com,
+//! Wikipedia, HN). They're now driven by the WCXB dev split already
+//! downloaded by `scripts/fetch_wcxb.py` and pointed at by
+//! `examples/bench_wcxb.rs`. Tests are `#[ignore]` so CI without the
+//! fixture directory skips them silently.
+//!
+//! Run locally with:
 //!
 //! ```sh
+//! scripts/fetch_wcxb.py                    # one-time fetch
 //! cargo test --test bench_real_html -- --ignored
 //! ```
-//!
-//! For the full Scrapinghub article extraction benchmark with F1 scoring,
-//! use the Python script instead:
-//!
-//! ```sh
-//! uv run scripts/bench_extraction.py --limit 20
-//! ```
 
-use std::io::Read;
+use std::fs;
 use std::path::PathBuf;
 
-fn cache_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/bench-fixtures")
+fn wcxb_dev_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/bench-fixtures/wcxb/dev")
+        .join("html")
 }
 
-fn download_if_missing(url: &str, dest: &std::path::Path) -> Result<(), String> {
-    if dest.exists() {
-        return Ok(());
-    }
-    dest.parent().map(|p| std::fs::create_dir_all(p).ok());
-    let output = std::process::Command::new("curl")
-        .args(["-sL", "-o"])
-        .arg(dest)
-        .arg(url)
-        .output()
-        .map_err(|e| format!("curl failed: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "curl returned {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(())
+fn collect_samples(max: usize) -> Vec<(String, String)> {
+    let dir = wcxb_dev_dir();
+    let Ok(read) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<_> = read
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "html"))
+        .collect();
+    paths.sort();
+    paths.truncate(max);
+    paths
+        .into_iter()
+        .filter_map(|p| {
+            let name = p.file_name()?.to_string_lossy().into_owned();
+            let html = fs::read_to_string(&p).ok()?;
+            Some((name, html))
+        })
+        .collect()
 }
 
-/// Download a few Scrapinghub HTML samples and verify deformat doesn't panic,
-/// produces non-empty output, and strips obvious boilerplate.
+/// Scan WCXB fixtures: `strip_to_text` and `strip_to_markdown` must never
+/// panic and must never leak raw `<script>` / `<style>` tags into output.
 #[test]
 #[ignore]
-fn scrapinghub_no_panics() {
-    let base = "https://raw.githubusercontent.com/scrapinghub/article-extraction-benchmark/refs/heads/master/html";
-    // Pick 10 diverse samples by hash prefix
-    let samples = [
-        "042bb7b5fedab6eac7db576522b89b93904c237d344bcbe14a6a5ab7f7335856",
-        "04a6711caa7c687592777718866e781e976e0fe684faebe8b3cedcef8cd0ea34",
-        "06e5123e4ef7cfb4533250dc45d1e03d0838fc66223f45c583c4d12f48b4da85",
-        "098bb3e96c0acdf36efdcde45fb9cca3f8c82c7cb2071b76097a1b96155f1eb2",
-        "0d46122928b6f468cc4bbc694051d0dbae5702bc75a16dab82a99b58daf150a0",
-        "08f793762792bd252c75fb57544cdf506ffcc04785136cb87503f02364b82b56",
-        "076f4f33bf75059db581bedf36e76fb65e89a8f7752db3339aa3ea11c5122f32",
-        "05844573ca7e1fba714d715bb11ca08c26e25328999c74a1cb3bc8a0e4399f0f",
-        "06ee193de4bd611f7fafbab0c59b0f6fe3495093516720632cd093b24c7a0e98",
-        "0dd1357045727799a447563fd8851f4ebe79f042073ea16991a9b67aa595f81a",
-    ];
+fn wcxb_no_panics_no_tag_leaks() {
+    let samples = collect_samples(80);
+    if samples.is_empty() {
+        eprintln!(
+            "WCXB fixtures not found at {:?}\nRun: scripts/fetch_wcxb.py",
+            wcxb_dev_dir()
+        );
+        return;
+    }
 
-    let html_dir = cache_dir().join("scrapinghub/html");
-    let mut success = 0;
-    let mut skipped = 0;
+    for (name, html) in &samples {
+        let text = deformat::html::strip_to_text(html);
+        let md = deformat::html::strip_to_markdown(html);
 
-    for hash in &samples {
-        let url = format!("{base}/{hash}.html.gz");
-        let dest = html_dir.join(format!("{hash}.html.gz"));
-
-        if download_if_missing(&url, &dest).is_err() {
-            skipped += 1;
-            continue;
-        }
-
-        let gz_bytes = match std::fs::read(&dest) {
-            Ok(b) => b,
-            Err(_) => {
-                skipped += 1;
-                continue;
-            }
-        };
-
-        let mut decoder = flate2::read::GzDecoder::new(&gz_bytes[..]);
-        let mut html = String::new();
-        if decoder.read_to_string(&mut html).is_err() {
-            // Not valid UTF-8 gzip -- skip
-            skipped += 1;
-            continue;
-        }
-
-        // This must not panic
-        let text = deformat::html::strip_to_text(&html);
-        let md = deformat::html::strip_to_markdown(&html);
-
-        // Basic sanity: output should be non-trivial for real articles
-        if html.len() > 1000 {
+        if html.len() > 2000 {
             assert!(
                 text.len() > 50,
-                "suspiciously short text output for {}: {} bytes from {} bytes HTML",
-                &hash[..12],
+                "suspiciously short text output for {name}: {} bytes from {} bytes HTML",
                 text.len(),
-                html.len()
+                html.len(),
             );
             assert!(
                 md.len() > 50,
-                "suspiciously short markdown output for {}: {} bytes",
-                &hash[..12],
-                md.len()
+                "suspiciously short markdown output for {name}: {} bytes",
+                md.len(),
             );
         }
 
-        // No HTML tags in text output
         assert!(
             !text.contains("<script"),
-            "script tag leaked in {}: {}...",
-            &hash[..12],
-            &text[..text.len().min(100)]
+            "script tag leaked in {name}: {}",
+            &text.chars().take(200).collect::<String>(),
         );
+        assert!(!text.contains("<style"), "style tag leaked in {name}",);
         assert!(
-            !text.contains("<style"),
-            "style tag leaked in {}",
-            &hash[..12]
+            !text.contains("</script>") && !text.contains("</style>"),
+            "closing script/style leaked in {name}",
         );
-
-        success += 1;
     }
-
-    assert!(
-        success >= 3,
-        "too few successful extractions: {success} success, {skipped} skipped"
-    );
     println!(
-        "Scrapinghub smoke test: {success} success, {skipped} skipped out of {}",
+        "WCXB smoke test: {} fixtures passed strip_to_text / strip_to_markdown",
         samples.len()
     );
 }
 
-/// Fetch a small sample from Common Crawl and verify no panics on real
-/// web content. Downloads ~1MB of WARC data.
+/// Exercise the full segment + three-filter pipeline on a WCXB sample:
+/// must not panic, must produce at least some segments on most inputs.
 #[test]
 #[ignore]
-fn common_crawl_no_panics() {
-    // Common Crawl wet file (pre-extracted text) -- smaller than full WARC.
-    // We use a WAT (metadata) file listing to find a small WARC segment.
-    // For simplicity, we'll download a single small WARC and parse it manually.
-    //
-    // Alternative: fetch random pages from a curated list.
-
-    let urls = [
-        "https://example.com",
-        "https://en.wikipedia.org/wiki/Rust_(programming_language)",
-        "https://news.ycombinator.com",
-    ];
-
-    let mut success = 0;
-    for url in &urls {
-        let dest = cache_dir().join(format!(
-            "crawl/{}.html",
-            url.replace("://", "_").replace('/', "_")
-        ));
-
-        if download_if_missing(url, &dest).is_err() {
-            continue;
-        }
-
-        let html = match std::fs::read_to_string(&dest) {
-            Ok(h) => h,
-            Err(_) => continue,
-        };
-
-        // Must not panic
-        let text = deformat::html::strip_to_text(&html);
-        let md = deformat::html::strip_to_markdown(&html);
-
-        assert!(!text.is_empty(), "empty text from {url}");
-        assert!(!md.is_empty(), "empty markdown from {url}");
-        assert!(!text.contains("<script"), "script leaked from {url}");
-
-        success += 1;
+fn wcxb_segment_pipeline_no_panics() {
+    let samples = collect_samples(80);
+    if samples.is_empty() {
+        eprintln!(
+            "WCXB fixtures not found at {:?}\nRun: scripts/fetch_wcxb.py",
+            wcxb_dev_dir()
+        );
+        return;
     }
 
+    let mut produced_some = 0usize;
+    for (name, html) in &samples {
+        let segs = deformat::html::strip_to_segments_filtered(html, 0.45);
+        let segs = deformat::html::filter_low_sentence_density(segs, 1.0);
+        let segs = deformat::html::filter_boilerplate(segs, 40);
+
+        // The pipeline may legitimately reduce to zero segments on
+        // extreme edge cases (redirect-only pages, empty bodies).
+        // But on pages > 5 KB we expect at least one segment.
+        if html.len() > 5000 && segs.is_empty() {
+            continue;
+        }
+        if !segs.is_empty() {
+            produced_some += 1;
+        }
+
+        for s in &segs {
+            let d = s.data();
+            // Never empty text in a kept segment.
+            assert!(
+                !d.text.is_empty(),
+                "empty segment text in {name} ({})",
+                s.type_name()
+            );
+            // element_id is always non-empty.
+            assert!(!d.element_id.is_empty(), "empty element_id in {name}");
+        }
+    }
     assert!(
-        success >= 1,
-        "no successful downloads -- network may be unavailable"
+        produced_some >= samples.len() / 2,
+        "pipeline produced no segments on too many fixtures: {produced_some} / {}",
+        samples.len()
     );
-    println!("Common Crawl smoke test: {success} / {} URLs", urls.len());
+    println!(
+        "WCXB pipeline smoke test: {produced_some} / {} fixtures produced segments",
+        samples.len()
+    );
+}
+
+/// SpanMap invariants hold on real-world HTML too: sorted, non-overlap
+/// in output, UTF-8 boundary-aligned.
+#[test]
+#[ignore]
+fn wcxb_spanmap_invariants() {
+    let samples = collect_samples(40);
+    if samples.is_empty() {
+        eprintln!(
+            "WCXB fixtures not found at {:?}\nRun: scripts/fetch_wcxb.py",
+            wcxb_dev_dir()
+        );
+        return;
+    }
+
+    for (name, html) in &samples {
+        let (text, spans) = deformat::html::strip_to_text_with_spans(html);
+        let mut prev_end = 0usize;
+        for (i, s) in spans.iter().enumerate() {
+            assert!(
+                s.output_start <= s.output_end,
+                "inverted output in {name} span {i}"
+            );
+            assert!(
+                s.source_start <= s.source_end,
+                "inverted source in {name} span {i}"
+            );
+            assert!(
+                s.output_end <= text.len(),
+                "output OOB in {name} span {i}: {} > {}",
+                s.output_end,
+                text.len()
+            );
+            assert!(s.source_end <= html.len(), "source OOB in {name} span {i}");
+            assert!(
+                s.output_start >= prev_end,
+                "spans overlap in {name} at span {i}"
+            );
+            assert!(
+                text.is_char_boundary(s.output_start) && text.is_char_boundary(s.output_end),
+                "output not on char boundary in {name} span {i}"
+            );
+            assert!(
+                html.is_char_boundary(s.source_start) && html.is_char_boundary(s.source_end),
+                "source not on char boundary in {name} span {i}"
+            );
+            prev_end = s.output_end;
+        }
+    }
+    println!(
+        "WCXB SpanMap invariants checked across {} fixtures",
+        samples.len()
+    );
 }

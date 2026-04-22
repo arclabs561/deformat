@@ -71,7 +71,6 @@ encoding_rs = ["dep:encoding_rs"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-flate2 = "1"
 proptest = "1"
 serde_json = { version = "1", optional = false }
 
