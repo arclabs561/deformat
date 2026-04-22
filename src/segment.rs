@@ -283,6 +283,7 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
             .unwrap_or("");
         let text_len = text_slice.chars().count();
         let under_anchor = path_has_anchor_below_block(&span.path, &block_key);
+        let is_synthetic = span.kind == crate::html::SpanKind::Synthetic;
 
         match current {
             Some(ref mut acc) if acc.block_key == block_key => {
@@ -294,6 +295,9 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
                 acc.total_chars += text_len;
                 if under_anchor {
                     acc.link_chars += text_len;
+                }
+                if !is_synthetic {
+                    acc.all_synthetic = false;
                 }
             }
             _ => {
@@ -317,6 +321,7 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
                     src_end: span.source_end,
                     link_chars: if under_anchor { text_len } else { 0 },
                     total_chars: text_len,
+                    all_synthetic: is_synthetic,
                 });
             }
         }
@@ -414,6 +419,10 @@ struct GroupAcc {
     link_chars: usize,
     /// Output-byte count of all text in this group.
     total_chars: usize,
+    /// True until a non-Synthetic span contributes to this group. Groups
+    /// that only ever accumulate Synthetic spans (e.g., standalone `<img>`
+    /// alt text) become [`Segment::Image`] rather than NarrativeText.
+    all_synthetic: bool,
 }
 
 /// Parse a PathSpan path and return:
@@ -514,7 +523,15 @@ fn finish_group(
     if text.is_empty() {
         return;
     }
-    let type_name = block_tag_to_type(&acc.block_tag);
+    // If every contributing span was Synthetic (typically `<img alt>`),
+    // emit as Image regardless of the surrounding block tag. This covers
+    // standalone `<img>` at any nesting level (`<figure><img>`,
+    // `<body><img>`, `<article><img>`).
+    let type_name = if acc.all_synthetic {
+        "Image"
+    } else {
+        block_tag_to_type(&acc.block_tag)
+    };
     // Link-density filter: drop over-link blocks (nav / tag clouds),
     // but always keep Titles and Headers.
     if let Some(cap) = link_ratio_cap {
@@ -563,6 +580,7 @@ fn finish_group(
         "Table" => Segment::Table(data),
         "FigureCaption" => Segment::FigureCaption(data),
         "CodeSnippet" => Segment::CodeSnippet(data),
+        "Image" => Segment::Image(data),
         "UncategorizedText" => Segment::UncategorizedText(data),
         _ => Segment::NarrativeText(data),
     };

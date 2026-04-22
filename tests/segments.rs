@@ -572,3 +572,73 @@ fn sentence_density_zero_cap_keeps_everything() {
     let filtered = deformat::html::filter_low_sentence_density(segs, 0.0);
     assert_eq!(filtered.len(), 1);
 }
+
+// =============================================================================
+// Segment::Image emission
+// =============================================================================
+
+#[test]
+fn standalone_figure_img_emits_image_segment() {
+    let html = r#"<article>
+        <h1>Paper</h1>
+        <p>Some intro text that has real sentences here.</p>
+        <figure><img src="diagram.png" alt="Experimental setup diagram"></figure>
+        <p>Closing text with another complete sentence.</p>
+    </article>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    let image = segs.iter().find(|s| s.type_name() == "Image");
+    assert!(
+        image.is_some(),
+        "expected an Image segment, got {:?}",
+        segs.iter().map(|s| s.type_name()).collect::<Vec<_>>()
+    );
+    let data = image.unwrap().data();
+    assert_eq!(data.text, "Experimental setup diagram");
+    // Image segments under a title should carry parent_id.
+    assert!(data.metadata.parent_id.is_some());
+}
+
+#[test]
+fn inline_img_does_not_emit_image_segment() {
+    // An <img> inside a paragraph must NOT split out as a separate Image
+    // segment -- the alt text is part of the surrounding NarrativeText.
+    let html = r#"<article><p>Look at <img alt="pic"> inline.</p></article>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert!(
+        segs.iter().all(|s| s.type_name() != "Image"),
+        "inline img should not produce Image segment: {:?}",
+        segs.iter()
+            .map(|s| (s.type_name(), s.data().text.clone()))
+            .collect::<Vec<_>>()
+    );
+    let narrative = segs
+        .iter()
+        .find(|s| s.type_name() == "NarrativeText")
+        .expect("narrative segment present");
+    assert!(narrative.data().text.contains("pic"));
+    assert!(narrative.data().text.contains("Look at"));
+}
+
+#[test]
+fn bare_img_outside_any_block_emits_image() {
+    let html = r#"<img alt="standalone image">"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(segs.len(), 1, "got {:?}", segs);
+    assert_eq!(segs[0].type_name(), "Image");
+    assert_eq!(segs[0].data().text, "standalone image");
+}
+
+#[test]
+fn multiple_figures_each_emit_image() {
+    let html = r#"<article>
+        <h1>Gallery</h1>
+        <figure><img alt="first image caption"></figure>
+        <figure><img alt="second image caption"></figure>
+    </article>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    let images: Vec<_> = segs.iter().filter(|s| s.type_name() == "Image").collect();
+    assert_eq!(images.len(), 2, "expected two Image segments");
+    let texts: Vec<&str> = images.iter().map(|s| s.data().text.as_str()).collect();
+    assert!(texts.iter().any(|t| t.contains("first image caption")));
+    assert!(texts.iter().any(|t| t.contains("second image caption")));
+}
