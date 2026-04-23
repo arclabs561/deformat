@@ -755,6 +755,47 @@ proptest! {
 }
 
 proptest! {
+    /// Multilang safety: CJK / Arabic / Hindi / Armenian paragraphs
+    /// containing a non-ASCII sentence terminator and enough chars to
+    /// clear the density floor must NOT be dropped by
+    /// filter_low_sentence_density. Guards the pre-2026-04-23 bug where
+    /// the ASCII-only terminator check silently dropped all non-English
+    /// prose.
+    #[test]
+    fn non_ascii_sentences_survive_sentence_density_filter(
+        (terminator, filler_char) in prop::sample::select(vec![
+            ('\u{3002}', '测'),       // Chinese/Japanese full stop  。
+            ('\u{FF01}', '試'),       // fullwidth exclamation        ！
+            ('\u{FF1F}', 'あ'),       // fullwidth question           ？
+            ('\u{061F}', 'ا'),       // Arabic question mark         ؟
+            ('\u{0964}', 'त'),       // Devanagari danda             ।
+            ('\u{0589}', 'ա'),       // Armenian full stop           ։
+            ('\u{1362}', 'አ'),       // Ethiopic full stop           ።
+        ]),
+        sentences in 3usize..=8,
+        chars_per_sentence in 20usize..=60,
+    ) {
+        let mut body = String::new();
+        for _ in 0..sentences {
+            for _ in 0..chars_per_sentence {
+                body.push(filler_char);
+            }
+            body.push(terminator);
+        }
+        let html = format!("<article><p>{body}</p></article>");
+        let segs = deformat::html::strip_to_segments(&html);
+        let filtered = deformat::html::filter_low_sentence_density(segs.clone(), 1.0);
+        prop_assert!(
+            filtered.len() == segs.len(),
+            "non-ASCII-terminated prose was dropped: {} -> {} (terminator U+{:04X})",
+            segs.len(),
+            filtered.len(),
+            terminator as u32,
+        );
+    }
+}
+
+proptest! {
     /// For plain ASCII text inside a single <p>, the concatenated Direct
     /// source slices of all spans must contain every word from the input.
     /// This is a soft round-trip property.

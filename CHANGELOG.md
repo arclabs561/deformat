@@ -3,9 +3,9 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
-## Unreleased
+## 0.13.1 — 2026-04-23
 
-### Fixed
+### Fixed — malformed-HTML recovery
 
 - Scanner gets stuck in skip mode when malformed HTML leaves a `<nav>`,
   `<aside>`, or `<footer>` unclosed. HTML5's `<main>` element is the
@@ -21,16 +21,68 @@ bump the minor version while in 0.x.
   recovery: end the quote and reprocess the `<` as a new tag. The
   256-byte floor preserves legitimate short attributes that contain
   tag-like syntax (e.g. `title="<script>alert(1)</script>"`).
+- `is_wiki_skip_tag` matched element ids via `contains()`, false-
+  matching Drupal's per-section anchors (`id="toc_19421"`), CMS
+  `id="sidebar-foo"`, `id="page-footer"`, etc. Entire article bodies
+  were skipped as a result. Matching now requires exact equality or a
+  hyphen-separated prefix, so Wikipedia's `id="toc"` /
+  `id="toc-desktop"` still match but CMS per-section anchors don't.
+
+### Added
+
+- `Segment::CodeSnippet` populates `metadata.languages` from the
+  `<code class="language-X">` (or `lang-X`) class attribute, matching
+  the long-standing README + enum-doc claim. Handles Pandoc / GFM /
+  Prism / highlight.js conventions. Language identifier is lowercased.
+
+### Fixed — multilingual content preservation
+
+- `filter_low_sentence_density` and `filter_boilerplate` counted only
+  ASCII sentence terminators (`.`, `?`, `!`), silently dropping pages
+  of CJK / Arabic / Hindi / Armenian prose that use `。`, `？`, `！`,
+  `؟`, `।`, `։`, etc. The check now recognizes the Unicode sentence-
+  terminator inventory used across WCXB / Common Crawl multilingual
+  corpora. Word-count fallback also switched from whitespace-split to
+  a character-based proxy (chars/5) so space-less scripts (Chinese,
+  Japanese, Thai) clear the density-noise floor.
+- Regression guards: `tests/fixtures/adversarial/multilang_article.html`
+  containing English, Chinese, Japanese, Arabic, Hindi, and Korean
+  paragraphs survives the full triple-filter pipeline. Proptest
+  `non_ascii_sentences_survive_sentence_density_filter` randomizes
+  over 7 non-ASCII terminator codepoints to catch any future
+  ASCII-centric filter addition.
+
+### Tests and fixtures
+
+- `tests/fixtures/synthetic/` — ~10 KB of authored-here DOCX, XLSX,
+  PPTX, EPUB, and RTF files with minimal + Unicode + table variants.
+  Generated deterministically by
+  `scripts/generate_synthetic_fixtures.py` (Python stdlib only).
+- `tests/fixtures/adversarial/` — minimized regression repros for the
+  three WCXB-surfaced scanner bugs (unclosed nav drawer, unclosed
+  attribute quote, Drupal toc_NUMBER sections) and the void-element
+  path-stack fix.
+- `tests/real_formats.rs` rewritten against committed fixtures. The 8
+  `#[ignore]` tests that previously only ran via `scripts/fetch_fixtures.sh`
+  are now 14 non-ignored tests that run in CI.
+- `tests/fixtures/PROVENANCE.md` documents per-file origin, license,
+  and the commit-vs-fetch decision rubric. All committed fixtures are
+  authored by this crate and dual-licensed MIT-OR-Apache-2.0.
+- Total tests: 579 → 601.
 
 ### Measured impact (WCXB dev split, 1,495 pages, triple-filter pipeline)
 
-| Metric | Pre-0.13.0 | Post-recovery | Δ |
+| Metric | 0.13.0 | 0.13.1 | Δ |
 |---|---|---|---|
-| Overall F1 | 0.767 | 0.774 | +0.7pp |
+| Overall F1 | 0.767 | **0.774** | +0.7pp |
 | Article F1 | 0.876 | 0.880 | +0.4pp |
-| Documentation F1 | 0.885 | 0.906 | +2.1pp |
-| Product F1 | 0.485 | 0.500 | +1.5pp |
-| Service F1 | 0.772 | 0.790 | +1.8pp |
+| Documentation F1 | 0.885 | **0.906** | +2.1pp |
+| Product F1 | 0.485 | **0.500** | +1.5pp |
+| Service F1 | 0.772 | **0.790** | +1.8pp |
+
+### Compatibility
+
+- MSRV unchanged (1.80.0). No breaking API changes.
 
 ## 0.13.0 — 2026-04-23
 

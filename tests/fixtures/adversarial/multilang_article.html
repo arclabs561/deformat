@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!--
+  Multilingual article fixture. Guards against filter false-positives
+  on non-English content. Before the 2026-04-23 fix, the
+  filter_low_sentence_density heuristic counted only ASCII `.?!`
+  terminators -- a page of pure CJK, Arabic, or Hindi prose had zero
+  matches and got dropped. We now recognize `。？！` (CJK), `؟` (Arabic),
+  `।` (Devanagari), etc. This fixture ensures the filters preserve
+  multilingual article bodies end-to-end.
+-->
+<html><body>
+<article>
+  <h1>Multilingual article test</h1>
+  <p>English paragraph. Several sentences here. All should be kept.</p>
+
+  <p>中文段落测试。这里有多个句子。每个句子都以全角句号结尾。内容足够长以避免被短块过滤器丢弃。</p>
+
+  <p>日本語の段落です。これはテスト用のコンテンツです。複数の文を含んでいます。十分な長さがあります。</p>
+
+  <p>اختبار المقطع العربي. هذه فقرة طويلة بما فيه الكفاية. تحتوي على عدة جمل وعلامات ترقيم عربية؟
+     ينبغي الحفاظ عليها من قبل المرشحات.</p>
+
+  <p>हिन्दी परीक्षण। यह एक लम्बा परीच्छेद है। देवनागरी वाक्य विभाजक का उपयोग करता है। सामग्री को बनाए रखा जाना चाहिए।</p>
+
+  <p>한국어 테스트 단락입니다. 여기에는 여러 문장이 있습니다. 콘텐츠가 삭제되지 않아야 합니다.</p>
+</article>
+</body></html>

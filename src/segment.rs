@@ -775,7 +775,7 @@ fn keep_segment(seg: &Segment, min_chars: usize) -> bool {
         return true;
     }
     let text = seg.data().text.trim();
-    let has_sentence = text.chars().any(|c| matches!(c, '.' | '?' | '!'));
+    let has_sentence = text.chars().any(is_sentence_terminator);
 
     match seg {
         Segment::ListItem(_) => has_sentence || text.contains(' '),
@@ -860,16 +860,47 @@ fn keep_by_sentence_density(seg: &Segment, cap: f32) -> bool {
         return true;
     }
     let text = seg.data().text.trim();
-    let words = text.split_whitespace().count();
+    // Use character count (divided by a rough-English-average of 5 chars/word)
+    // as a tokenization fallback for CJK / Thai scripts that don't use
+    // whitespace between words. The filter's word count is otherwise
+    // zero for a page of Chinese, Japanese, or Thai prose, triggering
+    // the MIN_WORDS_FOR_DENSITY short-circuit and silently skipping the
+    // filter — which was the previous buggy behavior but at least was
+    // not *dropping* CJK content. With the expanded terminator list
+    // below we'd start miscounting density if we kept whitespace-based
+    // word count; use a character-based proxy instead.
+    let space_tokens = text.split_whitespace().count();
+    let char_tokens = text.chars().count() / 5;
+    let words = space_tokens.max(char_tokens);
     if words < MIN_WORDS_FOR_DENSITY {
         return true;
     }
-    let sentences = text
-        .chars()
-        .filter(|c| matches!(c, '.' | '?' | '!'))
-        .count();
+    let sentences = text.chars().filter(|c| is_sentence_terminator(*c)).count();
     let density = (sentences as f32) * 100.0 / (words as f32);
     density >= cap
+}
+
+/// True if `c` is a sentence terminator in any script we handle.
+/// Covers ASCII (`.?!`), CJK ideographic (`。？！`), fullwidth forms
+/// (`．？！`), Arabic question mark (`؟`), Armenian full stop (`։`),
+/// Devanagari danda (`।`), Ethiopic full stop (`።`). The list is the
+/// practical intersection of punctuation used across WCXB / Common
+/// Crawl multilingual corpora.
+fn is_sentence_terminator(c: char) -> bool {
+    matches!(
+        c,
+        '.' | '?'
+            | '!'
+            | '\u{3002}' // CJK ideographic full stop 。
+            | '\u{FF01}' // fullwidth exclamation ！
+            | '\u{FF1F}' // fullwidth question ？
+            | '\u{FF0E}' // fullwidth full stop ．
+            | '\u{061F}' // Arabic question mark ؟
+            | '\u{0964}' // Devanagari danda ।
+            | '\u{0965}' // Devanagari double danda ॥
+            | '\u{0589}' // Armenian full stop ։
+            | '\u{1362}' // Ethiopic full stop ።
+    )
 }
 
 fn block_tag_to_type(tag: &str) -> &'static str {

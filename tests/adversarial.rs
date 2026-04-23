@@ -181,6 +181,40 @@ fn fixture_cms_toc_section_ids_not_skipped() {
 }
 
 #[test]
+fn fixture_multilang_content_survives_filters() {
+    // Regression guard: before the 2026-04-23 fix, filter_low_sentence_density
+    // counted only ASCII `.?!` terminators and would silently drop blocks of
+    // CJK / Arabic / Hindi prose that use `。？！` / `؟` / `।`. This test
+    // pushes the multilingual fixture through the full triple-filter
+    // pipeline at the aggressive 1.0 sentence-density floor (where the
+    // regression used to manifest) and asserts every language's content
+    // survives.
+    let html = load_adversarial("multilang_article.html");
+    let segs = deformat::html::strip_to_segments_filtered(&html, 0.45);
+    let segs = deformat::html::filter_low_sentence_density(segs, 1.0);
+    let segs = deformat::html::filter_boilerplate(segs, 40);
+    let joined: String = segs
+        .iter()
+        .map(|s| s.data().text.clone())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    for (label, needle) in &[
+        ("English", "All should be kept"),
+        ("Chinese", "中文段落测试"),
+        ("Japanese", "日本語の段落です"),
+        ("Arabic", "اختبار المقطع"),
+        ("Hindi", "हिन्दी परीक्षण"),
+        ("Korean", "한국어 테스트"),
+    ] {
+        assert!(
+            joined.contains(needle),
+            "{label} content dropped by filter: output was {joined:?}"
+        );
+    }
+}
+
+#[test]
 fn fixture_nested_void_elements_dont_leak_into_paths() {
     let html = load_adversarial("nested_void_elements.html");
     let (_text, spans) = deformat::html::strip_to_text_with_paths(&html);
