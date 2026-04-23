@@ -57,6 +57,40 @@ fn main_landmark_recovers_from_unclosed_nav_drawer() {
 }
 
 #[test]
+fn unclosed_attribute_quote_does_not_swallow_rest_of_document() {
+    // Real-world malformed <img> tag from the WCXB dev split (file 4563):
+    // a stray unclosed `"` after `wp-image-NUMBER`. Without recovery, the
+    // scanner would treat everything up to the next `"` as an attribute
+    // value -- swallowing thousands of bytes of article content.
+    //
+    // After 256+ bytes of quoted-attribute scanning, seeing `<` followed
+    // by a tag-like character kicks the recovery path.
+    let filler = "x".repeat(260); // push past the 256-byte recovery threshold
+    let html = format!(
+        r#"<img src="x.jpg" alt="caption" width="170" wp-image-3737" />
+        <p>{filler}</p>
+        <a href="/path">Link text here</a>
+        <p>Article body that must not be swallowed by the malformed img tag.</p>"#
+    );
+    let text = strip_to_text(&html);
+    assert!(
+        text.contains("Article body that must not be swallowed"),
+        "recovery kept article body: {text:?}"
+    );
+}
+
+#[test]
+fn short_attribute_with_tag_like_content_is_preserved() {
+    // Short attribute values (<256 bytes) with tag-like syntax inside
+    // remain inside the quote -- the recovery only fires once the
+    // quote is suspiciously long.
+    let html = r#"<div title="<script>alert(1)</script>"><p>Safe.</p></div>"#;
+    let text = strip_to_text(html);
+    assert!(text.contains("Safe"));
+    assert!(!text.contains("alert"));
+}
+
+#[test]
 fn main_landmark_does_not_reset_when_skip_depth_is_zero() {
     // Well-formed HTML should be unchanged by the recovery.
     let well_formed = r#"<html><body>
