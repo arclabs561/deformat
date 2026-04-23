@@ -658,3 +658,42 @@ fn multiple_figures_each_emit_image() {
     assert!(texts.iter().any(|t| t.contains("first image caption")));
     assert!(texts.iter().any(|t| t.contains("second image caption")));
 }
+
+#[test]
+fn img_inside_heading_stays_title() {
+    // <h1><img alt="Logo"></h1> — logo image in a heading. The structural
+    // Title role wins over Image.
+    let html = r#"<h1><img alt="Logo Text"></h1>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(segs.len(), 1);
+    assert_eq!(segs[0].type_name(), "Title");
+    assert_eq!(segs[0].data().text, "Logo Text");
+}
+
+#[test]
+fn img_inside_table_cell_stays_table() {
+    let html = r#"<article><table><tr><td><img alt="chart pic"></td></tr></table></article>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert!(
+        segs.iter().any(|s| s.type_name() == "Table"),
+        "img inside td -> Table: {:?}",
+        segs.iter().map(|s| s.type_name()).collect::<Vec<_>>()
+    );
+    assert!(!segs.iter().any(|s| s.type_name() == "Image"));
+}
+
+#[test]
+fn img_inside_list_item_stays_listitem() {
+    let html = r#"<ul><li><img alt="bullet image"></li></ul>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(segs.len(), 1);
+    assert_eq!(segs[0].type_name(), "ListItem");
+}
+
+#[test]
+fn img_inside_pre_stays_codesnippet() {
+    let html = r#"<pre><img alt="code image"></pre>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(segs.len(), 1);
+    assert_eq!(segs[0].type_name(), "CodeSnippet");
+}
