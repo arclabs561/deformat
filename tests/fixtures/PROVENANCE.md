@@ -6,10 +6,10 @@ redistribution and the file is small enough to justify the repo cost.
 
 ## Licensing summary
 
-- **Authored-by-this-crate** fixtures (all `synthetic/` and `adversarial/`):
-  dual-licensed under `MIT OR Apache-2.0`, identical to the rest of the
-  crate. No separate LICENSE file is needed — the repo-root `LICENSE-MIT`
-  and `LICENSE-APACHE` cover these artifacts.
+- **Authored-by-this-crate** fixtures (all `synthetic/`, `adversarial/`,
+  and `regression/`): dual-licensed under `MIT OR Apache-2.0`, identical
+  to the rest of the crate. No separate LICENSE file is needed — the
+  repo-root `LICENSE-MIT` and `LICENSE-APACHE` cover these artifacts.
 - **Public-domain third-party samples**: committed with per-file
   attribution in this document.
 - **Other third-party samples** (copyrighted, restricted): NOT committed.
@@ -52,6 +52,33 @@ MIT-OR-Apache-2.0.
 | `unclosed_attr_quote.html` | `<img … wp-image-3737" />` with a stray unpaired quote (goloadup.com pattern). Guards the 256-byte attribute-quote recovery. |
 | `cms_toc_section_ids.html` | Drupal `<section id="toc_12345">` sections (dos.ny.gov pattern). Guards the hyphen-or-exact ID match in `is_wiki_skip_tag`. |
 | `nested_void_elements.html` | Inline `<img>` / `<br>` / `<hr>` inside a paragraph. Guards the void-element path-stack exclusion. |
+| `multilang_article.html` | Multilingual article body (English, Chinese, Japanese, Arabic, Hindi, Korean). Guards the Unicode sentence-terminator inventory in `filter_low_sentence_density`. |
+| `article_in_aside_misnesting.html` | Article body wrapped in `<aside class="article-body">` (developer mistagging). Strip drops to 0 chars; cascade rescues via readability. Guards the `extract_html_cascade` ratio condition and the `extract_with_readability` empty-URL fix. |
+
+### `regression/` — pinned per-fixture F1 floors
+
+Hand-authored article-class HTML fixtures paired with hand-written
+expected text. The test suite (`tests/regression_corpus.rs`) computes
+word-level F1 against the expected text and asserts each extractor
+strategy clears its per-fixture floor. Future filter or scanner
+changes that drop F1 fail CI before the next release.
+
+WCXB benchmark fixtures aren't committed (1495 pages, fetched
+separately). Without an in-repo corpus, the only F1 signal CI could
+observe was test counts -- a filter change that quietly regresses
+article F1 would land green. This corpus is small (~7 KB total) so
+it rides every test run including under `--all-features` matrix jobs.
+
+| File | Bytes | Pattern |
+|---|---|---|
+| `clean_news_article.html` + `.expected.txt` | ~2 KB | Standard `<article>` with byline, paragraphs, header, footer. Tests the happy path. |
+| `blog_with_sidebar.html` + `.expected.txt` | ~1.5 KB | `<main><article>` with `<aside class="related">` outside. Tests anchor election doesn't overshoot and strip handles aside. |
+| `documentation_page.html` + `.expected.txt` | ~1.5 KB | `<main>` with code blocks, headings, lists, navigation sidebar. Tests structural preservation. |
+
+When a floor needs to move (intentional redesign, filter retuning),
+update both the floor and its rationale comment in `regression_corpus.rs`.
+Floors are calibrated ~3pp below measured F1 to absorb whitespace
+variance without papering over real regressions.
 
 ## Not committed (fetched on demand)
 

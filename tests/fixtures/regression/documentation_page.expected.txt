@@ -1,0 +1,12 @@
+Configuration Reference
+foolib reads configuration from foolib.toml in the project root. Every field has a sensible default; the table below documents the ones you might want to override.
+Top-level fields
+name -- the project name. Required.
+version -- the project version. Defaults to 0.1.0.
+output -- where compiled artifacts land. Defaults to ./build.
+Example
+[project]
+name = "my-app"
+version = "1.2.3"
+output = "./dist"
+Run foolib build after editing the configuration. The tool re-validates the file on every invocation; mistakes surface as a non-zero exit code with a pointer at the offending line.

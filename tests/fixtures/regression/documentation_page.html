@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Configuration Reference -- foolib</title></head>
+<body>
+<nav class="docs-sidebar">
+<a href="/docs/install">Install</a>
+<a href="/docs/quickstart">Quickstart</a>
+<a href="/docs/config">Configuration</a>
+</nav>
+<main>
+<h1>Configuration Reference</h1>
+
+<p>foolib reads configuration from <code>foolib.toml</code> in the project root. Every field has a sensible default; the table below documents the ones you might want to override.</p>
+
+<h2>Top-level fields</h2>
+<ul>
+<li><code>name</code> -- the project name. Required.</li>
+<li><code>version</code> -- the project version. Defaults to <code>0.1.0</code>.</li>
+<li><code>output</code> -- where compiled artifacts land. Defaults to <code>./build</code>.</li>
+</ul>
+
+<h2>Example</h2>
+<pre><code>[project]
+name = "my-app"
+version = "1.2.3"
+output = "./dist"
+</code></pre>
+
+<p>Run <code>foolib build</code> after editing the configuration. The tool re-validates the file on every invocation; mistakes surface as a non-zero exit code with a pointer at the offending line.</p>
+</main>
+<footer>Made by the foolib team.</footer>
+</body>
+</html>
