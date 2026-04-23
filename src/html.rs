@@ -271,8 +271,8 @@ pub struct PathSpan {
 }
 
 pub use crate::segment::{
-    filter_boilerplate, filter_low_sentence_density, strip_to_segments, strip_to_segments_filtered,
-    Coordinates, Segment, SegmentData, SegmentMetadata,
+    filter_boilerplate, filter_low_cetd_density, filter_low_sentence_density, strip_to_segments,
+    strip_to_segments_filtered, Coordinates, Segment, SegmentData, SegmentMetadata,
 };
 
 /// Strip HTML and return text with structural path annotations.
