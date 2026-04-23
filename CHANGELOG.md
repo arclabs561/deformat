@@ -3,6 +3,35 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## Unreleased
+
+### Fixed
+
+- Scanner gets stuck in skip mode when malformed HTML leaves a `<nav>`,
+  `<aside>`, or `<footer>` unclosed. HTML5's `<main>` element is the
+  primary-content landmark and never legitimately nests inside these
+  tags, so its opening now resets `skip_depth` to 0. Real-world impact
+  on the WCXB dev split: 3 of 4 article pages that previously extracted
+  0 characters now extract normally.
+- A single malformed tag with an unclosed attribute quote
+  (e.g. `<img width="170" wp-image-3737" />`) used to put the scanner
+  into attribute-value mode indefinitely, swallowing thousands of bytes
+  of subsequent content. After 256+ bytes of quoted-attribute scanning,
+  a `<` followed by a tag-like character (letter, `/`, `!`) now triggers
+  recovery: end the quote and reprocess the `<` as a new tag. The
+  256-byte floor preserves legitimate short attributes that contain
+  tag-like syntax (e.g. `title="<script>alert(1)</script>"`).
+
+### Measured impact (WCXB dev split, 1,495 pages, triple-filter pipeline)
+
+| Metric | Pre-0.13.0 | Post-recovery | Δ |
+|---|---|---|---|
+| Overall F1 | 0.767 | 0.774 | +0.7pp |
+| Article F1 | 0.876 | 0.880 | +0.4pp |
+| Documentation F1 | 0.885 | 0.906 | +2.1pp |
+| Product F1 | 0.485 | 0.500 | +1.5pp |
+| Service F1 | 0.772 | 0.790 | +1.8pp |
+
 ## 0.13.0 — 2026-04-23
 
 ### Fixed
