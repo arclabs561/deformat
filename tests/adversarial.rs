@@ -471,3 +471,67 @@ fn header_content_not_skipped() {
     let text = strip_to_text("<header><h1>Article Title</h1></header>");
     assert!(text.contains("Article Title"), "header content: {text}");
 }
+
+#[cfg(feature = "readability")]
+#[test]
+fn cascade_fires_on_article_in_aside_misnesting() {
+    // Real-world failure mode: developer wraps article body in <aside> (a
+    // semantic mistagging that's surprisingly common). The deformat scanner
+    // correctly skips <aside> per HTML5, dropping the article entirely.
+    // The cascade must rescue this via dom_smoothie's class-name scoring
+    // (`article-body` matches its positive vocabulary).
+    let html = include_str!("fixtures/adversarial/article_in_aside_misnesting.html");
+    let strip = deformat::html::strip_to_text(html);
+    let cascade = deformat::extract_html_cascade(html);
+
+    // Strip catastrophically fails on this fixture (everything in <aside>).
+    assert!(
+        strip.chars().count() < 100,
+        "strip should drop article-in-aside: {strip:?}"
+    );
+
+    // Cascade rescues the body via readability.
+    assert_eq!(
+        cascade.extractor,
+        deformat::Extractor::Readability,
+        "cascade must elect readability when strip fails"
+    );
+    assert!(
+        cascade.text.contains("Cambridge")
+            || cascade.text.contains("Quiet Revolution")
+            || cascade.text.contains("Tooling"),
+        "cascade text must include real article content: {:?}",
+        &cascade.text[..cascade.text.len().min(300)]
+    );
+    assert!(
+        cascade.text.chars().count() > 500,
+        "cascade text should be substantial: {} chars",
+        cascade.text.chars().count()
+    );
+}
+
+#[cfg(feature = "readability")]
+#[test]
+fn extract_with_readability_handles_empty_url_string() {
+    // Regression: passing url="" silently broke dom_smoothie's URL parsing
+    // and the readability pipeline returned None even on extractable content.
+    // This caused extract_html_cascade (which passed "") to never fire its
+    // fallback branch.
+    let html = r#"<!DOCTYPE html>
+        <html><head><title>Test</title></head><body>
+        <article><h1>Test Article</h1>
+        <p>A team of researchers at Cambridge announced the discovery of
+        a previously unknown species. The discovery was published in Nature
+        and represents one of the most significant findings in years.</p>
+        <p>Lead researcher Sarah Chen said the species was found during
+        an expedition in January. Chen and her team spent three weeks
+        collecting specimens and documenting habitat conditions.</p>
+        </article></body></html>"#;
+    let result = deformat::html::extract_with_readability(html, "");
+    assert!(
+        result.is_some(),
+        "extract_with_readability with empty url must not silently fail"
+    );
+    let (text, _, _) = result.unwrap();
+    assert!(text.contains("Cambridge"));
+}
