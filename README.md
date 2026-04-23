@@ -67,7 +67,7 @@ cargo add deformat --features readability,html2text,pdf   # all extractors
 
 ```toml
 [dependencies]
-deformat = { version = "0.14.0", features = ["readability", "html2text"] }
+deformat = { version = "0.15.0", features = ["readability", "html2text"] }
 ```
 
 ## Usage
