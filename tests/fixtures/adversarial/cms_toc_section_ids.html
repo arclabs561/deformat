@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!--
+  Minimized repro of a real WCXB dev-split article (dos.ny.gov). Drupal
+  wraps each article section in `<section id="toc_NUMBER">`. The
+  wiki-skip heuristic used to match "toc" via contains(), false-
+  positive-ing every section and dropping the whole article. The
+  hyphen-or-exact match fix in is_wiki_skip_tag now only matches
+  Wikipedia's actual `id="toc"` / `id="toc-desktop"` patterns.
+-->
+<html><body>
+<h1>Forming a Limited Liability Company</h1>
+<section id="toc_19421">
+  <p>New York recognizes many business forms including the limited
+     liability company (LLC), corporation, limited partnership, sole
+     proprietorship, and general partnership.</p>
+</section>
+<section id="toc_19426">
+  <p>Each form has its own advantages and disadvantages. For any
+     particular venture, personal and business circumstances will
+     dictate the business form of choice.</p>
+</section>
+<section id="toc_19431">
+  <p>The Department of State cannot offer advice about the choice of
+     business form and strongly recommends consulting with legal and
+     financial advisors before making the choice.</p>
+</section>
+</body></html>

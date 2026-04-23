@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<!--
+  Minimized repro of a real WCXB dev-split article (go.dev/blog). The
+  page has 5 <nav> opens but only 2 </nav> closes: the mobile nav
+  drawer is missing its closing tags. Without the <main> landmark
+  recovery in strip_impl, skip_depth stays > 0 through the <body> and
+  the article content never emits. See tests/adversarial.rs for the
+  regression guard.
+-->
+<html><body>
+  <header>
+    <nav class="top">Main header nav content</nav>
+  </header>
+  <aside class="drawer">
+    <nav>Drawer nav 1</nav>
+    <nav>Drawer nav 2 (UNCLOSED)
+    <nav>Drawer nav 3 (UNCLOSED)
+    <nav>Drawer nav 4 (UNCLOSED)
+  </aside>
+  <main>
+    <article>
+      <h1>Article Title For Recovery Test</h1>
+      <p>First paragraph of the article body. It must appear in the
+         extracted text despite the unclosed nav tags above.</p>
+      <p>Second paragraph continues. Each has a sentence-ending period
+         so the sentence-density filter keeps them.</p>
+    </article>
+  </main>
+</body></html>

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<!--
+  Minimized repro of a real WCXB dev-split article (goloadup.com). The
+  <img> tag below has an extra `"` after `wp-image-3737` with no
+  opening quote, so naïve tag parsers enter attribute-value mode and
+  treat the rest of the document as attribute content. The real file
+  swallowed ~50 KB of article body before the next `"` (a href value)
+  closed the phantom quote.
+
+  The recovery heuristic in src/html.rs fires when an unterminated
+  attribute quote has been open for 256+ bytes AND we find a `<`
+  followed by a tag-start character. The padding paragraph below keeps
+  the scanner inside the phantom attribute quote past the 256-byte
+  recovery threshold before it reaches the next `<p` tag.
+-->
+<html><body>
+<h1>Page Header</h1>
+<p>First paragraph with the article lede.</p>
+<img src="cover.png" alt="caption" width="170" height="94" wp-image-3737" />
+<p>Padding paragraph that exists to stretch the distance between the
+   unclosed attribute quote above and the next real tag below past
+   the 256-byte recovery threshold. Real malformed pages have
+   thousands of bytes of article content here; we just need to cross
+   256 bytes to exercise the recovery path. Lorem ipsum dolor sit
+   amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt
+   ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+   nostrud exercitation ullamco laboris.</p>
+<p>Second paragraph comes after the malformed img tag. It must appear
+   in the extracted text, proving the scanner recovered from the
+   unclosed attribute quote instead of swallowing the rest of the
+   document.</p>
+<a href="/next">Next page link</a>
+</body></html>
