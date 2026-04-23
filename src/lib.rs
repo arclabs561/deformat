@@ -318,43 +318,58 @@ pub fn extract_readable(html: &str, url: Option<&str>) -> Extracted {
 
 /// Extract HTML by cascading from scanner stripping to readability.
 ///
-/// Runs [`html::strip_to_text`] first (cheap, no DOM parse). If the
-/// scanner output is suspiciously short, runs [`extract_readable`] and
-/// returns whichever produced more text.
+/// Runs [`html::strip_to_text`] first (cheap, no DOM parse). Falls back
+/// to [`extract_readable`] when readability finds substantially more
+/// content than the scanner -- specifically, when readability's output
+/// is more than `2x` the scanner's. Returns whichever the cascade
+/// chooses, with `extractor` reporting which backend won.
 ///
-/// "Suspiciously short" means under `500` Unicode scalars regardless of
-/// input size. This catches pages where the scanner's heuristic skip set
-/// (`<nav>`, `<aside>`, `<footer>`, ...) consumed the actual article
-/// because the page lacks semantic landmarks, while leaving normal pages
-/// untouched (no extra readability cost).
+/// The `2x` ratio is borrowed from Trafilatura's
+/// [`compare_extraction`](https://github.com/adbar/trafilatura/blob/master/trafilatura/external.py)
+/// step, which is the only published cascade architecture with measured
+/// F1 gains (+1.7 to +1.9pp on Trafilatura's own evaluation suite).
+/// Pure length-threshold cascades are folk wisdom; the ratio condition
+/// is what the comparative-benchmark literature validates.
+///
+/// As a small optimization, the readability call is short-circuited
+/// when the scanner's output is already at least `1000` Unicode scalars
+/// (call this the "obviously enough" floor). Below that, both backends
+/// run and the ratio decides.
 ///
 /// Requires the `readability` feature. Without it, prefer [`extract`] or
 /// [`html::strip_to_text`] directly -- the cascade has nothing to fall
 /// back to.
 ///
-/// The returned [`Extracted`] reports which backend won via its
-/// `extractor` field. `fallback` is always `false` here: the cascade
-/// chose the better of the two intended outputs, neither is a degraded
-/// path.
+/// `fallback` on the returned [`Extracted`] is always `false`: the
+/// cascade picked the better of two intended outputs; neither path is
+/// degraded.
 ///
 /// # Examples
 ///
 /// ```
-/// // Page with proper semantics: scanner wins, readability never runs.
+/// // Page with proper semantics: scanner already extracts plenty,
+/// // readability is short-circuited.
 /// let html = "<html><body><article>".to_string()
-///     + &"<p>Real article content. </p>".repeat(40)
+///     + &"<p>Real article content. </p>".repeat(80)
 ///     + "</article></body></html>";
 /// let result = deformat::extract_html_cascade(&html);
-/// assert!(result.text.len() > 500);
+/// assert!(result.text.len() > 1000);
 /// assert_eq!(result.extractor, deformat::Extractor::Strip);
 /// ```
 #[cfg(feature = "readability")]
 #[must_use]
 pub fn extract_html_cascade(html: &str) -> Extracted {
-    const MIN_STRIP_CHARS: usize = 500;
+    /// Above this scanner-output length, skip the readability call entirely.
+    /// Scanner already has plenty; running DOM parse is wasted compute.
+    const SHORT_CIRCUIT_FLOOR: usize = 1000;
+    /// Readability must beat the scanner by this multiple to win. Matches
+    /// Trafilatura's `len_algo > 2 * len_text` condition.
+    const READABILITY_WIN_RATIO: usize = 2;
 
     let strip_text = html::strip_to_text(html);
-    if strip_text.chars().count() >= MIN_STRIP_CHARS {
+    let strip_chars = strip_text.chars().count();
+
+    if strip_chars >= SHORT_CIRCUIT_FLOOR {
         return Extracted {
             text: strip_text,
             format: Format::Html,
@@ -367,7 +382,7 @@ pub fn extract_html_cascade(html: &str) -> Extracted {
 
     match html::extract_with_readability(html, "") {
         Some((readable_text, title, excerpt))
-            if readable_text.chars().count() > strip_text.chars().count() =>
+            if readable_text.chars().count() > READABILITY_WIN_RATIO * strip_chars =>
         {
             Extracted {
                 text: readable_text,
@@ -533,7 +548,7 @@ mod tests {
     #[cfg(feature = "readability")]
     #[test]
     fn cascade_picks_strip_when_output_is_long_enough() {
-        let body: String = (0..40)
+        let body: String = (0..80)
             .map(|i| {
                 format!("<p>Paragraph number {i} carries enough text to clear the threshold. </p>")
             })
@@ -541,8 +556,37 @@ mod tests {
         let html = format!("<html><body><article>{body}</article></body></html>");
         let result = extract_html_cascade(&html);
         assert_eq!(result.extractor, Extractor::Strip);
-        assert!(result.text.chars().count() >= 500);
+        assert!(result.text.chars().count() >= 1000);
         assert!(result.text.contains("Paragraph number 0"));
+    }
+
+    #[cfg(feature = "readability")]
+    #[test]
+    fn cascade_short_circuits_above_floor_without_calling_readability() {
+        // Output above the 1000-char short-circuit must come from strip
+        // exactly -- no readability mutation, no whitespace collapsing
+        // disagreement.
+        let body: String = (0..50)
+            .map(|i| format!("<p>Sentence {i} ends with a period. Another sentence here too. </p>"))
+            .collect();
+        let html = format!("<html><body><main>{body}</main></body></html>");
+        let strip_text = html::strip_to_text(&html);
+        let cascade = extract_html_cascade(&html);
+        assert_eq!(cascade.extractor, Extractor::Strip);
+        assert_eq!(cascade.text, strip_text);
+    }
+
+    #[cfg(feature = "readability")]
+    #[test]
+    fn cascade_keeps_strip_when_ratio_is_under_2x() {
+        // Both backends extract similar amounts. Readability output
+        // doesn't beat strip by 2x, so strip wins (no churn).
+        let body: String = (0..15)
+            .map(|i| format!("<p>Body paragraph {i} with several sentences of real content. </p>"))
+            .collect();
+        let html = format!("<html><body><article>{body}</article></body></html>");
+        let result = extract_html_cascade(&html);
+        assert_eq!(result.extractor, Extractor::Strip);
     }
 
     #[cfg(feature = "readability")]

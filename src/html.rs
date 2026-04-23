@@ -1509,7 +1509,11 @@ pub fn extract_with_readability(
     url: &str,
 ) -> Option<(String, Option<String>, Option<String>)> {
     let cfg = dom_smoothie::Config::default();
-    let mut r = dom_smoothie::Readability::new(html, Some(url), Some(cfg)).ok()?;
+    // dom_smoothie's URL parsing rejects an empty string and the readability
+    // pipeline silently bails out -- pages that should extract come back
+    // empty. Treat empty as "no URL hint" by passing None.
+    let url_opt = if url.is_empty() { None } else { Some(url) };
+    let mut r = dom_smoothie::Readability::new(html, url_opt, Some(cfg)).ok()?;
     let article = r.parse().ok()?;
     // Use strip_to_text on the readability HTML (article.content) rather than
     // article.text_content. text_content concatenates DOM text nodes without

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Mismarked Article -- Body Wrapped In Aside</title>
+<meta name="description" content="Adversarial fixture: developer wrapped article body in &lt;aside&gt; (semantic mistagging). The deformat scanner correctly skips &lt;aside&gt; per HTML5, dropping the article. Readability rescues it via class-name scoring (article-body matches its positive vocabulary).">
+</head>
+<body>
+<header><nav><a href="/">Home</a> | <a href="/about">About</a></nav></header>
+
+<aside class="article-body" id="main-content">
+  <h1>The Quiet Revolution in Tooling</h1>
+  <p class="byline">By Jane Doe, March 14, 2026</p>
+
+  <p>Over the last five years, the language ecosystem has undergone a quiet
+  transformation. What began as a handful of opinionated command-line tools
+  written by frustrated developers has matured into a coherent alternative
+  stack. Most users do not yet realize they are part of a generational shift,
+  but the indicators are unambiguous: dependency counts are dropping, build
+  times are halving, and onboarding documents have stopped recommending the
+  packages that defined the previous decade.</p>
+
+  <p>The shift is most visible in three places. First, the package manager
+  itself: a generation of users who started with the slow Python or Node tooling
+  has migrated to fast Rust-based alternatives that resolve dependencies in
+  milliseconds rather than minutes. Second, the linter: a single binary now
+  replaces what used to be five separate tools chained together. Third, the
+  formatter: deterministic, opinionated, and fast enough to run on save without
+  the user noticing.</p>
+
+  <p>None of this happened by committee. Each tool was built by a small team
+  with a strong opinion about what was wrong with the incumbent, and each tool
+  earned adoption through measured improvement on a metric that mattered to its
+  users. The result is an ecosystem that feels qualitatively different from the
+  one it replaced, even though no one element of it was a paradigm shift.</p>
+
+  <p>What this teaches the next generation of tool builders is that the
+  defaults matter more than the features. A tool that is ten percent faster but
+  requires three lines of configuration will lose to a tool that is the same
+  speed but works on first run. The Rust generation of CLI tools has internalized
+  this lesson: the README example is the contract, and any deviation from it is
+  a usability bug.</p>
+
+  <p>The remaining frontier is in cross-language tooling. The next decade of
+  developer experience improvements will come from tools that operate on
+  multiple languages with the same interface, rather than from yet another
+  language-specific replacement for an aging incumbent. The seeds are already
+  visible: tree-sitter for parsing, language servers for editor integration,
+  and a handful of formatters that handle several languages from one binary.</p>
+</aside>
+
+<footer>
+  <p>Copyright 2026 The Quiet Revolution. All rights reserved.</p>
+  <nav><a href="/privacy">Privacy</a> | <a href="/terms">Terms</a></nav>
+</footer>
+</body>
+</html>
