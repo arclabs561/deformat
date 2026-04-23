@@ -3,7 +3,41 @@
 [![crates.io](https://img.shields.io/crates/v/deformat.svg)](https://crates.io/crates/deformat)
 [![docs.rs](https://docs.rs/deformat/badge.svg)](https://docs.rs/deformat)
 
-Extract plain text from HTML, PDF, and other document formats.
+Extract plain text from HTML, PDF, and other document formats. Single
+Rust crate, twelve formats, source-byte tracking, no DOM parse on the
+default HTML path.
+
+## When to reach for deformat
+
+- Running a RAG / NER / search pipeline that needs clean text from
+  many input formats with one dependency.
+- Wanting source-position tracking (`SpanMap`, `PathSpan`) so a
+  highlighted snippet can be pointed back at its byte range in the
+  original HTML / DOCX / PDF.
+- Needing throughput on a Rust ingestion pipeline; the default HTML
+  scanner is `&[u8]`-walking with `memchr`, no allocator pressure
+  from a DOM tree.
+- Wanting Unstructured.io-shape `Segment` JSON without a Python
+  process boundary.
+
+## When to reach for something else
+
+- **Pretraining-scale article extraction** where every F1 point
+  matters: use [`Trafilatura`](https://github.com/adbar/trafilatura)
+  (Python, F1 ≈ 0.94 on news/article corpora vs deformat's 0.87 on
+  the same page class). The published comparative-extraction
+  literature places the heuristic-extractor ceiling at ≈ 0.91; closing
+  that last gap is what Trafilatura's DOM-aware block scoring and
+  multi-pass cascade buys.
+- Document understanding for vision-heavy PDFs (multi-column papers,
+  scanned scans): use [`Marker`](https://github.com/VikParuchuri/marker)
+  or [`Docling`](https://github.com/DS4SD/docling).
+- HTML to Markdown for an LLM prompt where layout matters: use
+  the `html2text` feature, or
+  [`html-to-markdown`](https://github.com/JohannesKaufmann/html-to-markdown).
+
+deformat trades the last 5–7 F1 points on article pages for speed +
+spans + 12-format coverage in a single Rust crate. Pick accordingly.
 
 ## Supported formats
 
@@ -186,27 +220,39 @@ the per-file manifest and the commit-vs-fetch decision rationale.
 The WCXB benchmark (1,495 pages, CC-BY-4.0) is NOT committed — fetch
 it with `scripts/fetch_wcxb.py` to reproduce the F1 numbers below.
 
-## Benchmark (WCXB dev split, 1,497 pages)
+## Benchmark (WCXB dev split, 1,495 pages)
 
-`cargo run --release --example bench_wcxb` — word-level F1 against the
-`ground_truth.main_content` field from the
+`cargo run --release --example bench_wcxb` — word-level F1 against
+the `ground_truth.main_content` field from the
 [WCXB](https://webcontentextraction.org) benchmark (CC-BY-4.0).
+Comparisons across all extractor strategies on a fixed dev split:
 
-| page_type      |    N |    F1 |     P |     R |
-|----------------|-----:|------:|------:|------:|
-| article        |  792 | 0.851 | 0.778 | 0.986 |
-| documentation  |   91 | 0.891 | 0.855 | 0.964 |
-| service        |  165 | 0.730 | 0.648 | 0.951 |
-| listing        |   99 | 0.602 | 0.524 | 0.942 |
-| collection     |  117 | 0.532 | 0.415 | 0.966 |
-| forum          |  112 | 0.504 | 0.610 | 0.755 |
-| product        |  119 | 0.438 | 0.330 | 0.958 |
-| **overall**    | 1495 | 0.740 | 0.675 | 0.957 |
+| Strategy | ALL F1 | Article F1 | P | R | When |
+|---|---:|---:|---:|---:|---|
+| `strip_to_text` (baseline) | 0.746 | 0.855 | 0.675 | 0.967 | Default; recall-first |
+| + triple filter pipeline | **0.774** | 0.881 | 0.738 | 0.919 | Mixed corpora; best heuristic |
+| `extract_html_cascade` | 0.748 | 0.859 | 0.675 | 0.970 | Unknown/wild HTML; falls back to readability when scanner drops content |
+| `StripOptions::main_landmark` (anchor election) | 0.748 | **0.867** | 0.723 | 0.915 | Article corpora with `<main>`/`<article>` |
+| Trafilatura (Python; published) | ~0.91 | ~0.94 | — | — | Pretraining-scale article extraction |
 
-Recall is strong across all page types; precision is the gap. Articles
-and documentation are competitive; commerce / forum / listing pages
-over-include boilerplate. Reproduce with `scripts/fetch_wcxb.py` +
-the `bench_wcxb` example.
+Per-page-type F1 with the triple filter pipeline:
+
+| page_type | N | strip F1 | triple F1 | Δ |
+|---|---:|---:|---:|---:|
+| article | 792 | 0.855 | 0.881 | +2.6pp |
+| documentation | 91 | 0.911 | 0.904 | −0.7pp |
+| service | 165 | 0.748 | 0.788 | +4.0pp |
+| forum | 112 | 0.508 | 0.557 | +4.9pp |
+| listing | 99 | 0.612 | 0.620 | +0.8pp |
+| collection | 117 | 0.522 | 0.551 | +2.9pp |
+| product | 119 | 0.450 | 0.500 | +5.0pp |
+| **overall** | 1495 | 0.746 | 0.774 | +2.8pp |
+
+Recall is strong across all page types; precision is the gap.
+Reproduce with `scripts/fetch_wcxb.py` + the `bench_wcxb` example;
+the runner takes `--extractor strip|triple|cascade|anchor|...`.
+
+### Filter composition
 
 Three composable filters sit on top of `strip_to_segments`:
 
@@ -223,21 +269,38 @@ Three composable filters sit on top of `strip_to_segments`:
   label-like fragments.
 
 Compose them — link-density (structural) → sentence-density
-(content-shape) → boilerplate (char-count). Measured on WCXB dev
-split (1,495 pages):
+(content-shape) → boilerplate (char-count). Choose thresholds that
+fit your corpus; `examples/bench_wcxb.rs` sweeps caps.
 
-| Pipeline | F1 | P | R | without% |
-|---|---|---|---|---|
-| `strip_to_text` (baseline) | 0.740 | 0.675 | 0.957 | 56.5% |
-| + link-density (cap 0.45) | 0.748 | 0.696 | 0.944 | 64.6% |
-| + sentence-density (1.0) | 0.740 | 0.678 | 0.952 | 59.2% |
-| **link + sentence + boilerplate** | **0.767** | **0.739** | 0.913 | **78.0%** |
+### Anchor election
 
-Per-type F1 deltas from baseline: article +2.5pp (0.851 → 0.876),
-service +4.2pp (0.730 → 0.772), forum +4.7pp (0.504 → 0.551), product
-+4.7pp (0.438 → 0.485), listing +1.1pp (0.602 → 0.613). Choose
-thresholds that fit your corpus — `examples/bench_wcxb.rs` sweeps
-both caps.
+`StripOptions::main_landmark()` enables Trafilatura-style anchor
+election: pre-scan for the first `<main>` or longest `<article>`
+landmark and restrict extraction to that subtree. On article-class
+pages this lifts F1 by ~1.2pp (0.855 → 0.867) by dropping
+related-content sidebars and footer blurbs that don't live inside
+`<nav>`/`<footer>` skip tags. On forum/product/listing pages where
+content lives outside `<main>` (replies, reviews, specs), election
+regresses F1 — this is why it's opt-in. Pages without either
+landmark fall through to whole-document scanning.
+
+```rust
+use deformat::html::{strip_to_text_with_options, StripOptions};
+
+let text = strip_to_text_with_options(html, &StripOptions::main_landmark());
+```
+
+### Cascade
+
+`extract_html_cascade(html)` (feature `readability`) runs
+`strip_to_text` first, falls back to `extract_readable` only when
+readability finds more than `2×` the scanner's output. This rescues
+pages where the scanner's heuristic skip set bites (article body
+inside `<aside>`, content inside non-semantic divs that defeat tag
+priors). The `2×` ratio is borrowed from Trafilatura's
+`compare_extraction` step — the only published cascade form with
+measured F1 gains. On WCXB dev the cascade adds +0.2pp ALL F1; the
+real win is robustness on wild HTML, not benchmark movement.
 
 The link-density filter preserves structural segments (`Title`,
 `Header`, `Table`) regardless of ratio — they reach the segmenter only
@@ -267,12 +330,14 @@ counterpart in source (e.g. `<img alt>`).
 
 Worth calling out so you can pick the right tool for the job:
 
-- **Article-extraction precision**: the baseline `strip_to_text`
-  hits F1 ≈ 0.85 on articles; the three-filter pipeline above pushes
-  it to 0.876. Trafilatura-class Python extractors reach F1 ≈ 0.94
-  via deeper text-density scoring and DOM-aware heuristics. If you
-  need that last ceiling, compose deformat with `trafilatura`,
-  `rs-trafilatura`, or `justext`.
+- **Article-extraction precision ceiling**: baseline `strip_to_text`
+  hits F1 ≈ 0.855 on articles; the triple filter pipeline pushes it
+  to 0.881; anchor election gets to 0.867. Trafilatura-class Python
+  extractors reach F1 ≈ 0.94 via DOM-aware block scoring and
+  multi-pass cascades. The literature's heuristic-extractor ceiling
+  is around 0.91; closing the rest needs ML (`Web2Text`, `Dripper`,
+  …). If pretraining-scale article quality is the goal, use
+  Trafilatura.
 - **Table structure**: PDF tables are flattened to text (no row/column
   reconstruction from line drawings). DOCX tables via
   `extract_to_segments` come through as `Segment::Table` with
