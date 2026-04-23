@@ -1,0 +1,4 @@
+How We Cut Build Times in Half
+Our build pipeline used to take eleven minutes. After a focused two-week investigation, we got it down to five minutes and forty seconds. The biggest single win came from caching the dependency-resolution step, which had been recomputed from scratch on every commit despite the lockfile rarely changing.
+The second win was less obvious. Our test runner was launching a fresh process per test file rather than reusing a warm runtime. Switching to a session-mode runner shaved another ninety seconds off, almost all of it interpreter startup.
+The third change was harder to measure but probably the most durable. We moved a handful of tests that touched the network into a separate suite that runs nightly rather than on every commit. The remaining unit suite became deterministic and fast enough that developers actually run it locally before pushing, which catches more bugs upstream.
