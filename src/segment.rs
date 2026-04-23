@@ -523,15 +523,18 @@ fn finish_group(
     if text.is_empty() {
         return;
     }
-    // If every contributing span was Synthetic (typically `<img alt>`),
-    // emit as Image regardless of the surrounding block tag. This covers
-    // standalone `<img>` at any nesting level (`<figure><img>`,
-    // `<body><img>`, `<article><img>`).
-    let type_name = if acc.all_synthetic {
-        "Image"
-    } else {
-        block_tag_to_type(&acc.block_tag)
-    };
+    // When every contributing span was Synthetic (typically `<img alt>`),
+    // upgrade NarrativeText / UncategorizedText to Image. Structural
+    // types (Title, Header, Footer, ListItem, Table, CodeSnippet,
+    // FigureCaption) win over Image — an <img> inside <h1>/<td>/<li>/<pre>
+    // belongs to that container's semantic role, not a bare Image.
+    let base_type = block_tag_to_type(&acc.block_tag);
+    let type_name =
+        if acc.all_synthetic && matches!(base_type, "NarrativeText" | "UncategorizedText") {
+            "Image"
+        } else {
+            base_type
+        };
     // Link-density filter: drop over-link blocks (nav / tag clouds),
     // but always keep structural segments. Titles, Headers, ListItems,
     // and Tables reach this point only when the scanner-level skip list
