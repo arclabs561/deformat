@@ -3,6 +3,61 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## Unreleased
+
+### Fixed
+
+- `strip_to_text_with_paths`: HTML5 void elements (`<img>`, `<br>`,
+  `<hr>`, `<input>`, etc.) were pushed onto `path_stack` and never
+  popped, leaking into the `PathSpan.path` of any following text in
+  the same block. Void elements are now excluded from the stack. The
+  alt-text span for `<img>` still carries the surrounding container's
+  path (previously the path ended in `img`).
+
+### Changed
+
+- `strip_to_segments` now emits `Segment::Image` for blocks whose text
+  comes entirely from `SpanKind::Synthetic` spans — the typical case
+  is a standalone `<img>` inside `<figure>`, `<body>`, or at the root.
+  Inline `<img>` inside a paragraph keeps the enclosing
+  `NarrativeText` (the all-synthetic check flips off as soon as a
+  Direct/EntityDecoded span contributes).
+- Structural block roles (`Title`, `Header`, `Footer`, `ListItem`,
+  `Table`, `CodeSnippet`, `FigureCaption`) always win over
+  `Image` — an `<img>` inside `<h1>`, `<td>`, `<li>`, or `<pre>`
+  belongs to that container's semantic role.
+- `<summary>` now classifies as `Title` and sets `last_title_id`, so
+  paragraphs inside a `<details>` carry `parent_id` pointing at the
+  summary. `category_depth` stays unset (summary isn't h1-h6).
+- The link-density filter preserves `Table` segments alongside the
+  existing `Title` / `Header`. Tables that reach the segmenter past
+  the scanner-level nav/footer/aside skip are content (product specs,
+  comparison grids, TOC tables on documentation pages). WCXB
+  triple-pipeline: listing F1 0.580 → 0.613 (+3.3pp); overall F1
+  0.765 → 0.767.
+
+### Added
+
+- `examples/segments_json.rs` — emit pure `Vec<Segment>` JSON to
+  stdout. Pairs with `scripts/langchain_interop.py` to demonstrate
+  the LangChain wire-format round-trip end-to-end.
+- `scripts/langchain_interop.py` — stdlib-only Python script that
+  deserializes `segments.json` into `(page_content, metadata)` tuples
+  matching `langchain_core.documents.Document`.
+- `examples/filter_pipeline.rs` — runnable walkthrough of the
+  three-filter composition (link-density → sentence-density →
+  boilerplate) on a single HTML page.
+
+### Tests
+
+- `tests/spanmap.rs`: 67 → 69. Void-element regression guards.
+- `tests/segments.rs`: 29 → 40. `Segment::Image` emission, structural
+  roles overriding Image, `<summary>` classification, Table
+  preservation under link-density.
+- `tests/bench_real_html.rs`: migrated from live URLs (scrapinghub,
+  example.com, Wikipedia, HN) to WCXB-fixture smoke tests.
+- Dropped unused `flate2` dev-dependency.
+
 ## 0.12.0 — 2026-04-22
 
 ### Fixed
