@@ -3,6 +3,67 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## 0.15.0 — 2026-04-23
+
+### Added
+
+- `extract_html_cascade(html) -> Extracted` (feature `readability`) —
+  Trafilatura-style cascade. Runs `strip_to_text` first; falls back to
+  `extract_readable` only when readability finds more than `2×` the
+  scanner's output. Short-circuits readability entirely when the
+  scanner already produced ≥ 1000 characters, so well-formed pages pay
+  no DOM-parse cost. The `2×` ratio is borrowed from Trafilatura's
+  `compare_extraction` step — the only published cascade form with
+  measured F1 evidence.
+
+- `StripOptions::prefer_main_landmark: bool` (default `false`) and
+  `StripOptions::main_landmark()` preset. When set, the scanner pre-
+  scans for the first HTML5 main-content landmark (`<main>`, then the
+  longest `<article>`) and restricts extraction to that subtree. Pages
+  without either landmark fall through to whole-document scanning.
+
+  WCXB dev impact (vs strip baseline): article F1 0.855 → 0.867
+  (+1.2pp), documentation 0.911 → 0.926 (+1.5pp), service 0.748 →
+  0.766 (+1.8pp). Forum and product page F1 regress because their
+  meaningful content (replies, reviews, specs) lives outside `<main>`
+  — this is why anchor election is opt-in. Production callers route
+  based on page type via `deformat::page_type::detect_page_type`.
+
+- `tests/fixtures/regression/` — committed article-class fixtures with
+  hand-authored expected text and per-extractor F1 floors. The new
+  `tests/regression_corpus.rs` test suite asserts every extractor
+  strategy clears its per-fixture floor on each fixture; future filter
+  or scanner changes that drop F1 fail CI before the next release.
+  The corpus is small (~7 KB) so it rides every test run, including
+  under `--all-features` matrix jobs.
+
+- `tests/fixtures/adversarial/article_in_aside_misnesting.html` — real
+  failure mode for tag-stripping extractors where the article body is
+  wrapped in `<aside class="article-body">` (semantic mistagging). The
+  scanner correctly skips `<aside>` per HTML5 and emits 0 chars; the
+  cascade rescues the body via dom_smoothie's class-name scoring.
+  Backed by `regression_corpus_cascade_rescues_in_aside_fixture`,
+  the single most important falsifying assertion for the cascade.
+
+### Fixed
+
+- **`html::extract_with_readability`**: empty `url` string was passed
+  straight to dom_smoothie's URL parser, which silently bailed and
+  the readability pipeline returned `None` even on extractable
+  content. `extract_html_cascade` (which passed `""`) had the
+  fallback branch effectively disabled in practice. Treat empty `url`
+  as `None`. Regression guard:
+  `extract_with_readability_handles_empty_url_string` in
+  `tests/adversarial.rs`.
+
+### Documentation
+
+- README reframed for honest positioning vs Trafilatura. Adds "When
+  to reach for deformat / something else" section, refreshed
+  benchmark table covering all extractor strategies (strip, triple,
+  cascade, anchor) with their measured WCXB numbers, and explicit
+  `When` column noting which strategy fits which corpus type.
+
 ## 0.14.0 — 2026-04-23
 
 ### Added
