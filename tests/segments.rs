@@ -581,6 +581,213 @@ fn sentence_density_composes_with_link_filter_and_boilerplate() {
     );
 }
 
+// =============================================================================
+// CETD (sibling-smoothed density) filter
+// =============================================================================
+
+#[test]
+fn cetd_drops_consecutive_short_boilerplate_run() {
+    // Realistic pattern: 10 long article paragraphs, then a RUN of 3
+    // short boilerplate labels (like a footer nav row), then more
+    // content. CETD smooths across neighbours; an isolated outlier
+    // between two long blocks is SHELTERED (by design: reduces
+    // false-positives on short-but-legit content between paragraphs).
+    // A run of 3+ short siblings produces a sustained low density the
+    // smoothing cannot mask.
+    let mut html = String::from("<article>");
+    for i in 0..10 {
+        html.push_str(&format!(
+            "<p>Content paragraph {i} with a substantial amount of real body \
+             text that represents genuine article content, long enough to \
+             clearly exceed the boilerplate noise floor. Each sentence ends \
+             with a proper period.</p>"
+        ));
+    }
+    html.push_str("<p>home</p><p>about</p><p>contact</p>");
+    for i in 10..20 {
+        html.push_str(&format!(
+            "<p>Content paragraph {i} continues the article with more body \
+             text of similar length.</p>"
+        ));
+    }
+    html.push_str("</article>");
+
+    let segs = deformat::html::strip_to_segments(&html);
+    let kept = deformat::html::filter_low_cetd_density(segs, 0.4);
+    // At least two of the three short labels should drop -- the middle
+    // one is neighbored on both sides by short peers, so its smoothed
+    // density is unambiguously low.
+    let kept_labels = kept
+        .iter()
+        .filter(|s| ["home", "about", "contact"].contains(&s.data().text.as_str()))
+        .count();
+    assert!(
+        kept_labels <= 1,
+        "short-boilerplate run not dropped by CETD: {kept_labels} of 3 survived"
+    );
+}
+
+#[test]
+fn cetd_shelters_isolated_short_block_between_long_siblings() {
+    // The dual to the test above: an isolated short block between long
+    // ones should NOT be dropped. CETD's smoothing exists precisely to
+    // prevent this false-positive mode.
+    let mut html = String::from("<article>");
+    for i in 0..5 {
+        html.push_str(&format!(
+            "<p>Long paragraph {i} with real content. Multiple sentences. \
+             Another sentence here. Filler to exceed 40 chars for \
+             filter_boilerplate's minimum.</p>"
+        ));
+    }
+    html.push_str("<p>brief interlude</p>");
+    for i in 5..10 {
+        html.push_str(&format!(
+            "<p>Long paragraph {i} resuming the article. More body text. \
+             Filler to exceed the minimum. Another sentence.</p>"
+        ));
+    }
+    html.push_str("</article>");
+
+    let segs = deformat::html::strip_to_segments(&html);
+    let kept = deformat::html::filter_low_cetd_density(segs, 0.4);
+    assert!(
+        kept.iter().any(|s| s.data().text == "brief interlude"),
+        "isolated short block dropped despite smoothing"
+    );
+}
+
+#[test]
+fn cetd_preserves_structural_types_regardless_of_length() {
+    // A short Title / ListItem / Table / CodeSnippet must survive
+    // CETD filtering even if their char count is far below the mean.
+    let html = r#"<article>
+        <h1>X</h1>
+        <ul><li>a</li></ul>
+        <pre><code>42</code></pre>
+        <table><tr><td>y</td></tr></table>
+        <p>Long narrative paragraph with enough text that the short structural
+           elements above would be flagged as outliers if the filter didn't
+           preserve them. Two more sentences. And a third.</p>
+        <p>Another long narrative paragraph to drive the mean density. It has
+           several sentences as well. Content keeps coming.</p>
+        <p>Yet another sibling carrying mean density for the smoothing.</p>
+    </article>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    let kept = deformat::html::filter_low_cetd_density(segs, 0.8);
+    let kinds: Vec<&str> = kept.iter().map(|s| s.type_name()).collect();
+    for expected in ["Title", "ListItem", "Table", "CodeSnippet"] {
+        assert!(
+            kinds.contains(&expected),
+            "{expected} preserved under aggressive CETD cap 0.8: {kinds:?}"
+        );
+    }
+}
+
+#[test]
+fn cetd_passes_through_when_fewer_than_three_narrative_segments() {
+    // Too few samples for smoothing to mean anything -- passthrough.
+    let html = "<p>one</p><p>two</p>";
+    let segs = deformat::html::strip_to_segments(html);
+    let n_before = segs.len();
+    let kept = deformat::html::filter_low_cetd_density(segs, 0.99);
+    assert_eq!(kept.len(), n_before);
+}
+
+#[test]
+fn cetd_zero_floor_keeps_everything() {
+    let html = "<article><p>A A A A A A A A A A A A A A A A.</p>\
+                <p>b</p>\
+                <p>B B B B B B B B B B B B B B B B.</p></article>";
+    let segs = deformat::html::strip_to_segments(html);
+    let kept = deformat::html::filter_low_cetd_density(segs.clone(), 0.0);
+    assert_eq!(kept.len(), segs.len());
+}
+
+#[test]
+fn cetd_composes_with_other_filters_in_four_filter_pipeline() {
+    // Four-filter pipeline: link-density -> sentence-density ->
+    // boilerplate -> CETD. Verify composition doesn't drop a clearly
+    // content-shaped article.
+    let html = r#"<article>
+        <h1>Research findings</h1>
+        <p>Researchers found something interesting. The effect was strong.
+           The data supported the hypothesis. More details follow below.</p>
+        <p>The second paragraph expands on the result. Control experiments
+           confirmed the baseline. Replication across three sites.</p>
+        <p>Discussion of limitations. The sample size was modest. Future
+           work should expand to a larger cohort.</p>
+    </article>"#;
+    let segs = deformat::html::strip_to_segments_filtered(html, 0.45);
+    let segs = deformat::html::filter_low_sentence_density(segs, 1.0);
+    let segs = deformat::html::filter_boilerplate(segs, 40);
+    let final_segs = deformat::html::filter_low_cetd_density(segs, 0.4);
+    assert!(!final_segs.is_empty());
+    // Ensure the research content survives.
+    let joined: String = final_segs
+        .iter()
+        .map(|s| s.data().text.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(joined.contains("Researchers found"));
+    assert!(joined.contains("second paragraph"));
+    assert!(joined.contains("limitations"));
+}
+
+// =============================================================================
+// Page-type classifier (heuristic)
+// =============================================================================
+
+#[test]
+fn page_type_real_world_article_with_og_type() {
+    let html = r#"<html><head>
+        <meta property="og:type" content="article">
+        <meta property="og:title" content="Real story">
+    </head><body><article><p>Body.</p></article></body></html>"#;
+    assert_eq!(
+        deformat::page_type::detect_page_type(html),
+        deformat::page_type::PageType::Article
+    );
+}
+
+#[test]
+fn page_type_json_ld_blog_posting() {
+    let html = r#"<html><head>
+        <script type="application/ld+json">
+        { "@context": "https://schema.org", "@type": "BlogPosting", "headline": "y" }
+        </script>
+    </head></html>"#;
+    assert_eq!(
+        deformat::page_type::detect_page_type(html),
+        deformat::page_type::PageType::Article
+    );
+}
+
+#[test]
+fn page_type_conflicting_signals_og_wins() {
+    // og:type says article; <article> says article; page looks like product
+    // via price class -- og:type wins (highest priority).
+    let html = r#"<html><head>
+        <meta property="og:type" content="article">
+    </head><body>
+        <span class="price">$10</span>
+        <span class="price">$20</span>
+        <span class="price">$30</span>
+    </body></html>"#;
+    assert_eq!(
+        deformat::page_type::detect_page_type(html),
+        deformat::page_type::PageType::Article
+    );
+}
+
+#[test]
+fn page_type_defaults_to_unknown_when_no_signal() {
+    assert_eq!(
+        deformat::page_type::detect_page_type("<p>plain</p>"),
+        deformat::page_type::PageType::Unknown
+    );
+}
+
 #[test]
 fn sentence_density_zero_cap_keeps_everything() {
     let html = "<p>ruby python rust go kotlin scala clojure ocaml haskell elixir zig nim crystal dart swift lua perl bash awk sed tcl vim emacs</p>";

@@ -796,6 +796,133 @@ proptest! {
 }
 
 proptest! {
+    /// filter_low_cetd_density must never drop a structural segment
+    /// (Title/Header/Footer/ListItem/Table/CodeSnippet/FigureCaption)
+    /// even when its char density is an outlier. This is the same
+    /// structural-preservation guarantee the link-density filter has.
+    #[test]
+    fn cetd_preserves_structural_segments_under_all_floors(
+        floor in 0.0f32..2.0,
+    ) {
+        let html = r#"<article>
+            <h1>Title</h1>
+            <header>Masthead</header>
+            <ul><li>a</li><li>b</li><li>c</li></ul>
+            <pre><code>code block</code></pre>
+            <table><tr><td>cell</td></tr></table>
+            <p>Long narrative paragraph that carries the mean density for
+               the batch. It has multiple sentences. The structural
+               elements above are all short but must survive regardless.</p>
+            <p>Second long narrative paragraph to give the smoothing
+               meaningful neighbours. Another sentence here. And one more.</p>
+            <p>A third narrative paragraph so n >= 3 for the filter to fire.</p>
+        </article>"#;
+        let segs = deformat::html::strip_to_segments(html);
+        let kinds_before: std::collections::HashSet<&str> =
+            segs.iter().map(|s| s.type_name()).collect();
+        let kept = deformat::html::filter_low_cetd_density(segs, floor);
+        let kinds_after: std::collections::HashSet<&str> =
+            kept.iter().map(|s| s.type_name()).collect();
+        for structural in ["Title", "ListItem", "Table", "CodeSnippet"] {
+            if kinds_before.contains(structural) {
+                prop_assert!(
+                    kinds_after.contains(structural),
+                    "{structural} dropped at floor {floor}",
+                );
+            }
+        }
+    }
+}
+
+proptest! {
+    /// CETD passes the multilang safety bar: non-ASCII text with
+    /// non-ASCII sentence terminators must clear the CETD filter when
+    /// it's flanked by peers of similar length. Guards against the
+    /// char-count-based density treating CJK blocks differently.
+    #[test]
+    fn cetd_multilang_body_not_dropped_among_peers(
+        (terminator, filler) in prop::sample::select(vec![
+            ('\u{3002}', '测'),
+            ('\u{FF01}', '試'),
+            ('\u{061F}', 'ا'),
+            ('\u{0964}', 'त'),
+        ]),
+        sentences in 3usize..=6,
+        chars_per_sentence in 20usize..=40,
+    ) {
+        let mut body = String::new();
+        for _ in 0..sentences {
+            for _ in 0..chars_per_sentence {
+                body.push(filler);
+            }
+            body.push(terminator);
+        }
+        // Three copies of the same multilang body -- equal peers so
+        // CETD's smoothing cannot declare any of them an outlier.
+        let html = format!(
+            "<article><p>{body}</p><p>{body}</p><p>{body}</p></article>"
+        );
+        let segs = deformat::html::strip_to_segments(&html);
+        let n_before = segs.len();
+        let kept = deformat::html::filter_low_cetd_density(segs, 0.5);
+        prop_assert!(
+            kept.len() == n_before,
+            "multilang peers dropped by CETD: {} -> {}",
+            n_before,
+            kept.len(),
+        );
+    }
+}
+
+proptest! {
+    /// detect_page_type must not panic on arbitrary byte sequences.
+    /// Returning PageType::Unknown is always a valid outcome; we just
+    /// guard against crashes on malformed HTML and non-ASCII content.
+    /// This test specifically includes multi-byte UTF-8 sequences to
+    /// exercise char-boundary handling in any internal slicing.
+    #[test]
+    fn page_type_detection_never_panics(
+        html in prop::collection::vec(prop::sample::select(vec![
+            // ASCII structural bytes
+            '<', '>', '"', '\'', '/', '\\', '!', '?', '-', '_', '=',
+            ' ', '\n', '\t',
+            'a', 'b', 'c', 'd', 'e', 'g', 'h', 'i', 'l', 'm', 'o',
+            'p', 'r', 's', 't', 'y',
+            // 2-byte UTF-8: Latin-1 Supplement (accented)
+            'é', 'ü', 'ö', 'ñ', 'ç', 'å', '\u{2019}', // right single quote (often mid-slice)
+            // 3-byte UTF-8: CJK, Arabic
+            '中', 'あ', 'ア', '가', 'ع',
+            // 4-byte UTF-8: emoji + supplementary plane
+            '😀', '📄', '\u{1F4A9}',
+        ]), 0..500).prop_map(|chars: Vec<char>| chars.into_iter().collect::<String>()),
+    ) {
+        // Call and discard -- any PageType value is acceptable; we only
+        // assert the function doesn't panic on char boundaries.
+        let _ = deformat::page_type::detect_page_type(&html);
+    }
+}
+
+proptest! {
+    /// Targeted panic-guard: build HTML that contains real non-ASCII
+    /// characters positioned near the keywords detect_page_type greps
+    /// for (og:type, rel="canonical", @type). This is the real-world
+    /// failure mode the ASCII-only strategy above can miss.
+    #[test]
+    fn page_type_detection_safe_near_og_type_keyword(
+        prefix in 0usize..500,
+        suffix in 0usize..500,
+        filler in prop::sample::select(vec!['中', 'あ', 'é', '\u{2019}', '😀']),
+    ) {
+        let mut html = String::new();
+        for _ in 0..prefix { html.push(filler); }
+        html.push_str("og:type");
+        for _ in 0..suffix { html.push(filler); }
+        // Must not panic on char-boundary slicing near the match.
+        let _ = deformat::page_type::detect_page_type(&html);
+    }
+}
+
+proptest! {
     /// For plain ASCII text inside a single <p>, the concatenated Direct
     /// source slices of all spans must contain every word from the input.
     /// This is a soft round-trip property.

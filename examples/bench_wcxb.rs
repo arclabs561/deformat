@@ -200,67 +200,47 @@ fn extract(kind: &str, html: &str) -> String {
                 .join("\n\n")
         }
         k if k.starts_with("cetd") => {
-            // CETD prototype: Composite text density with sibling smoothing
-            // (Sun et al. SIGIR 2011). Per-segment char density is smoothed
-            // across the segment's neighbours (0.25 prev + 0.5 self + 0.25
-            // next). Segments with smoothed density below `floor` are
-            // dropped -- but only NarrativeText / UncategorizedText;
-            // structural roles are preserved.
-            //
-            // `cetd` uses floor 0.30; `cetd-0.20` overrides.
+            // Four-filter pipeline: link-density -> sentence-density ->
+            // boilerplate -> CETD (Sun et al. SIGIR 2011). `cetd` uses
+            // floor 0.4; `cetd-0.5` overrides.
             let floor: f32 = k
                 .strip_prefix("cetd-")
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(0.30);
+                .unwrap_or(0.4);
             let segs = deformat::html::strip_to_segments_filtered(html, 0.45);
             let segs = deformat::html::filter_low_sentence_density(segs, 1.0);
             let segs = deformat::html::filter_boilerplate(segs, 40);
-            if segs.is_empty() {
-                return String::new();
-            }
-            // Per-segment raw density = text char count / source-byte span.
-            // Using char count (not word count) for language-agnosticity.
-            let densities: Vec<f32> = segs
+            deformat::html::filter_low_cetd_density(segs, floor)
                 .iter()
-                .map(|s| {
-                    let text_chars = s.data().text.chars().count() as f32;
-                    // Approximate source span by text length * 2 since
-                    // we don't have src ranges at the segment API level.
-                    // This is a fair proxy because WCXB pages are HTML-
-                    // heavy: a boilerplate block is short-text-short-span,
-                    // a content block is long-text-long-span, so raw
-                    // char-count works as a density-analog.
-                    text_chars
-                })
-                .collect();
-            // Smooth across neighbours.
-            let n = densities.len();
-            let smoothed: Vec<f32> = (0..n)
-                .map(|i| {
-                    let prev = if i == 0 {
-                        densities[i]
-                    } else {
-                        densities[i - 1]
-                    };
-                    let next = if i + 1 == n {
-                        densities[i]
-                    } else {
-                        densities[i + 1]
-                    };
-                    0.25 * prev + 0.5 * densities[i] + 0.25 * next
-                })
-                .collect();
-            // Scale floor to mean smoothed density.
-            let mean = smoothed.iter().sum::<f32>() / n as f32;
-            let threshold = mean * floor;
+                .map(|s| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        k if k.starts_with("page-typed") => {
+            // Page-type-aware routing: detect the page type first, then
+            // select a pipeline tailored to it. Sketched here as a
+            // proof of concept; production users would customize per
+            // type based on their corpus.
+            use deformat::page_type::{detect_page_type, PageType};
+            let pt = detect_page_type(html);
+            let segs = match pt {
+                PageType::Listing | PageType::Forum => {
+                    // These page types are legitimately link/list heavy;
+                    // don't over-filter. Skip link-density.
+                    let segs = deformat::html::strip_to_segments(html);
+                    deformat::html::filter_boilerplate(segs, 30)
+                }
+                _ => {
+                    // Article / Documentation / Product / default: full
+                    // four-filter pipeline.
+                    let segs = deformat::html::strip_to_segments_filtered(html, 0.45);
+                    let segs = deformat::html::filter_low_sentence_density(segs, 1.0);
+                    let segs = deformat::html::filter_boilerplate(segs, 40);
+                    deformat::html::filter_low_cetd_density(segs, 0.4)
+                }
+            };
             segs.iter()
-                .zip(smoothed.iter())
-                .filter(|(s, sm)| {
-                    let is_structural =
-                        !matches!(s.type_name(), "NarrativeText" | "UncategorizedText");
-                    is_structural || **sm >= threshold
-                })
-                .map(|(s, _)| s.data().text.clone())
+                .map(|s| s.data().text.clone())
                 .collect::<Vec<_>>()
                 .join("\n\n")
         }
