@@ -91,6 +91,42 @@ fn short_attribute_with_tag_like_content_is_preserved() {
 }
 
 #[test]
+fn cms_per_section_ids_do_not_trigger_wiki_skip() {
+    // Drupal's per-section anchor pattern `id="toc_12345"` used to
+    // false-match the wiki-skip heuristic's "toc" marker via
+    // substring-containment, causing entire article bodies to be
+    // skipped. Matching now requires exact equality or a hyphen-
+    // separated prefix, so `toc_12345` no longer matches.
+    let html = r#"<article>
+        <section id="toc_19421"><p>Real article paragraph one with content.</p></section>
+        <section id="toc_19426"><p>Real article paragraph two.</p></section>
+    </article>"#;
+    let text = strip_to_text(html);
+    assert!(
+        text.contains("Real article paragraph one"),
+        "cms section not skipped: {text}"
+    );
+    assert!(
+        text.contains("Real article paragraph two"),
+        "second section not skipped: {text}"
+    );
+}
+
+#[test]
+fn wiki_toc_with_hyphen_still_skipped() {
+    // Wikipedia-style TOC patterns (`id="toc"`, `id="toc-foo"`) must
+    // still trigger skipping.
+    let html = r#"<body>
+        <div id="toc"><ul><li>skip me 1</li></ul></div>
+        <div id="toc-desktop"><ul><li>skip me 2</li></ul></div>
+        <article><p>keep this paragraph</p></article>
+    </body>"#;
+    let text = strip_to_text(html);
+    assert!(text.contains("keep this paragraph"));
+    assert!(!text.contains("skip me"));
+}
+
+#[test]
 fn main_landmark_does_not_reset_when_skip_depth_is_zero() {
     // Well-formed HTML should be unchanged by the recovery.
     let well_formed = r#"<html><body>

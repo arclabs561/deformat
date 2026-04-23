@@ -2344,6 +2344,28 @@ fn strip_wiki_ref_markers(s: &str) -> Cow<'_, str> {
 ///
 /// Uses `extract_attr_value` for zero-allocation attribute extraction,
 /// then does case-insensitive substring matching against known skip IDs.
+/// Test whether an element `id` value matches a wiki-skip marker.
+///
+/// Returns true for exact equality (`id == marker`) or for marker
+/// followed by a non-alphanumeric separator (`marker-foo`,
+/// `marker.bar`, `marker/baz`), but NOT for `marker_NUMBER` or
+/// `markerfoo` — those are CMS per-section anchor patterns (Drupal,
+/// Hugo, etc.) unrelated to MediaWiki.
+fn id_matches_wiki_marker(id: &str, marker: &str) -> bool {
+    if id == marker {
+        return true;
+    }
+    if let Some(rest) = id.strip_prefix(marker) {
+        if let Some(sep) = rest.chars().next() {
+            // Accept hyphen as a separator (Wikipedia uses `mw-panel`,
+            // `mw-head-base`, etc.) but reject `_NUMBER` and
+            // alphanumeric continuations (`tocfoo`, `toc_19421`).
+            return sep == '-';
+        }
+    }
+    false
+}
+
 fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
     const WIKI_SKIP_IDS: &[&str] = &[
         "toc",
@@ -2386,9 +2408,20 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
                 val.to_string()
             };
             if *attr == "id" {
-                // ID is a single value -- substring match is appropriate
-                if WIKI_SKIP_IDS.iter().any(|id| check_val.contains(id)) {
-                    return true;
+                // IDs are a single value, but a substring match here
+                // false-positives on non-wiki sites (Drupal's
+                // `id="toc_19421"` per-section anchors, any CMS with
+                // `sidebar-*` / `footer-*` / `external-*` IDs, etc.).
+                // Accept the match only when the id EQUALS the marker or
+                // is the marker followed by a non-alphanumeric separator
+                // (`mw-panel`, `mw-panel-2`, `toc-desktop`, but not
+                // `tocfoo` or `toc_19421` which are clearly unrelated
+                // since `_NUMBER` suffixes are a per-section anchor
+                // pattern, not a wiki skip signal).
+                for id in WIKI_SKIP_IDS {
+                    if id_matches_wiki_marker(&check_val, id) {
+                        return true;
+                    }
                 }
             } else {
                 // Class is space-separated tokens -- match whole tokens
