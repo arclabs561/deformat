@@ -38,6 +38,11 @@ bump the minor version while in 0.x.
 
 ### Added
 
+- `Segment::CodeSnippet` now populates `metadata.languages` from the
+  `<code class="language-X">` (or `lang-X`) class attribute, matching
+  the long-standing README + enum-doc claim. Language identifier is
+  lowercased. Handles Pandoc / GFM / Prism / highlight.js conventions
+  out of the box.
 - `examples/segments_json.rs` — emit pure `Vec<Segment>` JSON to
   stdout. Pairs with `scripts/langchain_interop.py` to demonstrate
   the LangChain wire-format round-trip end-to-end.
