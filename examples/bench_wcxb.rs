@@ -257,6 +257,8 @@ fn extract(kind: &str, html: &str) -> String {
         }
         #[cfg(feature = "readability")]
         "readable" => deformat::extract_readable(html, None).text,
+        #[cfg(feature = "readability")]
+        "cascade" => deformat::extract_html_cascade(html).text,
         other => panic!("unknown extractor: {other}"),
     }
 }
