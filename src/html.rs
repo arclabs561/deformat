@@ -430,12 +430,20 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                 let mut tag_name_end = pos;
                 let mut in_tag_name = true;
                 let mut in_attr_quote: Option<u8> = None;
+                let mut quote_start: usize = 0;
 
                 while pos < len {
                     let b = bytes[pos];
                     if let Some(q) = in_attr_quote {
                         if b == q {
                             in_attr_quote = None;
+                        } else if b == b'<'
+                            && pos + 1 < len
+                            && looks_like_tag_start(bytes[pos + 1])
+                            && pos - quote_start > 256
+                        {
+                            in_attr_quote = None;
+                            continue;
                         }
                         pos += 1;
                         continue;
@@ -450,6 +458,7 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     }
                     if !in_tag_name && (b == b'"' || b == b'\'') {
                         in_attr_quote = Some(b);
+                        quote_start = pos;
                     }
                     pos += 1;
                 }
@@ -819,12 +828,20 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                 let mut tag_name_end = pos;
                 let mut in_tag_name = true;
                 let mut in_attr_quote: Option<u8> = None;
+                let mut quote_start: usize = 0;
 
                 while pos < len {
                     let b = bytes[pos];
                     if let Some(q) = in_attr_quote {
                         if b == q {
                             in_attr_quote = None;
+                        } else if b == b'<'
+                            && pos + 1 < len
+                            && looks_like_tag_start(bytes[pos + 1])
+                            && pos - quote_start > 256
+                        {
+                            in_attr_quote = None;
+                            continue;
                         }
                         pos += 1;
                         continue;
@@ -839,6 +856,7 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                     }
                     if !in_tag_name && (b == b'"' || b == b'\'') {
                         in_attr_quote = Some(b);
+                        quote_start = pos;
                     }
                     pos += 1;
                 }
@@ -1683,11 +1701,32 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                 let mut in_tag_name = true;
                 let mut in_attr_quote: Option<u8> = None;
 
+                let mut quote_start: usize = 0;
                 while pos < len {
                     let b = bytes[pos];
                     if let Some(q) = in_attr_quote {
                         if b == q {
                             in_attr_quote = None;
+                        } else if b == b'<'
+                            && pos + 1 < len
+                            && looks_like_tag_start(bytes[pos + 1])
+                            && pos - quote_start > 256
+                        {
+                            // Malformed-HTML recovery: once we've been
+                            // inside an unterminated attribute quote for
+                            // 256+ bytes and find a `<` that looks like a
+                            // new tag start (`<a`, `</p`, `<!`), assume
+                            // the source is missing a close-quote and
+                            // reprocess this `<` outside the quote. The
+                            // 256-byte floor preserves short legitimate
+                            // attributes that contain tag-like syntax
+                            // (e.g., `title="<script>alert(1)</script>"`,
+                            // `data-html="<b>bold</b>"`) while still
+                            // catching the runaway case where a missing
+                            // close-quote would otherwise swallow the
+                            // rest of the document.
+                            in_attr_quote = None;
+                            continue;
                         }
                         pos += 1;
                         continue;
@@ -1702,6 +1741,7 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                     }
                     if !in_tag_name && (b == b'"' || b == b'\'') {
                         in_attr_quote = Some(b);
+                        quote_start = pos;
                     }
                     pos += 1;
                 }
@@ -2367,6 +2407,13 @@ fn is_wiki_skip_tag(tag_buffer: &str) -> bool {
 /// should be excluded from text output.
 /// HTML5 void elements: tags that never have a closing tag.
 /// Reference: <https://html.spec.whatwg.org/multipage/syntax.html#void-elements>
+/// True when `b` could plausibly start a new HTML tag after a `<`.
+/// Used for malformed-attribute recovery: `< x` (space) is kept inside
+/// the attribute, but `<a` or `</` is treated as a tag start.
+fn looks_like_tag_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'/' || b == b'!'
+}
+
 fn is_void_element(tag: &str) -> bool {
     matches!(
         tag,
