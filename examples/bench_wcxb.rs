@@ -132,6 +132,10 @@ fn main() -> ExitCode {
 fn extract(kind: &str, html: &str) -> String {
     match kind {
         "strip" => deformat::html::strip_to_text(html),
+        "anchor" => deformat::html::strip_to_text_with_options(
+            html,
+            &deformat::html::StripOptions::main_landmark(),
+        ),
         "segments" => deformat::html::strip_to_segments(html)
             .iter()
             .map(|s| s.data().text.clone())

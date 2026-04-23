@@ -27,6 +27,26 @@ pub struct StripOptions {
     /// bracketed numbers or words (e.g., `[1]` as a footnote in plain text,
     /// `[edit]` in documentation).
     pub strip_wiki_ref_markers: bool,
+
+    /// Restrict extraction to the first HTML5 main-content landmark when
+    /// the page has one (`<main>`, then `<article>`).
+    ///
+    /// This is "anchor election": instead of stripping the whole document
+    /// and relying on skip-by-tag (`<nav>`, `<footer>`, `<aside>`) to
+    /// remove boilerplate, the scanner pre-scans for the primary content
+    /// container and extracts only from there. Modeled on Trafilatura's
+    /// XPath candidate election (`adbar/trafilatura/main_extractor.py`),
+    /// which uses semantic-tag priors before density scoring.
+    ///
+    /// On WCXB (article pages) this lifts F1 by a few points by avoiding
+    /// header/footer text the scanner's skip set doesn't catch (sidebars
+    /// in `<div>` elements, related-content sections, etc.). Pages
+    /// without a `<main>` or `<article>` fall through to normal scanning,
+    /// so enabling this is safe even on heterogeneous inputs.
+    ///
+    /// Default `false` to preserve byte-exact behavior of the existing
+    /// scanner. Enable with [`StripOptions::main_landmark()`].
+    pub prefer_main_landmark: bool,
 }
 
 impl StripOptions {
@@ -37,6 +57,20 @@ impl StripOptions {
     pub fn wikipedia() -> Self {
         Self {
             strip_wiki_ref_markers: true,
+            prefer_main_landmark: false,
+        }
+    }
+
+    /// Preset for article extraction with anchor election.
+    ///
+    /// Enables [`Self::prefer_main_landmark`]. Use this when the input is
+    /// expected to be an article page; the scanner will restrict to the
+    /// first `<main>`/`<article>` zone if one exists.
+    #[must_use]
+    pub fn main_landmark() -> Self {
+        Self {
+            strip_wiki_ref_markers: false,
+            prefer_main_landmark: true,
         }
     }
 }
@@ -1533,10 +1567,134 @@ pub fn extract_with_readability(
 }
 
 // ---------------------------------------------------------------------------
+// Anchor election (Trafilatura-style)
+// ---------------------------------------------------------------------------
+
+/// Find the inner-HTML slice of the first `<main>` or `<article>` element.
+///
+/// Returns `None` when no anchor is present, when the anchor has no
+/// matching close tag, or when the slice is shorter than `min_len`
+/// characters (a minimum-content guard so we don't elect a near-empty
+/// landmark over a richer body).
+///
+/// The scan is best-effort: it tracks open/close balance for the elected
+/// tag name only and ignores quoted attributes that contain `<`. For
+/// well-formed HTML this is exact; for malformed inputs it returns the
+/// best-effort slice or falls through to `None`.
+///
+/// Tag preference order: `<main>` first (HTML5 primary-content
+/// landmark, at most one per document), then `<article>` (which a page
+/// may have several of -- we take the longest).
+fn find_main_landmark_slice(html: &str, min_len: usize) -> Option<&str> {
+    if let Some(slice) = find_first_landmark_slice(html, b"main") {
+        if slice.len() >= min_len {
+            return Some(slice);
+        }
+    }
+
+    let mut best: Option<&str> = None;
+    let mut cursor = 0;
+    while cursor < html.len() {
+        let Some(slice) = find_first_landmark_slice(&html[cursor..], b"article") else {
+            break;
+        };
+        let slice_start = slice.as_ptr() as usize - html.as_ptr() as usize;
+        let slice_end = slice_start + slice.len();
+        if slice.len() >= min_len && best.map_or(true, |b: &str| slice.len() > b.len()) {
+            best = Some(slice);
+        }
+        cursor = slice_end;
+    }
+    best
+}
+
+/// Find the inner-HTML slice of the first occurrence of `<TAG ...>`...`</TAG>`.
+/// `tag` must be lowercase ASCII, no angle brackets.
+fn find_first_landmark_slice<'a>(html: &'a str, tag: &[u8]) -> Option<&'a str> {
+    let bytes = html.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let candidate = memchr::memchr(b'<', &bytes[idx..])?;
+        let pos = idx + candidate;
+        if pos + 1 + tag.len() >= bytes.len() {
+            return None;
+        }
+        if bytes[pos + 1..pos + 1 + tag.len()].eq_ignore_ascii_case(tag) {
+            let after = bytes[pos + 1 + tag.len()];
+            if matches!(after, b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/') {
+                let close_open = memchr::memchr(b'>', &bytes[pos..])?;
+                let inner_start = pos + close_open + 1;
+                let close_slice = find_matching_close(&bytes[inner_start..], tag)?;
+                let inner_end = inner_start + close_slice;
+                return Some(&html[inner_start..inner_end]);
+            }
+        }
+        idx = pos + 1;
+    }
+    None
+}
+
+/// Scan forward from the start of inner HTML, tracking nested opens of
+/// `tag` until the balanced close is found. Returns the offset (within
+/// the slice) of the closing `<` of the matching `</TAG>`.
+fn find_matching_close(inner: &[u8], tag: &[u8]) -> Option<usize> {
+    let mut depth: i32 = 1;
+    let mut idx = 0;
+    while idx < inner.len() {
+        let candidate = memchr::memchr(b'<', &inner[idx..])?;
+        let pos = idx + candidate;
+        if pos + 1 >= inner.len() {
+            return None;
+        }
+        let is_close = inner[pos + 1] == b'/';
+        let name_start = pos + 1 + if is_close { 1 } else { 0 };
+        if name_start + tag.len() <= inner.len()
+            && inner[name_start..name_start + tag.len()].eq_ignore_ascii_case(tag)
+        {
+            let after = inner.get(name_start + tag.len()).copied();
+            if matches!(
+                after,
+                Some(b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/' | b'\0')
+            ) || after.is_none()
+            {
+                if is_close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(pos);
+                    }
+                } else {
+                    depth += 1;
+                }
+            }
+        }
+        idx = pos + 1;
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Core strip implementation
 // ---------------------------------------------------------------------------
 
 fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Span>>) -> String {
+    // Anchor election (Trafilatura-style): when enabled, restrict to the
+    // first <main> / longest <article> zone. The anchor pre-scan is a
+    // separate pass; the recursive strip_impl call below sees a regular
+    // strip request on the elected slice.
+    //
+    // SpanMap callers do NOT get anchor election: span offsets only make
+    // sense relative to the original input, and reconciling slice offsets
+    // back to the source would require a non-trivial offset table.
+    if options.prefer_main_landmark && spans.is_none() {
+        // 200 chars is enough to filter empty landmarks (e.g., <main>
+        // wrapping only a search box) without rejecting short articles.
+        if let Some(landmark_slice) = find_main_landmark_slice(html, 200) {
+            let mut elected = options.clone();
+            elected.prefer_main_landmark = false;
+            return strip_impl(landmark_slice, &elected, None);
+        }
+    }
+
     let bytes = html.as_bytes();
     let len = bytes.len();
 
@@ -5191,5 +5349,116 @@ mod tests {
         assert!(text.contains("short"));
         assert!(spans.source_range(100, 200).is_none());
         assert!(spans.source_range(0, 0).is_none());
+    }
+
+    // ===== Anchor election (prefer_main_landmark) =====
+
+    #[test]
+    fn anchor_election_finds_main_landmark() {
+        let inner = "<p>Article body content here.</p>".repeat(20);
+        let html = format!(
+            "<html><body><nav>nav text everywhere here</nav>\
+             <main>{inner}</main>\
+             <footer>footer text everywhere here</footer></body></html>"
+        );
+        let elected = strip_to_text_with_options(&html, &StripOptions::main_landmark());
+        let baseline = strip_to_text(&html);
+        // Both should keep article body. Both should drop nav/footer (skip
+        // tags). Anchor election adds no signal here, but must NOT regress.
+        assert!(elected.contains("Article body content"));
+        assert!(baseline.contains("Article body content"));
+    }
+
+    #[test]
+    fn anchor_election_drops_non_skip_boilerplate_outside_main() {
+        // <div class="related-posts"> is NOT a skip tag, so the baseline
+        // scanner emits its content. Anchor election restricts to <main>
+        // and drops the related-posts div.
+        let html = "<html><body>\
+            <main><h1>Title</h1>\
+            <p>The article body has substantial content with multiple sentences and paragraphs to clear the minimum landmark threshold for election.</p>\
+            <p>Second paragraph adds more body text so the slice is comfortably above the 200-char floor that find_main_landmark_slice enforces.</p>\
+            </main>\
+            <div class=\"related-posts\">RELATED_BOILERPLATE_TOKEN should not appear in output</div>\
+            </body></html>";
+        let elected = strip_to_text_with_options(html, &StripOptions::main_landmark());
+        let baseline = strip_to_text(html);
+        assert!(elected.contains("article body"));
+        assert!(
+            !elected.contains("RELATED_BOILERPLATE_TOKEN"),
+            "election should drop non-skip-tag boilerplate outside <main>: {elected}"
+        );
+        assert!(
+            baseline.contains("RELATED_BOILERPLATE_TOKEN"),
+            "baseline emits the boilerplate (no election); confirms the test isn't trivially passing: {baseline}"
+        );
+    }
+
+    #[test]
+    fn anchor_election_falls_through_when_no_landmark() {
+        // No <main> or <article>: must fall through to normal strip.
+        let html = "<html><body><div><p>Just a div-wrapped paragraph.</p></div></body></html>";
+        let elected = strip_to_text_with_options(html, &StripOptions::main_landmark());
+        let baseline = strip_to_text(html);
+        assert_eq!(elected, baseline);
+    }
+
+    #[test]
+    fn anchor_election_picks_longest_article_when_no_main() {
+        // Page with two <article>s: a tiny teaser and a full body.
+        // Election picks the longer one.
+        let body = "<p>Full article body paragraph repeated. </p>".repeat(15);
+        let html = format!(
+            "<html><body>\
+            <article><p>Teaser snippet.</p></article>\
+            <article>{body}</article>\
+            </body></html>"
+        );
+        let elected = strip_to_text_with_options(&html, &StripOptions::main_landmark());
+        assert!(elected.contains("Full article body"));
+        assert!(
+            !elected.contains("Teaser snippet"),
+            "shorter article shouldn't win election: {elected}"
+        );
+    }
+
+    #[test]
+    fn anchor_election_skips_too_small_landmarks() {
+        // <main> with only a search box (well under 200 chars) should not
+        // win election; fall through to whole-document scanning.
+        let html = "<html><body>\
+            <main><form><input type=\"search\"></form></main>\
+            <div><p>Real body content lives outside the empty main landmark, in a regular div container with several sentences worth of text.</p></div>\
+            </body></html>";
+        let elected = strip_to_text_with_options(html, &StripOptions::main_landmark());
+        assert!(
+            elected.contains("Real body content"),
+            "election should reject empty <main> and fall through: {elected}"
+        );
+    }
+
+    #[test]
+    fn anchor_election_handles_nested_articles() {
+        // <article> nested inside <article>: the find_matching_close depth
+        // tracker must not return early on the inner close tag.
+        let inner_body = "<p>Outer body content paragraph repeated. </p>".repeat(15);
+        let html = format!(
+            "<html><body><article>{inner_body}\
+             <article><p>Nested teaser inside outer.</p></article>\
+             </article></body></html>"
+        );
+        let elected = strip_to_text_with_options(&html, &StripOptions::main_landmark());
+        assert!(elected.contains("Outer body content"));
+        assert!(elected.contains("Nested teaser"));
+    }
+
+    #[test]
+    fn anchor_election_default_off_preserves_byte_exact_strip() {
+        // StripOptions::default() must NOT enable election -- back-compat.
+        let html = "<html><body><main><p>Inside main.</p></main><p>Outside main.</p></body></html>";
+        let default = strip_to_text_with_options(html, &StripOptions::default());
+        let strip = strip_to_text(html);
+        assert_eq!(default, strip);
+        assert!(default.contains("Outside main"));
     }
 }
