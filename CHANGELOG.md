@@ -3,7 +3,7 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
-## Unreleased
+## 0.13.0 — 2026-04-23
 
 ### Fixed
 
