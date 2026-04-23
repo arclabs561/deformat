@@ -495,6 +495,7 @@ fn is_block_like(tag: &str) -> bool {
             | "footer"
             | "dt"
             | "dd"
+            | "summary"
     )
 }
 
@@ -729,6 +730,10 @@ fn keep_by_sentence_density(seg: &Segment, cap: f32) -> bool {
 fn block_tag_to_type(tag: &str) -> &'static str {
     match tag {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "Title",
+        // <summary> is the header of a <details> disclosure widget.
+        // Treat it like a title so subsequent paragraphs inside the
+        // same <details> get parent_id linkage.
+        "summary" => "Title",
         "li" => "ListItem",
         "table" | "tr" | "td" | "th" => "Table",
         "pre" => "CodeSnippet",

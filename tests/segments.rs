@@ -697,3 +697,50 @@ fn img_inside_pre_stays_codesnippet() {
     assert_eq!(segs.len(), 1);
     assert_eq!(segs[0].type_name(), "CodeSnippet");
 }
+
+// =============================================================================
+// <details>/<summary> classification
+// =============================================================================
+
+#[test]
+fn summary_emits_as_title_with_children_under_it() {
+    let html = r#"<article>
+        <details>
+            <summary>Click to expand</summary>
+            <p>Hidden paragraph one.</p>
+            <p>Hidden paragraph two.</p>
+        </details>
+    </article>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    // Summary is a Title; following paragraphs are NarrativeText with
+    // parent_id = summary's element_id.
+    let summary = segs
+        .iter()
+        .find(|s| s.data().text.contains("Click to expand"))
+        .expect("summary segment present");
+    assert_eq!(summary.type_name(), "Title");
+    let summary_id = &summary.data().element_id;
+
+    let para_one = segs
+        .iter()
+        .find(|s| s.data().text.contains("Hidden paragraph one"))
+        .unwrap();
+    assert_eq!(para_one.type_name(), "NarrativeText");
+    assert_eq!(
+        para_one.data().metadata.parent_id.as_deref(),
+        Some(summary_id.as_str())
+    );
+}
+
+#[test]
+fn summary_has_no_category_depth() {
+    // Summary is title-like but not an h1-h6, so category_depth stays unset.
+    let html = r#"<details><summary>Toggle</summary><p>Body.</p></details>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    let summary = segs
+        .iter()
+        .find(|s| s.data().text.contains("Toggle"))
+        .unwrap();
+    assert_eq!(summary.type_name(), "Title");
+    assert_eq!(summary.data().metadata.category_depth, None);
+}
