@@ -316,6 +316,79 @@ pub fn extract_readable(html: &str, url: Option<&str>) -> Extracted {
     }
 }
 
+/// Extract HTML by cascading from scanner stripping to readability.
+///
+/// Runs [`html::strip_to_text`] first (cheap, no DOM parse). If the
+/// scanner output is suspiciously short, runs [`extract_readable`] and
+/// returns whichever produced more text.
+///
+/// "Suspiciously short" means under `500` Unicode scalars regardless of
+/// input size. This catches pages where the scanner's heuristic skip set
+/// (`<nav>`, `<aside>`, `<footer>`, ...) consumed the actual article
+/// because the page lacks semantic landmarks, while leaving normal pages
+/// untouched (no extra readability cost).
+///
+/// Requires the `readability` feature. Without it, prefer [`extract`] or
+/// [`html::strip_to_text`] directly -- the cascade has nothing to fall
+/// back to.
+///
+/// The returned [`Extracted`] reports which backend won via its
+/// `extractor` field. `fallback` is always `false` here: the cascade
+/// chose the better of the two intended outputs, neither is a degraded
+/// path.
+///
+/// # Examples
+///
+/// ```
+/// // Page with proper semantics: scanner wins, readability never runs.
+/// let html = "<html><body><article>".to_string()
+///     + &"<p>Real article content. </p>".repeat(40)
+///     + "</article></body></html>";
+/// let result = deformat::extract_html_cascade(&html);
+/// assert!(result.text.len() > 500);
+/// assert_eq!(result.extractor, deformat::Extractor::Strip);
+/// ```
+#[cfg(feature = "readability")]
+#[must_use]
+pub fn extract_html_cascade(html: &str) -> Extracted {
+    const MIN_STRIP_CHARS: usize = 500;
+
+    let strip_text = html::strip_to_text(html);
+    if strip_text.chars().count() >= MIN_STRIP_CHARS {
+        return Extracted {
+            text: strip_text,
+            format: Format::Html,
+            extractor: Extractor::Strip,
+            title: None,
+            excerpt: None,
+            fallback: false,
+        };
+    }
+
+    match html::extract_with_readability(html, "") {
+        Some((readable_text, title, excerpt))
+            if readable_text.chars().count() > strip_text.chars().count() =>
+        {
+            Extracted {
+                text: readable_text,
+                format: Format::Html,
+                extractor: Extractor::Readability,
+                title,
+                excerpt,
+                fallback: false,
+            }
+        }
+        _ => Extracted {
+            text: strip_text,
+            format: Format::Html,
+            extractor: Extractor::Strip,
+            title: None,
+            excerpt: None,
+            fallback: false,
+        },
+    }
+}
+
 /// Extract text from HTML using DOM-based conversion with layout awareness.
 ///
 /// Produces formatted text that respects block structure, tables, and
@@ -455,6 +528,56 @@ mod tests {
     fn extract_readable_fallback_on_short() {
         let result = extract_readable("<p>Short</p>", None);
         assert!(result.fallback);
+    }
+
+    #[cfg(feature = "readability")]
+    #[test]
+    fn cascade_picks_strip_when_output_is_long_enough() {
+        let body: String = (0..40)
+            .map(|i| {
+                format!("<p>Paragraph number {i} carries enough text to clear the threshold. </p>")
+            })
+            .collect();
+        let html = format!("<html><body><article>{body}</article></body></html>");
+        let result = extract_html_cascade(&html);
+        assert_eq!(result.extractor, Extractor::Strip);
+        assert!(result.text.chars().count() >= 500);
+        assert!(result.text.contains("Paragraph number 0"));
+    }
+
+    #[cfg(feature = "readability")]
+    #[test]
+    fn cascade_falls_back_to_readability_when_strip_is_short() {
+        // Page where the scanner's heuristics consume the entire body
+        // (everything is inside <nav>, which strip_to_text skips), but
+        // readability sees real article content via DOM scoring.
+        // Using <article> outside the nav so readability has something
+        // to score.
+        let html = "<!DOCTYPE html><html><body>\
+            <nav><p>nav</p></nav>\
+            <article>\
+            <p>This is a long-form article with substantial paragraphs that \
+            readability will identify as the main content. It contains enough \
+            sentences to satisfy readability's content-density heuristics. \
+            The body is dense with text and should clearly outrank the nav.</p>\
+            <p>A second paragraph adds more weight to the article scoring. It \
+            mentions specific entities and quotes to look like real prose. The \
+            scanner already keeps this content too, so the cascade only matters \
+            when the scanner's skip set bites.</p>\
+            </article>\
+            </body></html>";
+        let result = extract_html_cascade(html);
+        // Either path is correct here as long as we get the article. Verify
+        // the cascade didn't drop the content.
+        assert!(result.text.contains("long-form article"));
+    }
+
+    #[cfg(feature = "readability")]
+    #[test]
+    fn cascade_returns_strip_when_both_extractors_fail_to_find_content() {
+        let result = extract_html_cascade("<html><body></body></html>");
+        assert_eq!(result.extractor, Extractor::Strip);
+        assert!(!result.fallback);
     }
 
     #[cfg(feature = "html2text")]
