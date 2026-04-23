@@ -170,6 +170,22 @@ references, Windows-1252 C1 range mapping, CJK ruby annotation stripping, Wikipe
 boilerplate removal, reference marker stripping (`[1]`, `[edit]`), image alt text
 extraction, and whitespace collapsing.
 
+## Test fixtures
+
+Small, authored-here fixtures live under `tests/fixtures/synthetic/`
+(~10 KB total: DOCX, XLSX, PPTX, EPUB, RTF — each with Unicode and
+structure variants). They're generated deterministically by
+`scripts/generate_synthetic_fixtures.py` (Python stdlib only) and
+committed so `cargo test --all-features` exercises real-format code
+paths in CI without a fetch step.
+
+Minimized regression repros for WCXB-surfaced scanner bugs live under
+`tests/fixtures/adversarial/`. See `tests/fixtures/PROVENANCE.md` for
+the per-file manifest and the commit-vs-fetch decision rationale.
+
+The WCXB benchmark (1,495 pages, CC-BY-4.0) is NOT committed — fetch
+it with `scripts/fetch_wcxb.py` to reproduce the F1 numbers below.
+
 ## Benchmark (WCXB dev split, 1,497 pages)
 
 `cargo run --release --example bench_wcxb` — word-level F1 against the

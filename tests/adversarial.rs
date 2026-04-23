@@ -126,6 +126,78 @@ fn wiki_toc_with_hyphen_still_skipped() {
     assert!(!text.contains("skip me"));
 }
 
+// =============================================================================
+// Committed adversarial fixtures (see tests/fixtures/adversarial/)
+// =============================================================================
+
+fn adversarial_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/adversarial")
+}
+
+fn load_adversarial(name: &str) -> String {
+    std::fs::read_to_string(adversarial_dir().join(name)).expect("adversarial fixture present")
+}
+
+#[test]
+fn fixture_unclosed_nav_drawer_recovers() {
+    let html = load_adversarial("unclosed_nav_drawer.html");
+    let text = strip_to_text(&html);
+    assert!(text.contains("Article Title For Recovery Test"));
+    assert!(text.contains("First paragraph of the article body"));
+    // Nav content should still be skipped.
+    assert!(!text.contains("Drawer nav"));
+    assert!(!text.contains("Main header nav content"));
+}
+
+#[test]
+fn fixture_unclosed_attr_quote_recovers() {
+    let html = load_adversarial("unclosed_attr_quote.html");
+    let text = strip_to_text(&html);
+    // Pre-img content extracts normally.
+    assert!(text.contains("First paragraph with the article lede"));
+    // The padding paragraph IS swallowed by the phantom attribute
+    // value -- this is the cost of the 256-byte delay in recovery.
+    // That's acceptable: in malformed HTML you pay some collateral
+    // on the recovery run-up, but recovery eventually fires.
+    //
+    // What must NOT be swallowed is the content AFTER recovery kicks
+    // in at the next <p. Without the heuristic, everything through
+    // end-of-document would be lost; with it, Second paragraph and
+    // beyond are emitted.
+    assert!(
+        text.contains("Second paragraph comes after"),
+        "post-recovery content emitted: {text}"
+    );
+    assert!(text.contains("Next page link"));
+}
+
+#[test]
+fn fixture_cms_toc_section_ids_not_skipped() {
+    let html = load_adversarial("cms_toc_section_ids.html");
+    let text = strip_to_text(&html);
+    assert!(text.contains("New York recognizes many business forms"));
+    assert!(text.contains("advantages and disadvantages"));
+    assert!(text.contains("Department of State cannot offer advice"));
+}
+
+#[test]
+fn fixture_nested_void_elements_dont_leak_into_paths() {
+    let html = load_adversarial("nested_void_elements.html");
+    let (_text, spans) = deformat::html::strip_to_text_with_paths(&html);
+    for span in &spans {
+        assert!(
+            !span.path.contains("img"),
+            "img leaked into path: {:?}",
+            span.path
+        );
+        assert!(
+            !span.path.contains("br") && !span.path.contains("hr"),
+            "void element leaked: {:?}",
+            span.path
+        );
+    }
+}
+
 #[test]
 fn main_landmark_does_not_reset_when_skip_depth_is_zero() {
     // Well-formed HTML should be unchanged by the recovery.

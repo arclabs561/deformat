@@ -1,17 +1,20 @@
-//! Tests against real-world document files (DOCX, EPUB, XLSX).
+//! Tests against real document files (DOCX, EPUB, XLSX, PPTX, RTF).
 //!
-//! These tests are `#[ignore]` by default because the fixture files
-//! must be downloaded first. Run with:
+//! Fixture files live at `tests/fixtures/synthetic/` and are committed
+//! to the repo. They are produced by
+//! `scripts/generate_synthetic_fixtures.py` (deterministic, stdlib-only
+//! Python, rerun to regenerate byte-identical outputs). Each file is
+//! under 3 KB and is authored by this crate -- dual-licensed
+//! MIT-OR-Apache-2.0 alongside the rest of the source. See
+//! `tests/fixtures/PROVENANCE.md` for the manifest and rationale.
 //!
-//! ```sh
-//! scripts/fetch_fixtures.sh
-//! cargo test --all-features --test real_formats -- --ignored
-//! ```
+//! These tests run as part of `cargo test --all-features` -- no fetch
+//! step required.
 
 use std::path::PathBuf;
 
 fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-fixtures/real")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/synthetic")
 }
 
 // =============================================================================
@@ -23,130 +26,80 @@ mod docx_tests {
     use super::*;
 
     #[test]
-    #[ignore]
-    fn extract_real_docx_demo() {
-        let path = fixtures_dir().join("sample1.docx");
-        if !path.exists() {
-            eprintln!("Skipping: {path:?} not found. Download with scripts/fetch_fixtures.sh");
-            return;
-        }
-        let result = deformat::docx::extract_file(&path).unwrap();
-        assert!(
-            result.text.len() > 100,
-            "expected substantial text from demo.docx, got {} chars",
-            result.text.len()
-        );
+    fn extract_minimal_docx() {
+        let result = deformat::docx::extract_file(&fixtures_dir().join("minimal.docx")).unwrap();
         assert_eq!(result.format, deformat::Format::Docx);
-        // Should not contain XML tags
+        assert!(
+            result.text.contains("Hello from DOCX"),
+            "text: {}",
+            result.text
+        );
         assert!(
             !result.text.contains("<w:"),
-            "XML namespace leaked: {}...",
-            &result.text[..result.text.len().min(200)]
-        );
-        assert!(!result.text.contains("</w:"), "closing XML tags leaked");
-        println!(
-            "sample1.docx: {} chars extracted. First 200: {}",
-            result.text.len(),
-            &result.text[..result.text.len().min(200)]
+            "XML namespace leaked: {}",
+            result.text
         );
     }
 
     #[test]
-    #[ignore]
-    fn docx_bytes_api() {
-        let path = fixtures_dir().join("sample1.docx");
-        if !path.exists() {
-            return;
+    fn extract_unicode_docx() {
+        let result = deformat::docx::extract_file(&fixtures_dir().join("unicode.docx")).unwrap();
+        // CJK
+        assert!(
+            result.text.contains("中文"),
+            "CJK preserved: {}",
+            result.text
+        );
+        // Accented
+        assert!(result.text.contains("Café"), "accented: {}", result.text);
+        // Cyrillic / Eastern European
+        assert!(
+            result.text.contains("Łódź") || result.text.contains("München"),
+            "extended-latin: {}",
+            result.text
+        );
+    }
+
+    #[test]
+    fn extract_docx_table_preserves_cells() {
+        let result = deformat::docx::extract_file(&fixtures_dir().join("table.docx")).unwrap();
+        for expected in ["Name", "Value", "Note", "Alpha", "42", "First row body"] {
+            assert!(
+                result.text.contains(expected),
+                "cell {expected:?} missing: {}",
+                result.text
+            );
         }
+    }
+
+    #[test]
+    fn docx_bytes_api_matches_file_api() {
+        let path = fixtures_dir().join("minimal.docx");
         let bytes = std::fs::read(&path).unwrap();
-        let result = deformat::docx::extract_bytes(&bytes).unwrap();
+        let bytes_result = deformat::docx::extract_bytes(&bytes).unwrap();
         let file_result = deformat::docx::extract_file(&path).unwrap();
-        // bytes and file APIs should produce identical output
-        assert_eq!(result.text, file_result.text, "bytes vs file mismatch");
-    }
-}
-
-// =============================================================================
-// EPUB
-// =============================================================================
-
-#[cfg(feature = "epub")]
-mod epub_tests {
-    use super::*;
-
-    #[test]
-    #[ignore]
-    fn extract_alice_in_wonderland() {
-        let path = fixtures_dir().join("alice.epub");
-        if !path.exists() {
-            eprintln!("Skipping: {path:?} not found");
-            return;
-        }
-        let result = deformat::epub::extract_file(&path).unwrap();
-        assert!(
-            result.text.len() > 5000,
-            "Alice should be substantial, got {} chars",
-            result.text.len()
-        );
-        assert_eq!(result.format, deformat::Format::Epub);
-        // Content checks
-        assert!(
-            result.text.contains("Alice"),
-            "should contain 'Alice': first 500 chars: {}",
-            &result.text[..result.text.len().min(500)]
-        );
-        // Should not contain HTML tags
-        assert!(!result.text.contains("<html"), "HTML tags leaked");
-        assert!(!result.text.contains("<body"), "body tag leaked");
-        // Title should be extracted
-        if let Some(ref title) = result.title {
-            println!("Title: {title}");
-        }
-        println!(
-            "alice.epub: {} chars, title={:?}. First 300: {}",
-            result.text.len(),
-            result.title,
-            &result.text[..result.text.len().min(300)]
-        );
+        assert_eq!(bytes_result.text, file_result.text);
     }
 
     #[test]
-    #[ignore]
-    fn extract_metamorphosis() {
-        let path = fixtures_dir().join("metamorphosis.epub");
-        if !path.exists() {
-            return;
-        }
-        let result = deformat::epub::extract_file(&path).unwrap();
-        assert!(
-            result.text.len() > 5000,
-            "Metamorphosis should be substantial, got {} chars",
-            result.text.len()
-        );
-        assert!(
-            result.text.contains("Gregor") || result.text.contains("Samsa"),
-            "should contain Kafka character names: first 500: {}",
-            &result.text[..result.text.len().min(500)]
-        );
-        assert!(!result.text.contains("<html"), "HTML leaked");
-        println!(
-            "metamorphosis.epub: {} chars, title={:?}",
-            result.text.len(),
-            result.title
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn epub_bytes_api() {
-        let path = fixtures_dir().join("alice.epub");
-        if !path.exists() {
-            return;
-        }
-        let bytes = std::fs::read(&path).unwrap();
-        let result = deformat::epub::extract_bytes(&bytes).unwrap();
-        let file_result = deformat::epub::extract_file(&path).unwrap();
-        assert_eq!(result.text, file_result.text, "bytes vs file mismatch");
+    fn docx_table_segment_carries_text_as_html() {
+        // The Segment-level API must emit the <w:tbl> as Segment::Table
+        // with metadata.text_as_html populated (landed 0.12.0).
+        let bytes = std::fs::read(fixtures_dir().join("table.docx")).unwrap();
+        let segs = deformat::docx::extract_bytes_to_segments(&bytes).unwrap();
+        let table = segs
+            .iter()
+            .find(|s| s.type_name() == "Table")
+            .expect("Table segment emitted");
+        let html = table
+            .data()
+            .metadata
+            .text_as_html
+            .as_deref()
+            .expect("text_as_html populated");
+        assert!(html.starts_with("<table>"));
+        assert!(html.contains("<tr>"));
+        assert!(html.contains("Alpha"));
     }
 }
 
@@ -159,86 +112,160 @@ mod xlsx_tests {
     use super::*;
 
     #[test]
-    #[ignore]
-    fn extract_real_xlsx_demo() {
-        let path = fixtures_dir().join("sample1.xlsx");
-        if !path.exists() {
-            eprintln!("Skipping: {path:?} not found. Run scripts/fetch_fixtures.sh");
-            return;
-        }
-        let result = deformat::xlsx::extract_file(&path).unwrap();
-        assert!(
-            !result.text.trim().is_empty(),
-            "expected some cell text from sample1.xlsx"
-        );
+    fn extract_minimal_xlsx_cells() {
+        let result = deformat::xlsx::extract_file(&fixtures_dir().join("minimal.xlsx")).unwrap();
         assert_eq!(result.format, deformat::Format::Xlsx);
-        // Should not contain XML tags or raw namespaces
+        for expected in ["Name", "Score", "Alice", "Bob"] {
+            assert!(
+                result.text.contains(expected),
+                "cell {expected:?} missing: {}",
+                result.text
+            );
+        }
+    }
+
+    #[test]
+    fn extract_unicode_multi_sheet_xlsx() {
+        let result = deformat::xlsx::extract_file(&fixtures_dir().join("unicode.xlsx")).unwrap();
+        // CJK shared string
+        assert!(result.text.contains("中文"), "CJK cell: {}", result.text);
+        // Cyrillic
         assert!(
-            !result.text.contains("<x:"),
-            "XML namespace leaked: {}...",
-            &result.text[..result.text.len().min(200)]
+            result.text.contains("Привет"),
+            "Cyrillic cell: {}",
+            result.text
         );
+        // Second sheet content
         assert!(
-            !result.text.contains("sharedStrings"),
-            "internal ref leaked"
-        );
-        println!(
-            "sample1.xlsx: {} chars. First 200: {}",
-            result.text.len(),
-            &result.text[..result.text.len().min(200)]
+            result.text.contains("Totals at bottom"),
+            "second sheet visited: {}",
+            result.text
         );
     }
 
     #[test]
-    #[ignore]
-    fn xlsx_bytes_api() {
-        let path = fixtures_dir().join("sample1.xlsx");
-        if !path.exists() {
-            return;
-        }
+    fn xlsx_bytes_api_matches_file_api() {
+        let path = fixtures_dir().join("minimal.xlsx");
         let bytes = std::fs::read(&path).unwrap();
-        let result = deformat::xlsx::extract_bytes(&bytes).unwrap();
-        let file_result = deformat::xlsx::extract_file(&path).unwrap();
-        assert_eq!(result.text, file_result.text, "bytes vs file mismatch");
+        let b = deformat::xlsx::extract_bytes(&bytes).unwrap();
+        let f = deformat::xlsx::extract_file(&path).unwrap();
+        assert_eq!(b.text, f.text);
     }
 }
 
 // =============================================================================
-// Format detection on real files
+// EPUB
+// =============================================================================
+
+#[cfg(feature = "epub")]
+mod epub_tests {
+    use super::*;
+
+    #[test]
+    fn extract_minimal_epub() {
+        let result = deformat::epub::extract_file(&fixtures_dir().join("minimal.epub")).unwrap();
+        assert_eq!(result.format, deformat::Format::Epub);
+        // Both chapters reach the output.
+        assert!(result.text.contains("Chapter One"));
+        assert!(result.text.contains("Chapter Two"));
+        assert!(result.text.contains("First chapter body"));
+        // Unicode in chapter two.
+        assert!(result.text.contains("中文"));
+        // No HTML leakage.
+        assert!(!result.text.contains("<html"));
+        assert!(!result.text.contains("<body"));
+    }
+
+    #[test]
+    fn epub_bytes_api_matches_file_api() {
+        let path = fixtures_dir().join("minimal.epub");
+        let bytes = std::fs::read(&path).unwrap();
+        let b = deformat::epub::extract_bytes(&bytes).unwrap();
+        let f = deformat::epub::extract_file(&path).unwrap();
+        assert_eq!(b.text, f.text);
+    }
+}
+
+// =============================================================================
+// PPTX
+// =============================================================================
+
+#[cfg(feature = "pptx")]
+mod pptx_tests {
+    use super::*;
+
+    #[test]
+    fn extract_minimal_pptx() {
+        let result = deformat::pptx::extract_file(&fixtures_dir().join("minimal.pptx")).unwrap();
+        assert_eq!(result.format, deformat::Format::Pptx);
+        assert!(result.text.contains("Slide Title Text"));
+        assert!(result.text.contains("body paragraph"));
+    }
+}
+
+// =============================================================================
+// RTF
+// =============================================================================
+
+#[cfg(feature = "rtf")]
+mod rtf_tests {
+    use super::*;
+
+    #[test]
+    fn extract_minimal_rtf() {
+        let result = deformat::rtf::extract_file(&fixtures_dir().join("minimal.rtf")).unwrap();
+        assert_eq!(result.format, deformat::Format::Rtf);
+        assert!(result.text.contains("Hello from RTF"));
+        assert!(result.text.contains("Second sentence here"));
+    }
+
+    #[test]
+    fn extract_unicode_rtf_does_not_panic() {
+        // Note: rtf-parser-tt does not fully decode `\uN?` escapes --
+        // the unicode chars come through as the ANSI fallback. Not
+        // ideal, but this test just pins the current behavior so a
+        // future upstream fix surfaces as a test update rather than a
+        // silent regression.
+        let result = deformat::rtf::extract_file(&fixtures_dir().join("unicode.rtf")).unwrap();
+        assert_eq!(result.format, deformat::Format::Rtf);
+        assert!(!result.text.is_empty(), "extracted non-empty");
+        // At least the ASCII parts survive.
+        assert!(result.text.contains("hello world"));
+    }
+}
+
+// =============================================================================
+// Format detection on committed fixtures
 // =============================================================================
 
 #[test]
-#[ignore]
-fn detect_real_file_formats() {
-    let fixtures = fixtures_dir();
-    if !fixtures.exists() {
-        return;
-    }
-
-    for entry in std::fs::read_dir(&fixtures).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        let ext_format = deformat::detect::detect_path(&path);
-
-        // Also test content-based detection
-        if let Ok(bytes) = std::fs::read(&path) {
-            let content_format = deformat::detect::detect_bytes(&bytes[..bytes.len().min(4096)]);
-            let name = path.file_name().unwrap().to_string_lossy();
-            println!(
-                "{name}: ext={ext_format}, content={content_format}, size={}",
-                bytes.len()
-            );
-
-            // Extension and content detection should agree for known formats
-            // (content detection may return Unknown for small samples)
-            if ext_format != deformat::Format::Unknown
-                && content_format != deformat::Format::Unknown
-            {
-                assert_eq!(
-                    ext_format, content_format,
-                    "detection mismatch for {name}: ext={ext_format}, content={content_format}"
-                );
-            }
-        }
+fn detect_committed_fixture_formats() {
+    use deformat::Format;
+    let cases: &[(&str, Format)] = &[
+        #[cfg(feature = "docx")]
+        ("minimal.docx", Format::Docx),
+        #[cfg(feature = "docx")]
+        ("unicode.docx", Format::Docx),
+        #[cfg(feature = "docx")]
+        ("table.docx", Format::Docx),
+        #[cfg(feature = "xlsx")]
+        ("minimal.xlsx", Format::Xlsx),
+        #[cfg(feature = "xlsx")]
+        ("unicode.xlsx", Format::Xlsx),
+        #[cfg(feature = "pptx")]
+        ("minimal.pptx", Format::Pptx),
+        #[cfg(feature = "epub")]
+        ("minimal.epub", Format::Epub),
+        #[cfg(feature = "rtf")]
+        ("minimal.rtf", Format::Rtf),
+    ];
+    for (name, expected) in cases {
+        let path = fixtures_dir().join(name);
+        let bytes = std::fs::read(&path).unwrap();
+        let detected = deformat::detect::detect_bytes(&bytes);
+        assert_eq!(
+            &detected, expected,
+            "detect_bytes({name}) = {detected:?}, expected {expected:?}"
+        );
     }
 }

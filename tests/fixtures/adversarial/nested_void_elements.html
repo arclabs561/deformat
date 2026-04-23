@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<!--
+  HTML5 void elements (<img>, <br>, <hr>, <input>) never have closing
+  tags. Pushing them onto the PathSpan stack was a bug: text after the
+  void element inherited the void element in its path. The fix in
+  strip_to_text_with_paths excludes void elements from path_stack push.
+-->
+<html><body>
+<article>
+  <p>Before the void element <img alt="pic"> middle text <br> after
+     the second void element continues normally.</p>
+  <p>A new paragraph that should NOT inherit img or br in its path.</p>
+  <hr>
+  <p>After the horizontal rule, path must still be article/p.</p>
+</article>
+</body></html>

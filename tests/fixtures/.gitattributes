@@ -1,0 +1,8 @@
+# Fixture binaries are treated as binary (no line-ending munging on Windows).
+# The Python generator writes deterministic, reproducible bytes.
+synthetic/*.docx binary
+synthetic/*.xlsx binary
+synthetic/*.pptx binary
+synthetic/*.epub binary
+synthetic/*.rtf binary
+synthetic/*.pdf binary
