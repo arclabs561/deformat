@@ -460,6 +460,22 @@ fn density_filter_preserves_titles() {
     assert!(segs.iter().any(|s| s.type_name() == "Title"));
 }
 
+#[test]
+fn density_filter_preserves_table_segments() {
+    // A Table composed entirely of link-text cells still survives —
+    // surviving tables past the scanner-level nav/footer skip are
+    // legitimate content (product specs, comparison grids).
+    let html = "<article><table>\
+                  <tr><td><a href='/a'>Spec A</a></td><td><a href='/b'>Spec B</a></td></tr>\
+                </table></article>";
+    let segs = deformat::html::strip_to_segments_filtered(html, 0.3);
+    assert!(
+        segs.iter().any(|s| s.type_name() == "Table"),
+        "table preserved under aggressive link-density cap: {:?}",
+        segs.iter().map(|s| s.type_name()).collect::<Vec<_>>()
+    );
+}
+
 // =============================================================================
 // Sentence-density filter
 // =============================================================================

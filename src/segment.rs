@@ -533,9 +533,16 @@ fn finish_group(
         block_tag_to_type(&acc.block_tag)
     };
     // Link-density filter: drop over-link blocks (nav / tag clouds),
-    // but always keep Titles and Headers.
+    // but always keep structural segments. Titles, Headers, ListItems,
+    // and Tables reach this point only when the scanner-level skip list
+    // already rejected pure-nav `<nav>`/`<footer>`/`<aside>` content, so
+    // surviving list items and tables are content (TOCs, product grids,
+    // blog indexes) — not navigation. Dropping them regresses
+    // listing-style pages without meaningfully improving precision on
+    // article-style pages.
     if let Some(cap) = link_ratio_cap {
-        if type_name != "Title" && type_name != "Header" && acc.total_chars > 0 {
+        let is_structural = matches!(type_name, "Title" | "Header" | "Table");
+        if !is_structural && acc.total_chars > 0 {
             let ratio = acc.link_chars as f32 / acc.total_chars as f32;
             if ratio > cap {
                 return;
