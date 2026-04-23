@@ -1,0 +1,79 @@
+[package]
+name = "deformat-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.deformat]
+path = ".."
+features = [
+    "readability",
+    "html2text",
+    "docx",
+    "epub",
+    "rtf",
+    "xlsx",
+    "pptx",
+    "encoding_rs",
+    "serde",
+]
+
+[[bin]]
+name = "strip_to_text"
+path = "fuzz_targets/strip_to_text.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "strip_to_segments"
+path = "fuzz_targets/strip_to_segments.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "strip_to_text_with_paths"
+path = "fuzz_targets/strip_to_text_with_paths.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "detect_page_type"
+path = "fuzz_targets/detect_page_type.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "filter_pipeline"
+path = "fuzz_targets/filter_pipeline.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "docx_extract"
+path = "fuzz_targets/docx_extract.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "epub_extract"
+path = "fuzz_targets/epub_extract.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "xlsx_extract"
+path = "fuzz_targets/xlsx_extract.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "detect_bytes"
+path = "fuzz_targets/detect_bytes.rs"
+test = false
+doc = false

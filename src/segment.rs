@@ -937,6 +937,14 @@ fn is_sentence_terminator(c: char) -> bool {
 /// fires (too few samples for sibling smoothing to mean anything). When
 /// the batch has zero or one narrative segments, it is returned unchanged.
 ///
+/// **Not idempotent**: unlike [`filter_boilerplate`] and
+/// [`filter_low_sentence_density`] which judge segments independently,
+/// this filter compares each segment against the batch mean. Dropping
+/// outliers shifts the mean upward, so a second pass can drop
+/// additional segments. The filter *is* monotone — repeated application
+/// never grows the segment count — which is the property callers
+/// typically need. Call once per extraction round.
+///
 /// # Example
 ///
 /// ```

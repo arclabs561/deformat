@@ -940,3 +940,179 @@ proptest! {
         );
     }
 }
+
+// =============================================================================
+// Panic guards on arbitrary bytes (complement cargo-fuzz's coverage
+// with a smaller in-CI safety net)
+// =============================================================================
+
+proptest! {
+    /// strip_to_text must not panic on any string, valid HTML or not.
+    /// Proptest isn't as thorough as a libfuzzer run, but catches the
+    /// common class of char-boundary / unclosed-tag panics in CI.
+    #[test]
+    fn strip_to_text_never_panics_on_arbitrary_bytes(
+        s in prop::collection::vec(any::<u8>(), 0..2000)
+            .prop_map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+    ) {
+        let _ = deformat::html::strip_to_text(&s);
+    }
+}
+
+proptest! {
+    /// strip_to_text_with_paths must not panic, and every span must
+    /// satisfy the char-boundary / in-bounds / non-overlap invariants
+    /// regardless of input.
+    #[test]
+    fn strip_to_text_with_paths_invariants_hold_on_arbitrary_bytes(
+        s in prop::collection::vec(any::<u8>(), 0..1500)
+            .prop_map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+    ) {
+        let (text, spans) = deformat::html::strip_to_text_with_paths(&s);
+        let mut prev_end = 0usize;
+        for span in &spans {
+            prop_assert!(text.is_char_boundary(span.output_start));
+            prop_assert!(text.is_char_boundary(span.output_end));
+            prop_assert!(s.is_char_boundary(span.source_start));
+            prop_assert!(s.is_char_boundary(span.source_end));
+            prop_assert!(span.output_start <= span.output_end);
+            prop_assert!(span.source_start <= span.source_end);
+            prop_assert!(span.output_end <= text.len());
+            prop_assert!(span.source_end <= s.len());
+            prop_assert!(span.output_start >= prev_end);
+            prev_end = span.output_end;
+        }
+    }
+}
+
+proptest! {
+    /// The full four-filter pipeline must not panic over the entire
+    /// threshold parameter space, including the edge values (0.0, 1.0)
+    /// and a tiny integer boilerplate minimum.
+    #[test]
+    fn filter_pipeline_never_panics_on_arbitrary_thresholds(
+        html in arb_html_fragment(),
+        link_cap in 0.0f32..=1.0,
+        sent_cap in 0.0f32..=10.0,
+        boiler_min in 0usize..=200,
+        cetd_frac in 0.0f32..=2.0,
+    ) {
+        let segs = deformat::html::strip_to_segments_filtered(&html, link_cap);
+        let segs = deformat::html::filter_low_sentence_density(segs, sent_cap);
+        let segs = deformat::html::filter_boilerplate(segs, boiler_min);
+        let _ = deformat::html::filter_low_cetd_density(segs, cetd_frac);
+    }
+}
+
+proptest! {
+    /// Per-segment filters are idempotent: running them a second time
+    /// does nothing because each segment is judged independently.
+    /// (Exception: filter_low_cetd_density uses batch-relative mean
+    /// and is NOT idempotent by design -- dropping outliers shifts
+    /// the mean upward. It satisfies monotonicity instead, tested
+    /// separately below.)
+    #[test]
+    fn per_segment_filters_are_idempotent_under_repetition(
+        html in arb_html_fragment(),
+    ) {
+        let base = deformat::html::strip_to_segments(&html);
+
+        let once = deformat::html::filter_boilerplate(base.clone(), 40);
+        let twice = deformat::html::filter_boilerplate(once.clone(), 40);
+        prop_assert_eq!(once.len(), twice.len(), "filter_boilerplate idempotent");
+
+        let once = deformat::html::filter_low_sentence_density(base.clone(), 1.0);
+        let twice = deformat::html::filter_low_sentence_density(once.clone(), 1.0);
+        prop_assert_eq!(once.len(), twice.len(), "filter_low_sentence_density idempotent");
+    }
+}
+
+proptest! {
+    /// CETD is batch-relative, not per-segment: repeated application
+    /// can drop more segments (because the mean shifts after the
+    /// first pass removed the outliers). But it must stay monotone:
+    /// the second pass's output length <= first pass's output length.
+    /// This property is what callers need to rely on in practice.
+    #[test]
+    fn filter_low_cetd_density_is_monotone_under_repetition(
+        html in arb_html_fragment(),
+        frac in 0.0f32..=1.0,
+    ) {
+        let base = deformat::html::strip_to_segments(&html);
+        let once = deformat::html::filter_low_cetd_density(base, frac);
+        let n1 = once.len();
+        let twice = deformat::html::filter_low_cetd_density(once, frac);
+        prop_assert!(twice.len() <= n1, "CETD second pass grew segments");
+    }
+}
+
+proptest! {
+    /// Filter-chain monotonicity: applying any filter can only reduce
+    /// the segment count or keep it stable, never add segments.
+    /// Guards against filters accidentally creating synthetic
+    /// outputs.
+    #[test]
+    fn filter_never_grows_the_segment_count(
+        html in arb_html_fragment(),
+        link_cap in 0.0f32..=1.0,
+        sent_cap in 0.0f32..=5.0,
+        boiler_min in 0usize..=80,
+        cetd_frac in 0.0f32..=1.5,
+    ) {
+        let base = deformat::html::strip_to_segments_filtered(&html, link_cap);
+        let n0 = base.len();
+        let after_sent = deformat::html::filter_low_sentence_density(base, sent_cap);
+        prop_assert!(after_sent.len() <= n0);
+        let n1 = after_sent.len();
+        let after_boiler = deformat::html::filter_boilerplate(after_sent, boiler_min);
+        prop_assert!(after_boiler.len() <= n1);
+        let n2 = after_boiler.len();
+        let after_cetd = deformat::html::filter_low_cetd_density(after_boiler, cetd_frac);
+        prop_assert!(after_cetd.len() <= n2);
+    }
+}
+
+proptest! {
+    /// Segment element_ids are deterministic: the same input produces
+    /// the same ids across independent parses. Guards against any
+    /// future hashing / ordering change silently breaking the
+    /// "reproducible pipelines" claim in the SegmentData doc comment.
+    #[test]
+    fn segment_element_ids_are_deterministic(html in arb_html_fragment()) {
+        let a = deformat::html::strip_to_segments(&html);
+        let b = deformat::html::strip_to_segments(&html);
+        prop_assert_eq!(a.len(), b.len());
+        for (sa, sb) in a.iter().zip(b.iter()) {
+            prop_assert_eq!(&sa.data().element_id, &sb.data().element_id);
+        }
+    }
+}
+
+proptest! {
+    /// detect_bytes must not panic on any byte sequence. Guards the
+    /// format-discrimination path that classifies DOCX/XLSX/PPTX/EPUB
+    /// via ZIP central-directory inspection.
+    #[test]
+    fn detect_bytes_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..1000)) {
+        let _ = deformat::detect::detect_bytes(&bytes);
+    }
+}
+
+proptest! {
+    /// Three-filter pipeline produces text that never contains a raw
+    /// `<script` or `<style` prefix, regardless of the input. Guards
+    /// against any future filter accidentally re-admitting content
+    /// the scanner already discarded.
+    #[test]
+    fn filter_output_never_contains_script_or_style(html in arb_html_fragment()) {
+        let segs = deformat::html::strip_to_segments_filtered(&html, 0.45);
+        let segs = deformat::html::filter_low_sentence_density(segs, 1.0);
+        let segs = deformat::html::filter_boilerplate(segs, 40);
+        let segs = deformat::html::filter_low_cetd_density(segs, 0.4);
+        for seg in &segs {
+            let t = seg.data().text.to_lowercase();
+            prop_assert!(!t.contains("<script"), "script tag leaked through filters");
+            prop_assert!(!t.contains("<style"), "style tag leaked through filters");
+        }
+    }
+}
