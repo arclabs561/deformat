@@ -14,6 +14,61 @@ fn unclosed_script_swallows_remaining() {
 }
 
 #[test]
+fn main_landmark_recovers_from_unclosed_nav_drawer() {
+    // Malformed HTML: several <nav> tags never close, leaving skip_depth
+    // pegged. <main> is the HTML5 primary-content landmark and never
+    // legitimately nests inside <nav>/<aside>/<footer>, so its opening
+    // resets skip_depth to 0. Without this recovery, the article body
+    // would never be emitted.
+    //
+    // Minimal repro of a real-world case (Go blog article with
+    // malformed navigation-drawer markup): 5 <nav> opens, 2 </nav>
+    // closes.
+    let html = r#"<html><body>
+        <header>
+            <nav>Main header nav</nav>
+        </header>
+        <aside>
+            <nav>Drawer nav 1</nav>
+            <nav>Drawer nav 2 (UNCLOSED)
+            <nav>Drawer nav 3 (UNCLOSED)
+            <nav>Drawer nav 4 (UNCLOSED)
+        </aside>
+        <main>
+            <article>
+                <h1>Article title</h1>
+                <p>Article body paragraph here.</p>
+            </article>
+        </main>
+    </body></html>"#;
+    let text = strip_to_text(html);
+    assert!(
+        text.contains("Article title"),
+        "main landmark must recover extraction: {text:?}"
+    );
+    assert!(
+        text.contains("Article body paragraph"),
+        "article body must be emitted: {text:?}"
+    );
+    assert!(
+        !text.contains("Drawer nav"),
+        "nav content still skipped: {text:?}"
+    );
+}
+
+#[test]
+fn main_landmark_does_not_reset_when_skip_depth_is_zero() {
+    // Well-formed HTML should be unchanged by the recovery.
+    let well_formed = r#"<html><body>
+        <header><nav><a>Home</a></nav></header>
+        <main><article><p>Body.</p></article></main>
+    </body></html>"#;
+    let text = strip_to_text(well_formed);
+    assert!(text.contains("Body."));
+    assert!(!text.contains("Home"));
+}
+
+#[test]
 fn deep_nesting_1000_levels() {
     let html = "<div>".repeat(1000) + "<p>Deep</p>" + &"</div>".repeat(1000);
     let text = strip_to_text(&html);
