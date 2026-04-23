@@ -215,12 +215,19 @@ split (1,495 pages):
 | `strip_to_text` (baseline) | 0.740 | 0.675 | 0.957 | 56.5% |
 | + link-density (cap 0.45) | 0.748 | 0.696 | 0.944 | 64.6% |
 | + sentence-density (1.0) | 0.740 | 0.678 | 0.952 | 59.2% |
-| **link + sentence + boilerplate** | **0.765** | **0.739** | 0.909 | **78.2%** |
+| **link + sentence + boilerplate** | **0.767** | **0.739** | 0.913 | **78.0%** |
 
-The triple pipeline lifts article F1 0.851 → 0.876, forum 0.504 →
-0.552, product 0.438 → 0.489, service 0.730 → 0.773. Listing
-regresses −2.6pp (link-heavy pages). Choose thresholds that fit your
-corpus — `examples/bench_wcxb.rs` sweeps both caps.
+Per-type F1 deltas from baseline: article +2.5pp (0.851 → 0.876),
+service +4.2pp (0.730 → 0.772), forum +4.7pp (0.504 → 0.551), product
++4.7pp (0.438 → 0.485), listing +1.1pp (0.602 → 0.613). Choose
+thresholds that fit your corpus — `examples/bench_wcxb.rs` sweeps
+both caps.
+
+The link-density filter preserves structural segments (`Title`,
+`Header`, `Table`) regardless of ratio — they reach the segmenter only
+after the scanner-level `<nav>`/`<footer>`/`<aside>` skip, so
+surviving tables are content (product specs, comparison grids), not
+navigation.
 
 ### DOCX tables
 
