@@ -744,3 +744,62 @@ fn summary_has_no_category_depth() {
     assert_eq!(summary.type_name(), "Title");
     assert_eq!(summary.data().metadata.category_depth, None);
 }
+
+// =============================================================================
+// CodeSnippet language hints
+// =============================================================================
+
+#[test]
+fn code_block_with_language_class_populates_languages() {
+    let html = r#"<pre><code class="language-rust">fn main() {}</code></pre>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(segs.len(), 1);
+    assert_eq!(segs[0].type_name(), "CodeSnippet");
+    assert_eq!(
+        segs[0].data().metadata.languages.as_deref(),
+        Some(["rust".to_string()].as_slice())
+    );
+}
+
+#[test]
+fn code_block_with_lang_prefix_class_populates_languages() {
+    // Some highlighters use `lang-X` instead of `language-X`.
+    let html = r#"<pre><code class="lang-python">print(1)</code></pre>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(
+        segs[0].data().metadata.languages.as_deref(),
+        Some(["python".to_string()].as_slice())
+    );
+}
+
+#[test]
+fn code_block_with_mixed_class_finds_language_token() {
+    // highlight.js wraps in `hljs language-X`. Language must be found
+    // among whitespace-separated class tokens.
+    let html = r#"<pre><code class="hljs language-go">package main</code></pre>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(
+        segs[0].data().metadata.languages.as_deref(),
+        Some(["go".to_string()].as_slice())
+    );
+}
+
+#[test]
+fn code_block_without_language_class_has_no_languages() {
+    let html = r#"<pre><code>plain code</code></pre>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(segs[0].type_name(), "CodeSnippet");
+    assert!(segs[0].data().metadata.languages.is_none());
+}
+
+#[test]
+fn code_block_language_is_lowercased() {
+    // Language identifiers normalize to lowercase so `language-Rust`
+    // matches `language-rust` in downstream tooling.
+    let html = r#"<pre><code class="language-Rust">code</code></pre>"#;
+    let segs = deformat::html::strip_to_segments(html);
+    assert_eq!(
+        segs[0].data().metadata.languages.as_deref(),
+        Some(["rust".to_string()].as_slice())
+    );
+}

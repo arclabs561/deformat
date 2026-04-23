@@ -269,6 +269,7 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
     // tables share the outer table's HTML which is consistent with
     // emitting one Segment per outermost table.
     let table_ranges = index_table_ranges(html);
+    let code_languages = index_code_languages(html);
 
     // Group consecutive path_spans that share the same block-level
     // ancestor. Each group becomes one Segment.
@@ -309,6 +310,7 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
                         &mut last_title_id,
                         html,
                         &table_ranges,
+                        &code_languages,
                         link_ratio_cap,
                     );
                 }
@@ -334,6 +336,7 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
             &mut last_title_id,
             html,
             &table_ranges,
+            &code_languages,
             link_ratio_cap,
         );
     }
@@ -401,6 +404,138 @@ fn starts_with_ci(bytes: &[u8], pos: usize, needle: &[u8]) -> bool {
         return false;
     }
     bytes[pos..pos + needle.len()].eq_ignore_ascii_case(needle)
+}
+
+/// Index `<pre>...<code class="language-X">` blocks and return
+/// `(pre_start, pre_end, lang)` triples. Accepts both `language-X` and
+/// `lang-X` class prefixes (common across highlight.js, Prism, Pandoc,
+/// and GitHub-flavored markdown renderers). Returns an empty Vec when
+/// no annotated code blocks exist.
+fn index_code_languages(html: &str) -> Vec<(usize, usize, String)> {
+    let bytes = html.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        if !starts_with_ci(bytes, i + 1, b"pre") {
+            i += 1;
+            continue;
+        }
+        let after_pre = i + 1 + b"pre".len();
+        if after_pre >= bytes.len() {
+            break;
+        }
+        let next = bytes[after_pre];
+        if !matches!(next, b'>' | b' ' | b'\t' | b'\n' | b'/') {
+            i += 1;
+            continue;
+        }
+        // Find the matching </pre>. Code blocks rarely nest.
+        let pre_start = i;
+        let mut j = after_pre;
+        let mut close = None;
+        while j < bytes.len() {
+            if bytes[j] == b'<' && starts_with_ci(bytes, j + 1, b"/pre") {
+                // Find the terminating '>'.
+                let mut end = j + 1 + b"/pre".len();
+                while end < bytes.len() && bytes[end] != b'>' {
+                    end += 1;
+                }
+                if end < bytes.len() {
+                    close = Some(end + 1);
+                }
+                break;
+            }
+            j += 1;
+        }
+        let Some(pre_end) = close else {
+            break;
+        };
+        let block = &html[pre_start..pre_end];
+        if let Some(lang) = detect_code_language(block) {
+            out.push((pre_start, pre_end, lang));
+        }
+        i = pre_end;
+    }
+    out
+}
+
+/// Look inside a `<pre>...</pre>` block for a `<code class="language-X">`
+/// (or `lang-X`) attribute and return the language identifier lowercased.
+fn detect_code_language(block: &str) -> Option<String> {
+    // Find the first `<code` inside.
+    let b = block.as_bytes();
+    let code_idx = find_ci_substr(b, b"<code")?;
+    // Slice from there up to the closing `>` of the code open tag.
+    let after_code = code_idx + b"<code".len();
+    let close_gt = after_code + block[after_code..].find('>')?;
+    let tag = &block[code_idx..close_gt];
+    // Scan for class="..." or class='...'.
+    let class_idx = find_ci_substr(tag.as_bytes(), b"class")?;
+    let after_class = class_idx + b"class".len();
+    let rest = &tag[after_class..];
+    let rest_bytes = rest.as_bytes();
+    // Skip whitespace and the '=' sign.
+    let mut k = 0;
+    while k < rest_bytes.len() && rest_bytes[k].is_ascii_whitespace() {
+        k += 1;
+    }
+    if k >= rest_bytes.len() || rest_bytes[k] != b'=' {
+        return None;
+    }
+    k += 1;
+    while k < rest_bytes.len() && rest_bytes[k].is_ascii_whitespace() {
+        k += 1;
+    }
+    if k >= rest_bytes.len() {
+        return None;
+    }
+    let quote = rest_bytes[k];
+    let (class_val, _) = if quote == b'"' || quote == b'\'' {
+        k += 1;
+        let start = k;
+        while k < rest_bytes.len() && rest_bytes[k] != quote {
+            k += 1;
+        }
+        (&rest[start..k], k)
+    } else {
+        // Unquoted class value: read to whitespace or '>'.
+        let start = k;
+        while k < rest_bytes.len() && !rest_bytes[k].is_ascii_whitespace() && rest_bytes[k] != b'>'
+        {
+            k += 1;
+        }
+        (&rest[start..k], k)
+    };
+    // Scan class tokens for a `language-*` or `lang-*` prefix.
+    for token in class_val.split_ascii_whitespace() {
+        let lang = token
+            .strip_prefix("language-")
+            .or_else(|| token.strip_prefix("lang-"))
+            .map(|s| s.to_ascii_lowercase());
+        if let Some(l) = lang {
+            if !l.is_empty() {
+                return Some(l);
+            }
+        }
+    }
+    None
+}
+
+fn find_ci_substr(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    let end = haystack.len() - needle.len();
+    for i in 0..=end {
+        if haystack[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            return Some(i);
+        }
+    }
+    None
 }
 
 struct GroupAcc {
@@ -518,6 +653,7 @@ fn finish_group(
     last_title_id: &mut Option<String>,
     html: &str,
     table_ranges: &[(usize, usize)],
+    code_languages: &[(usize, usize, String)],
     link_ratio_cap: Option<f32>,
 ) {
     let text = acc.text.trim().to_string();
@@ -573,6 +709,16 @@ fn finish_group(
             if let Some(slice) = html.get(ts..te) {
                 meta.text_as_html = Some(slice.to_string());
             }
+        }
+    }
+    // Populate metadata.languages for CodeSnippet from the pre-indexed
+    // `<pre><code class="language-*">` ranges.
+    if type_name == "CodeSnippet" {
+        if let Some((_, _, lang)) = code_languages
+            .iter()
+            .find(|(s, e, _)| *s <= acc.src_start && *e >= acc.src_end)
+        {
+            meta.languages = Some(vec![lang.clone()]);
         }
     }
     let data = SegmentData {
