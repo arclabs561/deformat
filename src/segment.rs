@@ -619,6 +619,9 @@ fn is_block_like(tag: &str) -> bool {
             | "dt"
             | "dd"
             | "summary"
+            | "address"
+            | "fieldset"
+            | "legend"
     )
 }
 
