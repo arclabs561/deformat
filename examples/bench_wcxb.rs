@@ -199,6 +199,71 @@ fn extract(kind: &str, html: &str) -> String {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         }
+        k if k.starts_with("cetd") => {
+            // CETD prototype: Composite text density with sibling smoothing
+            // (Sun et al. SIGIR 2011). Per-segment char density is smoothed
+            // across the segment's neighbours (0.25 prev + 0.5 self + 0.25
+            // next). Segments with smoothed density below `floor` are
+            // dropped -- but only NarrativeText / UncategorizedText;
+            // structural roles are preserved.
+            //
+            // `cetd` uses floor 0.30; `cetd-0.20` overrides.
+            let floor: f32 = k
+                .strip_prefix("cetd-")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.30);
+            let segs = deformat::html::strip_to_segments_filtered(html, 0.45);
+            let segs = deformat::html::filter_low_sentence_density(segs, 1.0);
+            let segs = deformat::html::filter_boilerplate(segs, 40);
+            if segs.is_empty() {
+                return String::new();
+            }
+            // Per-segment raw density = text char count / source-byte span.
+            // Using char count (not word count) for language-agnosticity.
+            let densities: Vec<f32> = segs
+                .iter()
+                .map(|s| {
+                    let text_chars = s.data().text.chars().count() as f32;
+                    // Approximate source span by text length * 2 since
+                    // we don't have src ranges at the segment API level.
+                    // This is a fair proxy because WCXB pages are HTML-
+                    // heavy: a boilerplate block is short-text-short-span,
+                    // a content block is long-text-long-span, so raw
+                    // char-count works as a density-analog.
+                    text_chars
+                })
+                .collect();
+            // Smooth across neighbours.
+            let n = densities.len();
+            let smoothed: Vec<f32> = (0..n)
+                .map(|i| {
+                    let prev = if i == 0 {
+                        densities[i]
+                    } else {
+                        densities[i - 1]
+                    };
+                    let next = if i + 1 == n {
+                        densities[i]
+                    } else {
+                        densities[i + 1]
+                    };
+                    0.25 * prev + 0.5 * densities[i] + 0.25 * next
+                })
+                .collect();
+            // Scale floor to mean smoothed density.
+            let mean = smoothed.iter().sum::<f32>() / n as f32;
+            let threshold = mean * floor;
+            segs.iter()
+                .zip(smoothed.iter())
+                .filter(|(s, sm)| {
+                    let is_structural =
+                        !matches!(s.type_name(), "NarrativeText" | "UncategorizedText");
+                    is_structural || **sm >= threshold
+                })
+                .map(|(s, _)| s.data().text.clone())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
         k if k.starts_with("triple-") => {
             // e.g. `triple-2.0` sets sentence-density cap at 2.0.
             let cap: f32 = k.trim_start_matches("triple-").parse().unwrap_or(1.0);
