@@ -3,6 +3,54 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## 0.14.0 — 2026-04-23
+
+### Added
+
+- `html::filter_low_cetd_density(segments, min_fraction_of_mean)` — a
+  fourth composable filter implementing Composite Text Density with
+  sibling smoothing (Sun et al. SIGIR 2011). Smooths per-segment char
+  density as `0.25·prev + 0.5·self + 0.25·next` and drops
+  `NarrativeText` / `UncategorizedText` whose smoothed density falls
+  below `min_fraction_of_mean × mean`. Language-agnostic
+  (character-based, not word-based). Preserves structural roles.
+
+  Composed after the existing three-filter pipeline on WCXB dev split:
+  overall F1 0.774 → 0.778 (+0.4pp), article F1 0.881 → 0.887
+  (+0.6pp), precision +1.0pp, without% +1.6pp. No meaningful per-type
+  regression. Smoothing intentionally shelters isolated short blocks
+  between long siblings; consecutive short-block runs (real
+  boilerplate) cannot hide and are dropped.
+
+- New `deformat::page_type` module with
+  `detect_page_type(html) -> PageType` and `PageType` enum variants
+  Article / Documentation / Product / Forum / Listing / Collection /
+  Service / Unknown. Pure heuristic, inspects in priority order:
+  (1) `<meta property="og:type">`, (2) JSON-LD `@type`, (3) schema.org
+  `itemtype`, (4) `<link rel="canonical">` URL path, (5) structural
+  counts (`<article>`, `.comment`, `.price`). Returns `Unknown` when
+  signals conflict or are absent — callers should fall back to
+  Article-tuned extraction.
+
+### Fixed
+
+- UTF-8 char-boundary panic in `page_type` when slicing near
+  multi-byte characters (curly quote U+2019 near `og:type` keyword,
+  observed on real WCXB pages). Added `floor_char_boundary` /
+  `ceil_char_boundary` helpers. Regression guard: proptest strategy
+  now includes Latin-1, CJK, Arabic, emoji, and curly-quote codepoints
+  specifically to exercise char-boundary handling.
+
+### Tests
+
+- 29 new tests (632 total, +2 doc-tests) covering CETD behaviour
+  (consecutive-short-run drops, isolated-short-block sheltering,
+  structural preservation, four-filter composition, multilang body
+  preservation, zero-cap passthrough, few-sample passthrough) and
+  page_type classification (og:type priority, JSON-LD array handling,
+  schema.org fallback, canonical URL paths, conflicting signals,
+  arbitrary-bytes panic-guard).
+
 ## 0.13.1 — 2026-04-23
 
 ### Fixed — malformed-HTML recovery
