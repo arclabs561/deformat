@@ -515,6 +515,16 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     }
                 } else if is_skip_tag(&tag_lower) {
                     skip_depth += 1;
+                } else if tag_lower == "main" && skip_depth > 0 {
+                    // HTML5 landmark recovery: <main> marks the document's
+                    // primary content and never legitimately nests inside
+                    // <nav>/<aside>/<footer>/etc. If skip_depth > 0 when
+                    // we enter <main>, the source has unclosed skip tags
+                    // (a common malformed-HTML pattern where nav drawers
+                    // forget their closing tags). Reset so the article
+                    // content is actually extracted.
+                    skip_depth = 0;
+                    wiki_skip_depth = 0;
                 }
 
                 // Path stack tracking -- only track non-skip, non-script/style elements.
@@ -910,6 +920,11 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                     }
                 } else if is_skip_tag(tag_lower) {
                     skip_depth += 1;
+                } else if tag_lower == "main" && skip_depth > 0 {
+                    // HTML5 landmark recovery for malformed skip-tag
+                    // nesting. See strip_to_text_with_paths for rationale.
+                    skip_depth = 0;
+                    wiki_skip_depth = 0;
                 }
 
                 // --- Markdown-specific output ---
@@ -1786,6 +1801,14 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                     }
                 } else if is_skip_tag(tag_lower) {
                     skip_depth += 1;
+                } else if tag_lower == "main" && skip_depth > 0 {
+                    // HTML5 landmark recovery for malformed skip-tag
+                    // nesting: when <main> opens we're leaving any nav /
+                    // aside / footer, even if the source forgot to close
+                    // those tags. Resets both the semantic and Wikipedia
+                    // skip counters so the main content actually emits.
+                    skip_depth = 0;
+                    wiki_skip_depth = 0;
                 }
 
                 // Insert newline at block-level element boundaries.
