@@ -270,6 +270,12 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
     // emitting one Segment per outermost table.
     let table_ranges = index_table_ranges(html);
     let code_languages = index_code_languages(html);
+    let ctx = FinishCtx {
+        html,
+        table_ranges: &table_ranges,
+        code_languages: &code_languages,
+        link_ratio_cap,
+    };
 
     // Group consecutive path_spans that share the same block-level
     // ancestor. Each group becomes one Segment.
@@ -303,16 +309,7 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
             }
             _ => {
                 if let Some(acc) = current.take() {
-                    finish_group(
-                        acc,
-                        segments.len(),
-                        &mut segments,
-                        &mut last_title_id,
-                        html,
-                        &table_ranges,
-                        &code_languages,
-                        link_ratio_cap,
-                    );
+                    finish_group(acc, segments.len(), &mut segments, &mut last_title_id, &ctx);
                 }
                 current = Some(GroupAcc {
                     block_key,
@@ -329,16 +326,7 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
         }
     }
     if let Some(acc) = current {
-        finish_group(
-            acc,
-            segments.len(),
-            &mut segments,
-            &mut last_title_id,
-            html,
-            &table_ranges,
-            &code_languages,
-            link_ratio_cap,
-        );
+        finish_group(acc, segments.len(), &mut segments, &mut last_title_id, &ctx);
     }
     segments
 }
@@ -646,16 +634,24 @@ fn heading_depth(tag: &str) -> Option<u32> {
     }
 }
 
+struct FinishCtx<'a> {
+    html: &'a str,
+    table_ranges: &'a [(usize, usize)],
+    code_languages: &'a [(usize, usize, String)],
+    link_ratio_cap: Option<f32>,
+}
+
 fn finish_group(
     acc: GroupAcc,
     ord: usize,
     out: &mut Vec<Segment>,
     last_title_id: &mut Option<String>,
-    html: &str,
-    table_ranges: &[(usize, usize)],
-    code_languages: &[(usize, usize, String)],
-    link_ratio_cap: Option<f32>,
+    ctx: &FinishCtx<'_>,
 ) {
+    let html = ctx.html;
+    let table_ranges = ctx.table_ranges;
+    let code_languages = ctx.code_languages;
+    let link_ratio_cap = ctx.link_ratio_cap;
     let text = acc.text.trim().to_string();
     if text.is_empty() {
         return;
