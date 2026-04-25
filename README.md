@@ -3,7 +3,31 @@
 [![crates.io](https://img.shields.io/crates/v/deformat.svg)](https://crates.io/crates/deformat)
 [![docs.rs](https://docs.rs/deformat/badge.svg)](https://docs.rs/deformat)
 
-Extract plain text from HTML, PDF, and other document formats.
+Extract plain text from HTML, PDF, DOCX, EPUB, and other document formats.
+
+```rust
+let result = deformat::extract("<p>Hello <b>world</b>!</p>").unwrap();
+assert_eq!(result.text, "Hello world!");
+```
+
+Default build depends only on [`memchr`](https://crates.io/crates/memchr);
+per-format extractors enable behind feature flags. Auto-detection covers
+HTML / XML / plain text / markdown; binary formats use explicit
+`extract_file` / `extract_bytes` entry points.
+
+On the [Web Content Extraction Benchmark](https://webcontentextraction.org)
+(WCXB dev split, 1,495 pages across 7 page types), the triple-filter
+pipeline reaches **F1 = 0.774 across all page types** and **0.881 on
+articles** (see [Evaluation](#evaluation)).
+
+## Install
+
+```sh
+cargo add deformat                                        # minimal
+cargo add deformat --features readability,html2text,pdf   # all extractors
+```
+
+Full API on [docs.rs](https://docs.rs/deformat).
 
 ## Supported formats
 
@@ -21,29 +45,6 @@ Extract plain text from HTML, PDF, and other document formats.
 | PPTX | `&Path` or `&[u8]` | `pptx` | `pptx::extract_file`, `pptx::extract_bytes` |
 | XML | `&str` | *(none)* | `html::strip_to_text` |
 | Plain text / Markdown | `&str` | *(none)* | passthrough |
-
-Default build depends only on [`memchr`](https://crates.io/crates/memchr).
-
-## Install
-
-```sh
-cargo add deformat                                        # minimal
-cargo add deformat --features readability,html2text,pdf   # all extractors
-```
-
-## Usage
-
-```rust
-use deformat::{extract, Format};
-
-let result = extract("<p>Hello <b>world</b>!</p>").unwrap();
-assert_eq!(result.text, "Hello world!");
-assert_eq!(result.format, Format::Html);
-```
-
-Auto-detection covers HTML / XML / plain text / markdown. Binary
-formats use the per-format `extract_file` / `extract_bytes` entry
-points listed above. Full API on [docs.rs](https://docs.rs/deformat).
 
 ## Evaluation
 
