@@ -3,6 +3,27 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## 0.15.1 — 2026-04-26
+
+### Changed
+
+- MSRV bumped to 1.91 (from 1.85). Adds a pinned MSRV CI gate so the
+  declared floor stays honest.
+- Documentation: html and segment dataflow + `Error::Parse` source chain
+  written out in module-level docs.
+- README rewritten in undersell tone, leads with code + WCXB F1 numbers.
+- CONTRIBUTING.md added.
+
+### Fixed
+
+- Cascade test corrected (was relying on a leaked path-attribution bug
+  in the upstream scanner; vindicated post-fix).
+- Broken README command corrected.
+- `examples/clean_html.rs` now declares `required-features = ["readability"]`
+  so it no longer breaks `cargo check --no-default-features --all-targets`.
+  CI gained a no-default-features step to prevent future feature-gating
+  regressions.
+
 ## 0.15.0 — 2026-04-23
 
 ### Added
