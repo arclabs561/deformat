@@ -4,6 +4,11 @@
 //! `Vec<Segment>` where each segment is tagged with one of a small set
 //! of structural types (`Title`, `NarrativeText`, `ListItem`, ...).
 //!
+//! Internally this module calls [`crate::html::strip_to_text_with_paths`];
+//! the resulting path spans drive block classification. The reverse
+//! direction (`html` re-exporting `segment` items as the canonical
+//! user-facing path) is for ergonomics, not data flow.
+//!
 //! The JSON form matches the wire format consumed by
 //! `langchain-community`'s `UnstructuredLoader` (element mode) and
 //! Haystack's `UnstructuredDocumentConverter`, so Rust pipelines can

@@ -3,9 +3,11 @@
 //!
 //! The classifier is pure-heuristic (no ML, no external corpus): it
 //! reads `<meta>`, JSON-LD, schema.org `itemtype`, `<article>` / `<nav>`
-//! / `<aside>` counts, and `<link rel="canonical">` patterns. The
-//! returned [`PageType`] is a hint that downstream code can use to
-//! select an appropriate extraction pipeline or filter configuration.
+//! / `<aside>` counts, and `<link rel="canonical">` patterns. Signal
+//! parsing for `<meta>`, `<title>`, `og:type`, and JSON-LD delegates to
+//! [`crate::html::extract_metadata`]. The returned [`PageType`] is a
+//! hint that downstream code can use to select an appropriate
+//! extraction pipeline or filter configuration.
 //!
 //! This is a conservative implementation: when signals conflict or are
 //! absent, it returns [`PageType::Unknown`] rather than guessing.
