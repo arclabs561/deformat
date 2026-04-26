@@ -11,7 +11,9 @@
 //!
 //! Reads HTML from stdin if given `-`, otherwise uses a built-in demo.
 
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(feature = "serde")]
+use std::io::Write;
 
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();

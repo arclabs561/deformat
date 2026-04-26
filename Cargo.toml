@@ -43,7 +43,9 @@ pdf-extract = { version = "0.10", optional = true }
 pdf_oxide = { version = "0.3", optional = true }
 
 # Optional: DOCX/EPUB extraction (ZIP-based formats)
-zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+zip = { version = "2", optional = true, default-features = false, features = [
+  "deflate",
+] }
 
 # Optional: RTF text extraction
 rtf-parser-tt = { version = "0.5", optional = true }
@@ -75,8 +77,12 @@ encoding_rs = ["dep:encoding_rs"]
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
-serde_json = { version = "1", optional = false }
+serde_json = "1"
 
 [[bench]]
 name = "strip"
 harness = false
+
+[[example]]
+name = "clean_html"
+required-features = ["readability"]
