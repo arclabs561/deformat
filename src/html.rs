@@ -38,11 +38,16 @@ pub struct StripOptions {
     /// XPath candidate election (`adbar/trafilatura/main_extractor.py`),
     /// which uses semantic-tag priors before density scoring.
     ///
-    /// On WCXB (article pages) this lifts F1 by a few points by avoiding
-    /// header/footer text the scanner's skip set doesn't catch (sidebars
-    /// in `<div>` elements, related-content sections, etc.). Pages
-    /// without a `<main>` or `<article>` fall through to normal scanning,
-    /// so enabling this is safe even on heterogeneous inputs.
+    /// On WCXB article pages this lifts F1 by ~1.2pp; documentation
+    /// +1.5pp; service +1.8pp. **Forum and product pages regress**
+    /// (forum −7.8pp, product −2.1pp) because their meaningful content
+    /// (replies, reviews, specs) lives outside `<main>` in lists or
+    /// repeated cards that the election's first-landmark heuristic
+    /// drops. Use [`crate::page_type::detect_page_type`] to route per
+    /// corpus rather than enabling this globally; pages without a
+    /// `<main>` or `<article>` fall through to normal scanning, so the
+    /// failure mode is only visible on pages that have a landmark but
+    /// shouldn't be scoped to it.
     ///
     /// Default `false` to preserve byte-exact behavior of the existing
     /// scanner. Enable with [`StripOptions::main_landmark()`].
@@ -63,9 +68,12 @@ impl StripOptions {
 
     /// Preset for article extraction with anchor election.
     ///
-    /// Enables [`Self::prefer_main_landmark`]. Use this when the input is
-    /// expected to be an article page; the scanner will restrict to the
-    /// first `<main>`/`<article>` zone if one exists.
+    /// Enables [`Self::prefer_main_landmark`]. Use on inputs known to
+    /// be article-class pages; route via
+    /// [`crate::page_type::detect_page_type`] rather than enabling
+    /// globally. Forum and product pages regress under anchor election
+    /// because their meaningful content lives outside `<main>`. See
+    /// [`Self::prefer_main_landmark`] for the per-page-type F1 deltas.
     #[must_use]
     pub fn main_landmark() -> Self {
         Self {
@@ -1600,7 +1608,7 @@ fn find_main_landmark_slice(html: &str, min_len: usize) -> Option<&str> {
         };
         let slice_start = slice.as_ptr() as usize - html.as_ptr() as usize;
         let slice_end = slice_start + slice.len();
-        if slice.len() >= min_len && best.map_or(true, |b: &str| slice.len() > b.len()) {
+        if slice.len() >= min_len && best.is_none_or(|b: &str| slice.len() > b.len()) {
             best = Some(slice);
         }
         cursor = slice_end;

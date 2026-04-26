@@ -39,6 +39,12 @@ pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
 /// with `category_depth` set to the heading level; other paragraphs
 /// become [`Segment::NarrativeText`]. Empty paragraphs are skipped.
 ///
+/// Top-level `<w:tbl>` tables become [`Segment::Table`] segments with
+/// `metadata.text_as_html` set to a normalized `<table>` HTML string
+/// (cell text is HTML-escaped). Nested tables are not indexed
+/// separately; the outer segment's range covers them. The plain
+/// [`extract_file`] path still flattens tables to paragraph text.
+///
 /// # Errors
 ///
 /// Returns [`Error::Io`] if the file cannot be read, [`Error::Parse`]
