@@ -12,7 +12,12 @@ pub enum Error {
     Io(std::io::Error),
     /// Parsing a format-specific document failed (PDF, DOCX, EPUB, RTF, XLSX).
     ///
-    /// The message starts with the originating format name.
+    /// The message starts with the originating format name. The
+    /// originating error type is stringified into the message;
+    /// [`std::error::Error::source`] returns `None` for this variant
+    /// (the underlying dependency error is not exposed in the public
+    /// API). Callers needing root-cause access should match on the
+    /// message prefix.
     Parse(String),
     /// The extraction produced no usable text.
     EmptyResult,
