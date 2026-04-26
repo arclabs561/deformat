@@ -21,3 +21,12 @@ jobs:
         run: cargo test --all-features --all-targets
       - name: doc-tests
         run: cargo test --all-features --doc
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.91 (declared MSRV)
+        uses: dtolnay/rust-toolchain@1.91.0
+      - name: check (MSRV, all features)
+        run: cargo check --all-features --all-targets
