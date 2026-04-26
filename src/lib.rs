@@ -592,27 +592,39 @@ mod tests {
     #[cfg(feature = "readability")]
     #[test]
     fn cascade_falls_back_to_readability_when_strip_is_short() {
-        // Page where the scanner's heuristics consume the entire body
-        // (everything is inside <nav>, which strip_to_text skips), but
-        // readability sees real article content via DOM scoring.
-        // Using <article> outside the nav so readability has something
-        // to score.
+        // The article body lives inside <aside>, which strip_to_text
+        // skips entirely. Readability scores the DOM independently and
+        // recovers the article via content-density heuristics
+        // (article-body matches dom_smoothie's positive vocabulary).
+        // Asserting on `extractor == Readability` is what makes this a
+        // real regression guard: a silent-bail bug in
+        // extract_with_readability would flip the extractor back to
+        // Strip and the test would fail.
         let html = "<!DOCTYPE html><html><body>\
-            <nav><p>nav</p></nav>\
+            <aside class=\"article-body\">\
             <article>\
             <p>This is a long-form article with substantial paragraphs that \
-            readability will identify as the main content. It contains enough \
-            sentences to satisfy readability's content-density heuristics. \
-            The body is dense with text and should clearly outrank the nav.</p>\
-            <p>A second paragraph adds more weight to the article scoring. It \
-            mentions specific entities and quotes to look like real prose. The \
-            scanner already keeps this content too, so the cascade only matters \
-            when the scanner's skip set bites.</p>\
+            readability identifies as the main content. It contains enough \
+            sentences to satisfy readability's content-density heuristics, \
+            and the class name is in dom_smoothie's positive vocabulary.</p>\
+            <p>A second paragraph adds more weight to the article scoring. \
+            It mentions specific entities and quotes to look like real prose. \
+            The scanner skips the entire aside, so the cascade has to fall \
+            back to readability or it returns nothing.</p>\
             </article>\
+            </aside>\
             </body></html>";
+        let strip = crate::html::strip_to_text(html);
         let result = extract_html_cascade(html);
-        // Either path is correct here as long as we get the article. Verify
-        // the cascade didn't drop the content.
+        assert!(
+            strip.len() < 100,
+            "strip should drop content-in-aside: {strip:?}"
+        );
+        assert_eq!(
+            result.extractor,
+            Extractor::Readability,
+            "cascade must elect readability when strip is empty"
+        );
         assert!(result.text.contains("long-form article"));
     }
 

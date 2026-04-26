@@ -2,23 +2,17 @@
 ///
 /// HTML from the web is full of navigation, ads, and boilerplate.
 /// `extract_readable` uses readability heuristics to pull out the
-/// main article content -- useful as a preprocessing step before
+/// main article content. Useful as a preprocessing step before
 /// NER, summarization, or embedding.
 ///
 /// ```sh
 /// cargo run --example clean_html --features readability
 /// ```
 ///
-/// Expected output:
-///
-/// ```text
-/// === Raw HTML: 528 chars ===
-/// === Extracted text: ~100 chars ===
-///
-/// Marie Curie was a physicist and chemist who conducted pioneering
-/// research on radioactivity.
-/// ...
-/// ```
+/// Output prints the raw and extracted character counts (raw drops
+/// from a few hundred down to the article body) followed by the
+/// recovered text, which begins with the headline plus the first
+/// `<article>` paragraph.
 fn main() {
     let html = r#"
     <html>

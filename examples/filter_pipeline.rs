@@ -1,14 +1,17 @@
-//! Compose the three segment filters on a boilerplate-heavy HTML page.
+//! Compose the segment filters on a boilerplate-heavy HTML page.
 //!
 //! ```sh
 //! cargo run --example filter_pipeline
 //! ```
 //!
-//! Pipeline: `strip_to_segments_filtered` (link-density) →
+//! Pipeline (the "triple" extractor in `bench_wcxb`):
+//! `strip_to_segments_filtered` (link-density) →
 //! `filter_low_sentence_density` (sentence shape) → `filter_boilerplate`
-//! (length + punctuation). Measured on WCXB: lifts overall F1
-//! 0.740 → 0.765 and article F1 0.851 → 0.876. See the README's WCXB
-//! table for the full breakdown.
+//! (length + punctuation). Measured on WCXB dev split: lifts overall F1
+//! 0.746 → 0.774 and article F1 0.855 → 0.881. A fourth filter,
+//! `filter_low_cetd_density` (Sun et al. SIGIR 2011), is available but
+//! non-idempotent so it is omitted from the default chain. See the
+//! README's WCXB table for the per-page-type breakdown.
 
 use deformat::html::{
     filter_boilerplate, filter_low_sentence_density, strip_to_segments, strip_to_segments_filtered,

@@ -38,6 +38,7 @@ Full API on [docs.rs](https://docs.rs/deformat).
 | HTML (layout-aware) | `&str` | `html2text` | `extract_html2text` |
 | HTML (article) | `&str` | `readability` | `extract_readable` |
 | PDF | `&Path` or `&[u8]` | `pdf` | `pdf::extract_file`, `pdf::extract_bytes` |
+| PDF (faster, coords) | `&Path` or `&[u8]` | `pdf_oxide` | `pdf_oxide::extract_file`, `pdf_oxide::extract_bytes`, `pdf_oxide::extract_bytes_to_segments_with_coords` |
 | DOCX | `&Path` or `&[u8]` | `docx` | `docx::extract_file`, `docx::extract_bytes` |
 | EPUB | `&Path` or `&[u8]` | `epub` | `epub::extract_file`, `epub::extract_bytes` |
 | RTF | `&Path` or `&[u8]` | `rtf` | `rtf::extract_file`, `rtf::extract_bytes` |
@@ -69,7 +70,7 @@ the per-type breakdown alongside the aggregate.
 scripts/fetch_wcxb.py                                            # pulls dev split from HuggingFace
 cargo run --release --example bench_wcxb -- --extractor strip    # baseline
 cargo run --release --example bench_wcxb -- --extractor triple   # link + sentence + boilerplate filter pipeline
-cargo run --release --example bench_wcxb -- --extractor cascade  # strip + readability fallback
+cargo run --release --features readability --example bench_wcxb -- --extractor cascade  # strip + readability fallback
 cargo run --release --example bench_wcxb -- --extractor anchor   # <main>/<article> election
 ```
 
