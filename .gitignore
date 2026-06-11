@@ -2,3 +2,4 @@
 .claude/scrutinize-report*.md
 .qa/reports/
 Cargo.lock
+/semver-checks/
