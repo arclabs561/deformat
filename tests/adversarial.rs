@@ -510,6 +510,48 @@ fn cascade_fires_on_article_in_aside_misnesting() {
     );
 }
 
+// =============================================================================
+// Input-contract pins for the flagship strip_to_text path. These mirror
+// the "Input contract" section of the strip_to_text doc comment: if one
+// of these fails, the doc is lying and must be updated in the same commit.
+// =============================================================================
+
+#[test]
+fn empty_input_returns_empty_string() {
+    assert_eq!(strip_to_text(""), "");
+}
+
+#[test]
+fn tag_free_input_is_normalized_not_passthrough() {
+    // No tags at all: entities still decode and whitespace still
+    // collapses. Callers wanting byte-identical passthrough for plain
+    // text should go through deformat::extract (format detection).
+    assert_eq!(strip_to_text("Fish &amp; chips"), "Fish & chips");
+    assert_eq!(strip_to_text("  spaced\t\tout  "), "spaced out");
+}
+
+#[test]
+fn truncated_tag_at_eof_drops_only_the_tag() {
+    // A tag cut off by end-of-input is dropped; text before it survives.
+    assert_eq!(strip_to_text("<p>Hello <b"), "Hello");
+    assert_eq!(strip_to_text("Hello <"), "Hello");
+}
+
+#[test]
+fn stray_lt_without_gt_drops_remainder_but_extract_does_not() {
+    // strip_to_text assumes its input IS HTML: a bare `<` opens a tag
+    // that never terminates, so the rest of the input is consumed as
+    // tag innards. Documented limitation of calling strip_to_text
+    // directly on non-HTML text.
+    assert_eq!(strip_to_text("a < b"), "a");
+    // The public extract() entry point detects this input as plain text
+    // and passes it through unchanged -- the safe path for mixed input.
+    let result = deformat::extract("a < b").unwrap();
+    assert_eq!(result.text, "a < b");
+    assert_eq!(result.format, deformat::Format::PlainText);
+    assert_eq!(result.extractor, deformat::Extractor::Passthrough);
+}
+
 #[cfg(feature = "readability")]
 #[test]
 fn extract_with_readability_handles_empty_url_string() {

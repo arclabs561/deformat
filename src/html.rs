@@ -97,6 +97,27 @@ impl StripOptions {
 /// Does **not** strip Wikipedia reference markers by default. Use
 /// [`strip_to_text_with_options`] with [`StripOptions::wikipedia()`] for that.
 ///
+/// # Input contract
+///
+/// The input is assumed to be HTML in an already-decoded `&str` (for
+/// raw non-UTF-8 bytes, decode first with [`crate::detect::decode_bytes`],
+/// feature `encoding_rs`). There is no input size limit; the scan is a
+/// single linear pass and returns without panicking on arbitrary input
+/// (pinned by property tests and `tests/adversarial.rs`). Edge cases:
+///
+/// - Empty input returns an empty string.
+/// - Tag-free input is **not** byte-identical passthrough: entities are
+///   still decoded and whitespace is still collapsed.
+/// - A `<` with no following `>` opens a tag that never terminates, so
+///   the rest of the input is consumed as tag innards
+///   (`strip_to_text("a < b")` is `"a"`). For inputs that may be plain
+///   text rather than HTML, use [`crate::extract`], which detects the
+///   format first and passes plain text through unchanged.
+/// - An unclosed `<script>` or `<style>` swallows the remainder of the
+///   document: the scanner leaves those modes only at the matching
+///   close tag.
+/// - C0 control characters (including null bytes) are removed.
+///
 /// # Examples
 ///
 /// ```

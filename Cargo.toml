@@ -1,6 +1,6 @@
 [package]
 name = "deformat"
-version = "0.15.1"
+version = "0.15.2"
 edition = "2021"
 rust-version = "1.91.0"
 license = "MIT OR Apache-2.0"
@@ -20,6 +20,12 @@ include = [
   "/README.md",
   "/CHANGELOG.md",
 ]
+
+# docs.rs builds with every feature so the feature-gated modules (pdf,
+# docx, epub, ...) and their intra-doc links render. Without this the
+# published docs show only the default (memchr-only) surface.
+[package.metadata.docs.rs]
+all-features = true
 
 [workspace]
 exclude = ["fuzz"]

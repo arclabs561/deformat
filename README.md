@@ -24,7 +24,8 @@ articles** (see [Evaluation](#evaluation)).
 
 ```sh
 cargo add deformat                                        # minimal
-cargo add deformat --features readability,html2text,pdf   # all extractors
+cargo add deformat --features readability,html2text,pdf   # richer HTML + PDF
+cargo add deformat --features docx,epub,rtf,xlsx,pptx     # office formats
 ```
 
 Full API on [docs.rs](https://docs.rs/deformat).

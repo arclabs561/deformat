@@ -39,6 +39,7 @@
 //! | `xlsx` | `calamine` | XLSX/XLS/ODS spreadsheet text extraction |
 //! | `pptx` | `zip` | PPTX presentation text extraction |
 //! | `whichlang` | `whichlang` | Natural-language detection via [`html::detect_language`] |
+//! | `encoding_rs` | `encoding_rs` | Charset sniffing and decoding of non-UTF-8 input via [`detect::decode_bytes`] |
 
 pub mod detect;
 pub mod error;
@@ -127,12 +128,18 @@ pub struct Extracted {
 /// then applies the appropriate extraction strategy. Plain text and
 /// markdown pass through unchanged.
 ///
-/// For PDF extraction, use the `pdf` module (requires the `pdf` feature).
+/// For raw bytes (binary formats, or text in an unknown encoding), use
+/// [`extract_from_bytes`] instead; for PDF specifically, the `pdf`
+/// module (requires the `pdf` feature).
 ///
 /// # Errors
 ///
 /// Returns [`Error::UnsupportedFormat`] if the detected format cannot be
-/// extracted from a string (e.g., PDF binary data passed as text).
+/// extracted from a string. String detection currently only yields
+/// [`Format::Html`] or [`Format::PlainText`], both of which extract
+/// infallibly, so this function does not return `Err` today; the
+/// `Result` is kept so future detectable formats can fail without a
+/// breaking change.
 ///
 /// # Examples
 ///
@@ -153,10 +160,12 @@ pub fn extract(content: &str) -> Result<Extracted, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::UnsupportedFormat`] if the format cannot be extracted
-/// from a `&str` input. Currently this only applies to [`Format::Pdf`],
-/// which requires binary file access -- use `deformat::pdf::extract_file()`
-/// or `deformat::pdf::extract_bytes()` instead.
+/// Returns [`Error::UnsupportedFormat`] for the binary formats
+/// ([`Format::Pdf`], [`Format::Rtf`], [`Format::Docx`], [`Format::Epub`],
+/// [`Format::Xlsx`], [`Format::Pptx`]), which cannot be extracted from a
+/// `&str` -- use [`extract_from_bytes`] or the per-format module's
+/// `extract_file` / `extract_bytes` (behind the matching feature flag)
+/// instead. This holds regardless of which features are enabled.
 ///
 pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
     match format {
