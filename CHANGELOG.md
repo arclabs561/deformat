@@ -3,6 +3,17 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## 0.15.2 — 2026-06-11
+
+### Fixed
+
+- docs.rs now builds with all features (`[package.metadata.docs.rs] all-features = true`); previously only the default memchr build rendered, hiding every feature-gated backend module (`pdf`, `docx`, `epub`, ...), `extract_readable`, `extract_html_cascade`, and `decode_bytes` from docs.rs readers.
+- `extract_as` error docs claimed `UnsupportedFormat` applied only to `Format::Pdf`; it rejects all six binary formats. `extract`'s docs now state string detection only yields Html/PlainText. Missing `encoding_rs` row added to the feature table.
+
+### Added
+
+- Documented input contract on `strip_to_text` (empty input, entity/whitespace normalization, truncated-tag and stray-`<` behavior, control-char removal, panic-freedom) with four adversarial tests pinning it.
+
 ## 0.15.1 — 2026-04-26
 
 ### Changed
