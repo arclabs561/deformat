@@ -9,7 +9,7 @@
 //! ```sh
 //! scripts/fetch_wcxb.py                          # dev split
 //! cargo run --release --example bench_wcxb       # strip_to_text baseline
-//! cargo run --release --example bench_wcxb -- --extractor readable --features readability
+//! cargo run --release --features readability --example bench_wcxb -- --extractor readable
 //! ```
 //!
 //! Metric: word-level F1 against the `ground_truth.main_content` field
