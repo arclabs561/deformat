@@ -30,6 +30,8 @@ cargo add deformat --features docx,epub,rtf,xlsx,pptx     # office formats
 
 Full API on [docs.rs](https://docs.rs/deformat).
 
+See [`examples/README.md`](examples/README.md) for runnable examples, feature-gated demos, and the WCXB benchmark command forms.
+
 ## Supported formats
 
 | Format | Input | Feature flag | Extractor |
