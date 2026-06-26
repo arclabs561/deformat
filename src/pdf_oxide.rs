@@ -1,13 +1,12 @@
 //! PDF text extraction via the `pdf_oxide` crate.
 //!
-//! Alternative backend to [`crate::pdf`]. `pdf_oxide` reports faster
-//! extraction and higher pass rates than `pdf-extract` on large corpora,
-//! but those numbers are vendor-provided — this crate has not
-//! independently benchmarked them. Opt into this backend explicitly via
-//! the `pdf_oxide` feature.
+//! Coordinate-aware PDF extraction. The `pdf` feature exposes plain text
+//! extraction through [`crate::pdf`]; this module keeps the backend-specific
+//! segment APIs available behind the `pdf_oxide` feature.
 //!
-//! Both backends can be enabled simultaneously. The modules expose
-//! parallel APIs; callers choose which one to invoke.
+//! The modules can be enabled simultaneously. For plain text, prefer
+//! [`crate::pdf`]. Use this module when page segments or coordinates are
+//! needed.
 
 use crate::segment::{element_id, Coordinates, Segment, SegmentData, SegmentMetadata};
 use crate::{Error, Extracted, Extractor, Format};

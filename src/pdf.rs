@@ -1,9 +1,9 @@
 //! PDF text extraction.
 //!
 //! Requires the `pdf` feature. Extracts text from PDF files using
-//! the `pdf-extract` crate.
+//! the crate's default PDF backend.
 
-use crate::{Error, Extracted, Format};
+use crate::{Error, Extracted, Extractor, Format};
 use std::path::Path;
 
 /// Extract text from a PDF file.
@@ -13,20 +13,9 @@ use std::path::Path;
 /// Returns [`Error::Parse`] if the file cannot be read or parsed, or
 /// [`Error::EmptyResult`] if extraction produces no text.
 pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
-    let text = pdf_extract::extract_text(path).map_err(|e| Error::Parse(format!("PDF: {e}")))?;
-
-    if text.trim().is_empty() {
-        return Err(Error::EmptyResult);
-    }
-
-    Ok(Extracted {
-        text,
-        format: Format::Pdf,
-        extractor: crate::Extractor::PdfExtract,
-        title: None,
-        excerpt: None,
-        fallback: false,
-    })
+    let mut doc =
+        ::pdf_oxide::PdfDocument::open(path).map_err(|e| Error::Parse(format!("PDF: {e}")))?;
+    extract_doc(&mut doc)
 }
 
 /// Extract text from PDF bytes in memory.
@@ -36,9 +25,25 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
 /// Returns [`Error::Parse`] if parsing fails, or [`Error::EmptyResult`]
 /// if extraction produces no text.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
-    let text =
-        pdf_extract::extract_text_from_mem(bytes).map_err(|e| Error::Parse(format!("PDF: {e}")))?;
+    let mut doc = ::pdf_oxide::PdfDocument::from_bytes(bytes.to_vec())
+        .map_err(|e| Error::Parse(format!("PDF: {e}")))?;
+    extract_doc(&mut doc)
+}
 
+fn extract_doc(doc: &mut ::pdf_oxide::PdfDocument) -> Result<Extracted, Error> {
+    let page_count = doc
+        .page_count()
+        .map_err(|e| Error::Parse(format!("PDF page_count: {e}")))?;
+    let mut pages = Vec::with_capacity(page_count);
+    for i in 0..page_count {
+        let page_text = doc
+            .extract_text(i)
+            .map_err(|e| Error::Parse(format!("PDF page {i}: {e}")))?;
+        if !page_text.trim().is_empty() {
+            pages.push(page_text);
+        }
+    }
+    let text = pages.join("\n\n");
     if text.trim().is_empty() {
         return Err(Error::EmptyResult);
     }
@@ -46,7 +51,7 @@ pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
     Ok(Extracted {
         text,
         format: Format::Pdf,
-        extractor: crate::Extractor::PdfExtract,
+        extractor: Extractor::PdfOxide,
         title: None,
         excerpt: None,
         fallback: false,

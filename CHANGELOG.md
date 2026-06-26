@@ -3,6 +3,14 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## Unreleased
+
+### Fixed
+
+- `pdf` now uses the `pdf_oxide` backend, removing the vulnerable
+  `pdf-extract`/`lopdf` dependency path while keeping the
+  `deformat::pdf::{extract_file, extract_bytes}` API.
+
 ## 0.15.2 — 2026-06-11
 
 ### Fixed

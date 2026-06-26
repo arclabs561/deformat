@@ -31,8 +31,8 @@
 //! | `serde` | `serde` | [`serde::Serialize`]/[`serde::Deserialize`] on [`Extracted`], [`Format`], [`Extractor`], and [`html::HtmlMetadata`] |
 //! | `readability` | `dom_smoothie` | Mozilla Readability article extraction |
 //! | `html2text` | `html2text` | DOM-based HTML-to-text with layout awareness |
-//! | `pdf` | `pdf-extract` | PDF text extraction (default backend) |
-//! | `pdf_oxide` | `pdf_oxide` | Alternative PDF backend; vendor-reported faster, unaudited here |
+//! | `pdf` | `pdf_oxide` | PDF text extraction |
+//! | `pdf_oxide` | `pdf_oxide` | PDF text extraction with coordinate-aware segment APIs |
 //! | `docx` | `zip` | DOCX text extraction from file paths or bytes |
 //! | `epub` | `zip` | EPUB text extraction with reading-order chapters |
 //! | `rtf` | `rtf-parser-tt` | RTF text extraction |
@@ -82,9 +82,9 @@ pub enum Extractor {
     Readability,
     /// DOM-based HTML-to-text with layout awareness (feature `html2text`).
     Html2text,
-    /// PDF text extraction via `pdf-extract` (feature `pdf`).
+    /// PDF text extraction via the historical `pdf-extract` backend.
     PdfExtract,
-    /// PDF text extraction via `pdf_oxide` (feature `pdf_oxide`).
+    /// PDF text extraction via `pdf_oxide` (features `pdf` or `pdf_oxide`).
     PdfOxide,
     /// Input passed through unchanged (plain text, markdown, unknown).
     Passthrough,

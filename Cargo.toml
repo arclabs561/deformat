@@ -42,10 +42,7 @@ html2text = { version = "0.16", optional = true }
 # Optional: readability-style article extraction
 dom_smoothie = { version = "0.15", optional = true }
 
-# Optional: PDF text extraction via pdf-extract (default backend)
-pdf-extract = { version = "0.10", optional = true }
-
-# Optional: PDF text extraction via pdf_oxide (faster, unaudited by this crate)
+# Optional: PDF text extraction via pdf_oxide.
 pdf_oxide = { version = "0.3", optional = true }
 
 # Optional: DOCX/EPUB extraction (ZIP-based formats)
@@ -69,7 +66,7 @@ encoding_rs = { version = "0.8", optional = true }
 default = []
 html2text = ["dep:html2text"]
 readability = ["dep:dom_smoothie"]
-pdf = ["dep:pdf-extract"]
+pdf = ["dep:pdf_oxide"]
 pdf_oxide = ["dep:pdf_oxide"]
 docx = ["dep:zip"]
 epub = ["dep:zip"]
