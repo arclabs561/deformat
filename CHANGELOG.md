@@ -3,6 +3,13 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## Unreleased
+
+### Added
+
+- `segments_to_slabs` example showing extracted HTML segments converted into
+  `slabs::Slab` retrieval spans.
+
 ## 0.15.3 — 2026-06-26
 
 ### Fixed
