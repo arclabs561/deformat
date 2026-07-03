@@ -65,7 +65,7 @@ compute multiset overlap, then `F1 = 2·P·R / (P+R)`. Same shape as
 ScrapingHub's metric and as the published comparative-extraction
 literature, so numbers are cross-comparable.
 
-Reporting per page type is the point — a single ALL number hides
+Reporting per page type is the point: a single ALL number hides
 that one category carries the result. The `bench_wcxb` runner emits
 the per-type breakdown alongside the aggregate.
 
@@ -80,7 +80,7 @@ cargo run --release --example bench_wcxb -- --extractor anchor   # <main>/<artic
 WCXB fixtures aren't committed (~200 MB); the fetch script downloads
 them on first use. To swap in your own corpus, point the runner at
 a directory with the same `{html,ground-truth}/<id>.{html,json}`
-shape — the F1 scorer in `examples/bench_wcxb.rs` is ~50 lines and
+shape. The F1 scorer in `examples/bench_wcxb.rs` is ~50 lines and
 backend-agnostic.
 
 A separate committed regression corpus
@@ -108,8 +108,8 @@ collection +2.9pp, documentation −0.7pp.
   0.881 (triple pipeline) / 0.867 (anchor election); the published
   heuristic-extractor ceiling is around 0.91. The 3pp gap is open
   work. The path forward is DOM-aware block scoring (paragraph
-  position, heading proximity, per-block text-to-tag ratio) — what
-  Trafilatura uses to reach ≈ 0.94 article F1. Adopting that here
+  position, heading proximity, per-block text-to-tag ratio), which is
+  what Trafilatura uses to reach ≈ 0.94 article F1. Adopting that here
   in Rust without inheriting a DOM parse is the design problem.
 - **Vision-heavy PDFs**: multi-column papers, scans, and figure-rich
   documents need layout analysis. Out of scope for this crate;
