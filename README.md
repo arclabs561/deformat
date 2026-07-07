@@ -15,8 +15,8 @@ per-format extractors enable behind feature flags. Auto-detection covers
 HTML / XML / plain text / markdown; binary formats use explicit
 `extract_file` / `extract_bytes` entry points.
 
-On the [Web Content Extraction Benchmark](https://webcontentextraction.org)
-(WCXB dev split, 1,495 pages across 7 page types), the triple-filter
+On the Web Content Extraction Benchmark (WCXB dev split, 1,495 pages
+across 7 page types), the triple-filter
 pipeline reaches **F1 = 0.774 across all page types** and **0.881 on
 articles** (see [Evaluation](#evaluation)).
 
@@ -27,8 +27,6 @@ cargo add deformat                                        # minimal
 cargo add deformat --features readability,html2text,pdf   # richer HTML + PDF
 cargo add deformat --features docx,epub,rtf,xlsx,pptx     # office formats
 ```
-
-Full API on [docs.rs](https://docs.rs/deformat).
 
 See [`examples/README.md`](examples/README.md) for runnable examples, feature-gated demos, and the WCXB benchmark command forms.
 
