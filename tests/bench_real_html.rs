@@ -78,7 +78,7 @@ fn wcxb_no_panics_no_tag_leaks() {
         assert!(
             !text.contains("<script"),
             "script tag leaked in {name}: {}",
-            &text.chars().take(200).collect::<String>(),
+            text.chars().take(200).collect::<String>(),
         );
         assert!(!text.contains("<style"), "style tag leaked in {name}",);
         assert!(
