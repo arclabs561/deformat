@@ -20,6 +20,14 @@ across 7 page types), the triple-filter
 pipeline reaches **F1 = 0.774 across all page types** and **0.881 on
 articles** (see [Evaluation](#evaluation)).
 
+## Scope
+
+Use `deformat` when one extraction API needs to cover HTML and document files,
+or when plain text, source spans, and document segments matter downstream. It
+does not crawl sites, render JavaScript, or perform OCR. For HTML-only pipelines
+that need Markdown syntax preservation or incremental streaming, use a focused
+HTML-to-Markdown converter before choosing `deformat`'s broader format surface.
+
 ## Install
 
 ```sh
