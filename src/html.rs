@@ -3367,4 +3367,7 @@ fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -
 }
 
 #[cfg(test)]
+mod streaming;
+
+#[cfg(test)]
 mod tests;
