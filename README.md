@@ -11,9 +11,10 @@ assert_eq!(result.text, "Hello world!");
 ```
 
 Default build depends only on [`memchr`](https://crates.io/crates/memchr);
-per-format extractors enable behind feature flags. Auto-detection covers
-HTML / XML / plain text / markdown; binary formats use explicit
-`extract_file` / `extract_bytes` entry points.
+per-format extractors enable behind feature flags. Content detection covers
+HTML, XML, and plain text; Markdown passes through unchanged and is recognized
+from a path or MIME type. Binary formats use explicit `extract_file` /
+`extract_bytes` entry points.
 
 On the Web Content Extraction Benchmark (WCXB dev split, 1,495 pages
 across 7 page types), the triple-filter
@@ -24,9 +25,8 @@ articles** (see [Evaluation](#evaluation)).
 
 Use `deformat` when one extraction API needs to cover HTML and document files,
 or when plain text, source spans, and document segments matter downstream. It
-does not crawl sites, render JavaScript, or perform OCR. For HTML-only pipelines
-that need Markdown syntax preservation or incremental streaming, use a focused
-HTML-to-Markdown converter before choosing `deformat`'s broader format surface.
+does not crawl sites, render JavaScript, or perform OCR. It is not a
+structure-preserving converter and does not stream extraction incrementally.
 
 ## Install
 

@@ -1,7 +1,7 @@
 # Managed by repository-settings/app
 # https://github.com/repository-settings/app
 repository:
-  description: "Extract plain text from HTML, PDF, and other document formats"
+  description: "Extract plain text from HTML, PDF, DOCX, EPUB, and other document formats"
   homepage: "https://docs.rs/deformat"
   private: false
   has_issues: true
