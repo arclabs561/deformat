@@ -563,6 +563,28 @@ mod tests {
         .unwrap()
     }
 
+    const CHUNK_SCHEDULES: [&[usize]; 4] = [&[1], &[2, 3, 5], &[7, 1, 11, 2], &[16, 31]];
+
+    fn assert_chunk_invariant(name: &str, html: &str, expected: &str) {
+        for chunks in CHUNK_SCHEDULES {
+            assert_eq!(
+                extract_chunked(html, chunks),
+                expected,
+                "fixture={name} chunks={chunks:?}"
+            );
+        }
+    }
+
+    fn assert_matches_legacy(name: &str, html: &str) {
+        let legacy = strip_to_text(html);
+        assert_eq!(
+            extract_reader(html.as_bytes()).unwrap(),
+            legacy,
+            "fixture={name}"
+        );
+        assert_chunk_invariant(name, html, &legacy);
+    }
+
     #[test]
     fn supported_well_formed_cases_match_legacy_oracle() {
         let cases = [
@@ -573,11 +595,8 @@ mod tests {
             "<p>visible</p><script>if (a < b) alert('&amp;')</script><style>x{}</style>",
         ];
 
-        for html in cases {
-            assert_eq!(
-                extract_reader(html.as_bytes()).unwrap(),
-                strip_to_text(html)
-            );
+        for (index, html) in cases.into_iter().enumerate() {
+            assert_matches_legacy(&format!("well_formed_{index}"), html);
         }
     }
 
@@ -599,12 +618,77 @@ mod tests {
         ];
 
         for (name, html) in fixtures {
-            assert_eq!(
-                extract_reader(html.as_bytes()).unwrap(),
-                strip_to_text(html),
-                "fixture={name}"
-            );
+            assert_matches_legacy(name, html);
         }
+    }
+
+    #[test]
+    fn supported_adversarial_fixtures_match_legacy_oracle() {
+        let fixtures = [
+            (
+                "article_in_aside_misnesting",
+                include_str!("../../tests/fixtures/adversarial/article_in_aside_misnesting.html"),
+            ),
+            (
+                "cms_toc_section_ids",
+                include_str!("../../tests/fixtures/adversarial/cms_toc_section_ids.html"),
+            ),
+            (
+                "multilang_article",
+                include_str!("../../tests/fixtures/adversarial/multilang_article.html"),
+            ),
+        ];
+
+        for (name, html) in fixtures {
+            assert_matches_legacy(name, html);
+        }
+    }
+
+    #[test]
+    fn image_alt_difference_is_a_promotion_blocker() {
+        let html = include_str!("../../tests/fixtures/adversarial/nested_void_elements.html");
+        let streaming = extract_reader(html.as_bytes()).unwrap();
+        let legacy = strip_to_text(html);
+
+        assert_eq!(
+            legacy,
+            streaming.replacen(" middle text", " pic middle text", 1),
+            "the spike does not collect the img alt attribute"
+        );
+        assert_chunk_invariant("nested_void_elements", html, &streaming);
+    }
+
+    #[test]
+    fn malformed_attribute_recovery_difference_is_a_promotion_blocker() {
+        let html = include_str!("../../tests/fixtures/adversarial/unclosed_attr_quote.html");
+        let streaming = extract_reader(html.as_bytes()).unwrap();
+        let legacy = strip_to_text(html);
+
+        assert!(streaming.contains("Padding paragraph that exists to stretch"));
+        assert!(!legacy.contains("Padding paragraph that exists to stretch"));
+        assert!(!streaming.contains("caption"));
+        assert!(legacy.contains("caption"));
+        for required in [
+            "First paragraph with the article lede",
+            "Second paragraph comes after",
+        ] {
+            assert!(streaming.contains(required), "streaming lost {required:?}");
+            assert!(legacy.contains(required), "legacy lost {required:?}");
+        }
+        assert_chunk_invariant("unclosed_attr_quote", html, &streaming);
+    }
+
+    #[test]
+    fn unclosed_skip_recovery_difference_is_a_promotion_blocker() {
+        let html = include_str!("../../tests/fixtures/adversarial/unclosed_nav_drawer.html");
+        let streaming = extract_reader(html.as_bytes()).unwrap();
+        let legacy = strip_to_text(html);
+
+        assert!(streaming.is_empty());
+        assert!(legacy.contains("Article Title For Recovery Test"));
+        assert!(legacy.contains("First paragraph of the article body"));
+        assert!(!legacy.contains("Drawer nav"));
+        assert_chunk_invariant("unclosed_nav_drawer", html, &streaming);
     }
 
     #[test]
@@ -612,9 +696,7 @@ mod tests {
         let html = "<main title=\"café &amp; tea\"><p>A &amp; 🙂</p><!-- split --><script>if (a < b) {}</script><style>x{}</style><p>Z</p></main>";
         let expected = extract_reader(html.as_bytes()).unwrap();
 
-        for chunks in [&[1][..], &[2, 3, 5], &[7, 1, 11, 2], &[16, 31]] {
-            assert_eq!(extract_chunked(html, chunks), expected, "chunks={chunks:?}");
-        }
+        assert_chunk_invariant("inline_adversarial", html, &expected);
         assert_eq!(expected, strip_to_text(html));
     }
 
