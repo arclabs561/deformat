@@ -13,6 +13,7 @@ use html5gum::{naive_next_state, Emitter, Error, IoReader, State, Tokenizer};
 use super::{cleanup_whitespace, is_block_tag, is_skip_tag};
 
 const MAX_POLICY_TAG_LEN: usize = 16;
+const MAX_POLICY_ATTRIBUTE_LEN: usize = 3;
 const SKIP_TAG_COUNT: usize = 14;
 const RAW_SKIP_TAG_COUNT: usize = 2;
 
@@ -123,6 +124,10 @@ struct TextEmitter {
     current_kind: Option<TagKind>,
     current_tag: Vec<u8>,
     current_tag_overflowed: bool,
+    current_attribute: Vec<u8>,
+    current_attribute_overflowed: bool,
+    current_attribute_value: Vec<u8>,
+    image_alt: Option<Vec<u8>>,
     last_start_tag: Vec<u8>,
     last_start_tag_overflowed: bool,
     output: Vec<u8>,
@@ -141,6 +146,10 @@ impl TextEmitter {
             current_kind: None,
             current_tag: Vec::with_capacity(16),
             current_tag_overflowed: false,
+            current_attribute: Vec::with_capacity(MAX_POLICY_ATTRIBUTE_LEN),
+            current_attribute_overflowed: false,
+            current_attribute_value: Vec::new(),
+            image_alt: None,
             last_start_tag: Vec::with_capacity(16),
             last_start_tag_overflowed: false,
             output: Vec::new(),
@@ -183,6 +192,41 @@ impl TextEmitter {
         self.finished = Some(cleanup_whitespace(&decoded).trim().to_owned());
     }
 
+    fn finish_attribute(&mut self) {
+        if self.image_alt.is_none()
+            && self.current_kind == Some(TagKind::Start)
+            && self.current_tag == b"img"
+            && !self.current_attribute_overflowed
+            && self.current_attribute == b"alt"
+        {
+            self.image_alt = Some(std::mem::take(&mut self.current_attribute_value));
+        }
+        self.current_attribute_value.clear();
+    }
+
+    fn emit_image_alt(&mut self) {
+        let Some(alt) = self.image_alt.take() else {
+            return;
+        };
+        if alt.is_empty() || self.is_skipping() {
+            return;
+        }
+
+        let leading_space = self.logical_output_len > 0 && !self.output_ends_with_newline;
+        let added = alt.len() + usize::from(leading_space) + 1;
+        self.logical_output_len += added;
+        self.output_ends_with_newline = false;
+        if let Some(output_len) = &self.count_only {
+            output_len.set(output_len.get() + added);
+        } else {
+            if leading_space {
+                self.output.push(b' ');
+            }
+            self.output.extend_from_slice(&alt);
+            self.output.push(b' ');
+        }
+    }
+
     fn handle_tag(&mut self, kind: TagKind) -> Option<State> {
         let raw_skip = raw_skip_tag_index(&self.current_tag);
         let semantic_skip = skip_tag_index(&self.current_tag);
@@ -199,6 +243,11 @@ impl TextEmitter {
                     self.raw_skip_depths[index] = self.raw_skip_depths[index].saturating_add(1);
                 } else if let Some(index) = semantic_skip {
                     self.skip_depths[index] = self.skip_depths[index].saturating_add(1);
+                } else if self.current_tag == b"main" {
+                    // A main landmark cannot validly be nested in navigation or
+                    // complementary content. Recover from unclosed skip tags so
+                    // malformed drawers do not swallow the article body.
+                    self.skip_depths.fill(0);
                 }
             }
             TagKind::End => {
@@ -208,6 +257,12 @@ impl TextEmitter {
                     self.skip_depths[index] = self.skip_depths[index].saturating_sub(1);
                 }
             }
+        }
+
+        if kind == TagKind::Start && self.current_tag == b"img" {
+            self.emit_image_alt();
+        } else {
+            self.image_alt = None;
         }
 
         if !self.is_skipping()
@@ -278,6 +333,10 @@ impl Emitter for TextEmitter {
         self.current_kind = Some(TagKind::Start);
         self.current_tag.clear();
         self.current_tag_overflowed = false;
+        self.current_attribute.clear();
+        self.current_attribute_overflowed = false;
+        self.current_attribute_value.clear();
+        self.image_alt = None;
     }
 
     fn init_end_tag(&mut self) {
@@ -289,6 +348,7 @@ impl Emitter for TextEmitter {
     fn init_comment(&mut self) {}
 
     fn emit_current_tag(&mut self) -> Option<State> {
+        self.finish_attribute();
         self.handle_tag(self.current_kind.expect("tag initialized before emission"))
     }
 
@@ -313,11 +373,29 @@ impl Emitter for TextEmitter {
 
     fn init_doctype(&mut self) {}
 
-    fn init_attribute(&mut self) {}
+    fn init_attribute(&mut self) {
+        self.finish_attribute();
+        self.current_attribute.clear();
+        self.current_attribute_overflowed = false;
+        self.current_attribute_value.clear();
+    }
 
-    fn push_attribute_name(&mut self, _value: &[u8]) {}
+    fn push_attribute_name(&mut self, value: &[u8]) {
+        let remaining = MAX_POLICY_ATTRIBUTE_LEN.saturating_sub(self.current_attribute.len());
+        self.current_attribute
+            .extend(value.iter().take(remaining).map(u8::to_ascii_lowercase));
+        self.current_attribute_overflowed |= value.len() > remaining;
+    }
 
-    fn push_attribute_value(&mut self, _value: &[u8]) {}
+    fn push_attribute_value(&mut self, value: &[u8]) {
+        if self.current_kind == Some(TagKind::Start)
+            && self.current_tag == b"img"
+            && !self.current_attribute_overflowed
+            && self.current_attribute == b"alt"
+        {
+            self.current_attribute_value.extend_from_slice(value);
+        }
+    }
 
     fn set_doctype_public_identifier(&mut self, _value: &[u8]) {}
 
@@ -645,28 +723,32 @@ mod tests {
     }
 
     #[test]
-    fn image_alt_difference_is_a_promotion_blocker() {
-        let html = include_str!("../../tests/fixtures/adversarial/nested_void_elements.html");
-        let streaming = extract_reader(html.as_bytes()).unwrap();
-        let legacy = strip_to_text(html);
+    fn image_alt_matches_legacy_oracle() {
+        let cases = [
+            (
+                "nested_void_elements",
+                include_str!("../../tests/fixtures/adversarial/nested_void_elements.html"),
+            ),
+            ("entity", r#"<p>Photo:</p><img alt="Caf&eacute; au lait">"#),
+            ("empty", r#"<p>A</p><img alt=""><p>B</p>"#),
+            ("skipped", r#"<nav><img alt="Logo"></nav><p>Content</p>"#),
+            ("case_insensitive", r#"<IMG ALT="Portrait">"#),
+        ];
 
-        assert_eq!(
-            legacy,
-            streaming.replacen(" middle text", " pic middle text", 1),
-            "the spike does not collect the img alt attribute"
-        );
-        assert_chunk_invariant("nested_void_elements", html, &streaming);
+        for (name, html) in cases {
+            assert_matches_legacy(name, html);
+        }
     }
 
     #[test]
-    fn malformed_attribute_recovery_difference_is_a_promotion_blocker() {
+    fn malformed_attribute_recovery_preserves_visible_text_and_alt() {
         let html = include_str!("../../tests/fixtures/adversarial/unclosed_attr_quote.html");
         let streaming = extract_reader(html.as_bytes()).unwrap();
         let legacy = strip_to_text(html);
 
         assert!(streaming.contains("Padding paragraph that exists to stretch"));
         assert!(!legacy.contains("Padding paragraph that exists to stretch"));
-        assert!(!streaming.contains("caption"));
+        assert!(streaming.contains("caption"));
         assert!(legacy.contains("caption"));
         for required in [
             "First paragraph with the article lede",
@@ -679,12 +761,12 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_skip_recovery_difference_is_a_promotion_blocker() {
+    fn main_landmark_recovers_from_unclosed_skip_tags() {
         let html = include_str!("../../tests/fixtures/adversarial/unclosed_nav_drawer.html");
         let streaming = extract_reader(html.as_bytes()).unwrap();
         let legacy = strip_to_text(html);
 
-        assert!(streaming.is_empty());
+        assert_eq!(streaming, legacy);
         assert!(legacy.contains("Article Title For Recovery Test"));
         assert!(legacy.contains("First paragraph of the article body"));
         assert!(!legacy.contains("Drawer nav"));
