@@ -32,7 +32,7 @@ cargo test --all-features
 
 ## Evaluation
 
-The full WCXB benchmark runs via `cargo run --release --example bench_wcxb -- --split dev`. Numbers in the README correspond to the dev split (1,495 pages). Don't ship a metric change without re-running the bench and updating the README.
+The full WCXB benchmark runs via `cargo run --release --example bench_wcxb -- --split dev`. Numbers in the README correspond to 1,495 scored pages from the 1,497-page dev corpus; IDs 4802 and 4893 lack `main_content`. Don't ship a metric change without re-running the bench and updating the README.
 
 ## Pull requests
 

@@ -16,7 +16,7 @@ HTML, XML, and plain text; Markdown passes through unchanged and is recognized
 from a path or MIME type. Binary formats use explicit `extract_file` /
 `extract_bytes` entry points.
 
-On the Web Content Extraction Benchmark (WCXB dev split, 1,495 pages
+On the Web Content Extraction Benchmark (WCXB dev split, 1,495 scored pages
 across 7 page types), the triple-filter
 pipeline reaches **F1 = 0.774 across all page types** and **0.881 on
 articles** (see [Evaluation](#evaluation)).
@@ -62,8 +62,7 @@ Quality is measured against the
 [Web Content Extraction Benchmark](https://webcontentextraction.org)
 (WCXB, CC-BY-4.0): 2,008 manually annotated pages across seven page
 types (article, documentation, service, listing, collection, forum,
-product), 1,495 in the dev split. Larger and more category-balanced
-than the older 2017 ScrapingHub benchmark, which is article-only.
+product), with 1,497 pages in the dev corpus and 1,495 scored.
 
 The metric is word-level F1 against `ground_truth.main_content`:
 tokenize on whitespace, lowercase, strip non-alphanumeric edges,
@@ -76,18 +75,13 @@ that one category carries the result. The `bench_wcxb` runner emits
 the per-type breakdown alongside the aggregate.
 
 ```sh
-scripts/fetch_wcxb.py                                            # pulls dev split from HuggingFace
-cargo run --release --example bench_wcxb -- --extractor strip    # baseline
-cargo run --release --example bench_wcxb -- --extractor triple   # link + sentence + boilerplate filter pipeline
-cargo run --release --features readability --example bench_wcxb -- --extractor cascade  # strip + readability fallback
-cargo run --release --example bench_wcxb -- --extractor anchor   # <main>/<article> election
+scripts/fetch_wcxb.py --split dev
+cargo run --release --example bench_wcxb -- --split dev --extractor triple
 ```
 
 WCXB fixtures aren't committed (~200 MB); the fetch script downloads
-them on first use. To swap in your own corpus, point the runner at
-a directory with the same `{html,ground-truth}/<id>.{html,json}`
-shape. The F1 scorer in `examples/bench_wcxb.rs` is ~50 lines and
-backend-agnostic.
+the pinned benchmark revision. Dev IDs 4802 and 4893 lack
+`ground_truth.main_content` and are the only excluded pages.
 
 A separate committed regression corpus
 (`tests/fixtures/regression/`, ~7 KB) pins per-fixture F1 floors so
@@ -95,7 +89,7 @@ filter or scanner changes that drop F1 fail CI before the next
 release. Adversarial scanner repros live in
 `tests/fixtures/adversarial/`. See `tests/fixtures/PROVENANCE.md`.
 
-### Results (WCXB dev split, 1,495 pages)
+### Results (WCXB dev split, 1,495 scored pages)
 
 | Strategy | ALL F1 | Article F1 | When |
 |---|---:|---:|---|

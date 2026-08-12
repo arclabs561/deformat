@@ -5,7 +5,7 @@
 //! floor; future filter or scanner changes that drop F1 fail CI before
 //! they reach a release.
 //!
-//! Why this exists: WCXB benchmark fixtures aren't committed (1495
+//! Why this exists: WCXB benchmark fixtures aren't committed (1,497
 //! pages, fetched separately). Without an in-repo corpus, the only F1
 //! signal CI could observe was test counts -- a filter change that
 //! quietly regresses article F1 by 2pp would land green. The committed

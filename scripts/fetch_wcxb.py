@@ -14,9 +14,10 @@ Files land in target/bench-fixtures/wcxb/{dev,test}/. Idempotent: the
 huggingface-hub client skips already-downloaded files.
 
 Usage:
-    scripts/fetch_wcxb.py           # dev split only (faster)
-    scripts/fetch_wcxb.py --all     # dev + held-out test split
+    scripts/fetch_wcxb.py --split dev
+    scripts/fetch_wcxb.py --split test
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,11 +26,12 @@ from pathlib import Path
 
 REPO_ID = "murrough-foley/web-content-extraction-benchmark"
 REPO_TYPE = "dataset"
+REVISION = "be72432cfa012ac918af47010bf106a2801afeef"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--all", action="store_true", help="also download test split")
+    parser.add_argument("--split", required=True, choices=("dev", "test"))
     parser.add_argument(
         "--dest",
         default=None,
@@ -47,22 +49,27 @@ def main() -> int:
     dest = Path(args.dest) if args.dest else root / "target" / "bench-fixtures" / "wcxb"
     dest.mkdir(parents=True, exist_ok=True)
 
-    allow_patterns = ["dev/**", "metadata.json", "README.md", "LICENSE"]
-    if args.all:
-        allow_patterns.append("test/**")
+    allow_patterns = [
+        f"{args.split}/**",
+        "evaluate.py",
+        "metadata.json",
+        "README.md",
+        "LICENSE",
+    ]
 
     print(f"Downloading WCXB to {dest}")
     print(f"Patterns: {allow_patterns}")
     path = snapshot_download(
         repo_id=REPO_ID,
         repo_type=REPO_TYPE,
+        revision=REVISION,
         local_dir=str(dest),
         allow_patterns=allow_patterns,
     )
     print(f"Done: {path}")
 
     # Report basic counts so the user sees the scale.
-    for split in ("dev", "test"):
+    for split in (args.split,):
         gt_dir = dest / split / "ground-truth"
         html_dir = dest / split / "html"
         if gt_dir.exists() and html_dir.exists():

@@ -63,7 +63,7 @@ word-level F1 against the expected text and asserts each extractor
 strategy clears its per-fixture floor. Future filter or scanner
 changes that drop F1 fail CI before the next release.
 
-WCXB benchmark fixtures aren't committed (1495 pages, fetched
+WCXB benchmark fixtures aren't committed (1,497 dev pages, fetched
 separately). Without an in-repo corpus, the only F1 signal CI could
 observe was test counts -- a filter change that quietly regresses
 article F1 would land green. This corpus is small (~7 KB total) so
@@ -85,7 +85,7 @@ variance without papering over real regressions.
 | Source | Fetched by | License | Why not committed |
 |---|---|---|---|
 | Project Gutenberg EPUBs (Alice, Metamorphosis) | `scripts/fetch_fixtures.sh` | Public domain | Larger than needed — 200-500 KB each. Minimal.epub covers the core code paths. Gutenberg redistribution is legally fine but size is the deciding factor. |
-| WCXB benchmark (1,497 dev + held-out test pages) | `scripts/fetch_wcxb.py` | CC-BY-4.0 (Murrough Foley) | ~200 MB total. Attribution required on redistribution; script handles it by fetching from HuggingFace on demand. The WCXB F1 numbers in the README are reproducible by running the script. |
+| WCXB benchmark (1,497 dev + held-out test pages) | `scripts/fetch_wcxb.py --split dev` | CC-BY-4.0 (Murrough Foley) | Revision `be72432cfa012ac918af47010bf106a2801afeef`; `evaluate.py` is fetched with the corpus. Dev IDs 4802 and 4893 lack `main_content`, leaving 1,495 scored pages. |
 
 ## Design rationale
 

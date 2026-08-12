@@ -9,7 +9,7 @@
 //! Run locally with:
 //!
 //! ```sh
-//! scripts/fetch_wcxb.py                    # one-time fetch
+//! scripts/fetch_wcxb.py --split dev        # one-time fetch
 //! cargo test --test bench_real_html -- --ignored
 //! ```
 

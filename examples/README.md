@@ -46,15 +46,14 @@ cargo run --features readability --example clean_html
 
 ## Benchmark runner
 
-`bench_wcxb` expects the WCXB dev fixtures under `target/bench-fixtures/wcxb/dev`.
-Fetch them before running the benchmark:
+`bench_wcxb` requires an explicit `dev` or `test` split:
 
 ```sh
-scripts/fetch_wcxb.py
-cargo run --release --example bench_wcxb -- --extractor strip
-cargo run --release --example bench_wcxb -- --extractor triple
-cargo run --release --features readability --example bench_wcxb -- --extractor readable
-cargo run --release --features readability --example bench_wcxb -- --extractor cascade
+scripts/fetch_wcxb.py --split dev
+cargo run --release --example bench_wcxb -- --split dev --extractor strip
+cargo run --release --example bench_wcxb -- --split dev --extractor triple
+cargo run --release --features readability --example bench_wcxb -- --split dev --extractor readable
+cargo run --release --features readability --example bench_wcxb -- --split dev --extractor cascade
 ```
 
 The output reports word-level precision, recall, and F1 overall and by WCXB page type.
