@@ -81,7 +81,6 @@ encoding_rs = ["dep:encoding_rs"]
 criterion = { version = "0.5", features = ["html_reports"] }
 # Test-only streaming experiment; promotion requires semantic and memory evidence.
 html5gum = { version = "=0.8.4", default-features = false }
-mdream = "=1.6.2"
 proptest = "1"
 serde_json = "1"
 slabs = "0.3"
