@@ -3,7 +3,8 @@
 //!
 //! NER engines, LLM pipelines, and search indexers need plain text.
 //! `deformat` sits upstream: it takes formatted documents and returns clean
-//! text. No I/O -- it operates on `&str` and `&[u8]` inputs.
+//! text. The common entry points accept `&str` and `&[u8]`; feature-gated
+//! format modules also provide file helpers.
 //!
 //! # Quick start
 //!
@@ -82,7 +83,7 @@ pub enum Extractor {
     Readability,
     /// DOM-based HTML-to-text with layout awareness (feature `html2text`).
     Html2text,
-    /// PDF text extraction via the historical `pdf-extract` backend.
+    /// Legacy extractor identifier retained for serialized metadata compatibility.
     PdfExtract,
     /// PDF text extraction via `pdf_oxide` (features `pdf` or `pdf_oxide`).
     PdfOxide,

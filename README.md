@@ -65,7 +65,9 @@ types (article, documentation, service, listing, collection, forum,
 product), with 1,497 pages in the dev split.
 
 The metric is macro-averaged, per-page word F1 against
-`ground_truth.main_content`, using the benchmark's pinned evaluator.
+`ground_truth.main_content`, using the benchmark's pinned evaluator. Precision
+and recall count repeated words; their denominators are the total predicted and
+reference token counts, respectively.
 
 Reporting per page type is the point: a single ALL number hides
 that one category carries the result. The `bench_wcxb` runner emits
@@ -90,7 +92,7 @@ release. Adversarial scanner repros live in
 | Strategy | ALL F1 | Article F1 | When |
 |---|---:|---:|---|
 | `strip_to_text` (baseline) | 0.746 | 0.854 | Default; recall-first |
-| triple filter pipeline | **0.774** | **0.880** | Mixed corpora; best heuristic |
+| triple filter pipeline | **0.774** | **0.880** | Mixed corpora |
 | `extract_html_cascade` | 0.748 | 0.858 | Wild HTML; rescues content the scanner drops |
 | `StripOptions::main_landmark` | 0.748 | 0.866 | Article corpora with `<main>`/`<article>` |
 
@@ -100,13 +102,6 @@ collection +2.9pp, documentation −0.7pp.
 
 ## Known limitations
 
-- **Article-extraction F1 ceiling.** WCXB article F1 tops out at
-  0.880 (triple pipeline) / 0.866 (anchor election); the published
-  heuristic-extractor ceiling is around 0.91. The 3pp gap is open
-  work. The path forward is DOM-aware block scoring (paragraph
-  position, heading proximity, per-block text-to-tag ratio), which is
-  what Trafilatura uses to reach ≈ 0.94 article F1. Adopting that here
-  in Rust without inheriting a DOM parse is the design problem.
 - **Vision-heavy PDFs**: multi-column papers, scans, and figure-rich
   documents need layout analysis. Out of scope for this crate;
   pair with [Marker](https://github.com/VikParuchuri/marker) or
