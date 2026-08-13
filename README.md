@@ -16,9 +16,9 @@ HTML, XML, and plain text; Markdown passes through unchanged and is recognized
 from a path or MIME type. Binary formats use explicit `extract_file` /
 `extract_bytes` entry points.
 
-On the Web Content Extraction Benchmark (WCXB dev split, 1,495 scored pages
+On the Web Content Extraction Benchmark (WCXB dev split, 1,497 pages
 across 7 page types), the triple-filter
-pipeline reaches **F1 = 0.774 across all page types** and **0.881 on
+pipeline reaches **F1 = 0.774 across all page types** and **0.880 on
 articles** (see [Evaluation](#evaluation)).
 
 ## Scope
@@ -62,13 +62,10 @@ Quality is measured against the
 [Web Content Extraction Benchmark](https://webcontentextraction.org)
 (WCXB, CC-BY-4.0): 2,008 manually annotated pages across seven page
 types (article, documentation, service, listing, collection, forum,
-product), with 1,497 pages in the dev corpus and 1,495 scored.
+product), with 1,497 pages in the dev split.
 
-The metric is word-level F1 against `ground_truth.main_content`:
-tokenize on whitespace, lowercase, strip non-alphanumeric edges,
-compute multiset overlap, then `F1 = 2·P·R / (P+R)`. Same shape as
-ScrapingHub's metric and as the published comparative-extraction
-literature, so numbers are cross-comparable.
+The metric is macro-averaged, per-page word F1 against
+`ground_truth.main_content`, using the benchmark's pinned evaluator.
 
 Reporting per page type is the point: a single ALL number hides
 that one category carries the result. The `bench_wcxb` runner emits
@@ -80,8 +77,7 @@ cargo run --release --example bench_wcxb -- --split dev --extractor triple
 ```
 
 WCXB fixtures aren't committed (~200 MB); the fetch script downloads
-the pinned benchmark revision. Dev IDs 4802 and 4893 lack
-`ground_truth.main_content` and are the only excluded pages.
+the pinned benchmark revision.
 
 A separate committed regression corpus
 (`tests/fixtures/regression/`, ~7 KB) pins per-fixture F1 floors so
@@ -89,14 +85,14 @@ filter or scanner changes that drop F1 fail CI before the next
 release. Adversarial scanner repros live in
 `tests/fixtures/adversarial/`. See `tests/fixtures/PROVENANCE.md`.
 
-### Results (WCXB dev split, 1,495 scored pages)
+### Results (WCXB dev split, 1,497 pages)
 
 | Strategy | ALL F1 | Article F1 | When |
 |---|---:|---:|---|
-| `strip_to_text` (baseline) | 0.746 | 0.855 | Default; recall-first |
-| triple filter pipeline | **0.774** | 0.881 | Mixed corpora; best heuristic |
-| `extract_html_cascade` | 0.748 | 0.859 | Wild HTML; rescues content the scanner drops |
-| `StripOptions::main_landmark` | 0.748 | **0.867** | Article corpora with `<main>`/`<article>` |
+| `strip_to_text` (baseline) | 0.746 | 0.854 | Default; recall-first |
+| triple filter pipeline | **0.774** | **0.880** | Mixed corpora; best heuristic |
+| `extract_html_cascade` | 0.748 | 0.858 | Wild HTML; rescues content the scanner drops |
+| `StripOptions::main_landmark` | 0.748 | 0.866 | Article corpora with `<main>`/`<article>` |
 
 Per-type triple-pipeline F1 deltas from baseline: article +2.6pp,
 service +4.0pp, forum +4.9pp, product +5.0pp, listing +0.8pp,
@@ -105,7 +101,7 @@ collection +2.9pp, documentation −0.7pp.
 ## Known limitations
 
 - **Article-extraction F1 ceiling.** WCXB article F1 tops out at
-  0.881 (triple pipeline) / 0.867 (anchor election); the published
+  0.880 (triple pipeline) / 0.866 (anchor election); the published
   heuristic-extractor ceiling is around 0.91. The 3pp gap is open
   work. The path forward is DOM-aware block scoring (paragraph
   position, heading proximity, per-block text-to-tag ratio), which is

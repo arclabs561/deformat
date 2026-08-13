@@ -84,6 +84,7 @@ html5gum = { version = "=0.8.4", default-features = false }
 proptest = "1"
 serde_json = "1"
 slabs = "0.3"
+unicode-general-category = "=1.1.0"
 
 [[bench]]
 name = "strip"

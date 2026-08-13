@@ -85,7 +85,7 @@ variance without papering over real regressions.
 | Source | Fetched by | License | Why not committed |
 |---|---|---|---|
 | Project Gutenberg EPUBs (Alice, Metamorphosis) | `scripts/fetch_fixtures.sh` | Public domain | Larger than needed — 200-500 KB each. Minimal.epub covers the core code paths. Gutenberg redistribution is legally fine but size is the deciding factor. |
-| WCXB benchmark (1,497 dev + held-out test pages) | `scripts/fetch_wcxb.py --split dev` | CC-BY-4.0 (Murrough Foley) | Revision `be72432cfa012ac918af47010bf106a2801afeef`; `evaluate.py` is fetched with the corpus. Dev IDs 4802 and 4893 lack `main_content`, leaving 1,495 scored pages. |
+| WCXB benchmark (1,497 dev + held-out test pages) | `scripts/fetch_wcxb.py --split dev` | CC-BY-4.0 (Murrough Foley) | Revision `be72432cfa012ac918af47010bf106a2801afeef`; `evaluate.py` is fetched with the corpus. |
 
 ## Design rationale
 

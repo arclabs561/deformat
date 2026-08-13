@@ -17,54 +17,14 @@
 //! every commit. When a floor needs to move (intentional redesign,
 //! filter retuning), update both the floor and the rationale comment.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Word-level F1: tokenize on whitespace, lowercase, compute multiset
-/// overlap. Matches the metric used by `examples/bench_wcxb.rs`.
+#[path = "support/wcxb_score.rs"]
+mod wcxb_score;
+
+/// Word-level F1 using the pinned WCXB reference scorer.
 fn word_f1(extracted: &str, expected: &str) -> f32 {
-    let ex_words = tokenize(extracted);
-    let gt_words = tokenize(expected);
-    if ex_words.is_empty() && gt_words.is_empty() {
-        return 1.0;
-    }
-    if ex_words.is_empty() || gt_words.is_empty() {
-        return 0.0;
-    }
-
-    let mut ex_counts: HashMap<&str, usize> = HashMap::new();
-    for w in &ex_words {
-        *ex_counts.entry(w.as_str()).or_insert(0) += 1;
-    }
-    let mut gt_counts: HashMap<&str, usize> = HashMap::new();
-    for w in &gt_words {
-        *gt_counts.entry(w.as_str()).or_insert(0) += 1;
-    }
-
-    let mut overlap: usize = 0;
-    for (w, gt_n) in &gt_counts {
-        if let Some(ex_n) = ex_counts.get(w) {
-            overlap += (*ex_n).min(*gt_n);
-        }
-    }
-
-    let precision = overlap as f32 / ex_words.len() as f32;
-    let recall = overlap as f32 / gt_words.len() as f32;
-    if precision + recall == 0.0 {
-        0.0
-    } else {
-        2.0 * precision * recall / (precision + recall)
-    }
-}
-
-fn tokenize(text: &str) -> Vec<String> {
-    text.split_whitespace()
-        .map(|w| {
-            w.trim_matches(|c: char| !c.is_alphanumeric())
-                .to_lowercase()
-        })
-        .filter(|w| !w.is_empty())
-        .collect()
+    wcxb_score::word_prf(extracted, expected).2 as f32
 }
 
 fn fixture_pair(name: &str) -> (String, String) {

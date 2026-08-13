@@ -21,7 +21,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const ALLOWED_MISSING_MAIN_CONTENT: &[&str] = &["4802", "4893"];
+#[path = "../tests/support/wcxb_score.rs"]
+mod wcxb_score;
 
 #[derive(Debug)]
 struct Args {
@@ -31,7 +32,7 @@ struct Args {
 
 #[derive(Debug)]
 struct GroundTruth {
-    main_content: Option<String>,
+    main_content: String,
     page_type: String,
     with_req: Vec<String>,
     without_req: Vec<String>,
@@ -43,10 +44,8 @@ struct Stats {
     f1_sum: f64,
     p_sum: f64,
     r_sum: f64,
-    with_ok: usize,
-    with_total: usize,
-    without_ok: usize,
-    without_total: usize,
+    with_rate_sum: f64,
+    without_rate_sum: f64,
 }
 
 fn main() -> ExitCode {
@@ -82,23 +81,16 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
 
     let mut overall = Stats::default();
     let mut by_type: HashMap<String, Stats> = HashMap::new();
-    let mut excluded = Vec::new();
-
     for (id, gt_path) in &gt_entries {
         let raw = fs::read_to_string(gt_path)
             .map_err(|error| format!("read {}: {error}", gt_path.display()))?;
         let gt = parse_gt(&raw).map_err(|error| format!("parse ground truth {id}: {error}"))?;
-        let Some(gold) = gt.main_content else {
-            validate_missing_main_content(id)?;
-            excluded.push(id.clone());
-            continue;
-        };
         let html_path = &html_entries[id];
         let html = fs::read_to_string(html_path)
             .map_err(|error| format!("read {}: {error}", html_path.display()))?;
         let extracted = extract(&extractor, &html);
 
-        let (p, r, f1) = word_prf(&extracted, &gold);
+        let (p, r, f1) = wcxb_score::word_prf(&extracted, &gt.main_content);
         let stats = by_type.entry(gt.page_type.clone()).or_default();
         stats.pages += 1;
         stats.f1_sum += f1;
@@ -109,35 +101,17 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
         overall.p_sum += p;
         overall.r_sum += r;
 
-        let extracted_lower = extracted.to_lowercase();
-        for snippet in &gt.with_req {
-            stats.with_total += 1;
-            overall.with_total += 1;
-            if extracted_lower.contains(&snippet.to_lowercase()) {
-                stats.with_ok += 1;
-                overall.with_ok += 1;
-            }
-        }
-        for snippet in &gt.without_req {
-            stats.without_total += 1;
-            overall.without_total += 1;
-            if !extracted_lower.contains(&snippet.to_lowercase()) {
-                stats.without_ok += 1;
-                overall.without_ok += 1;
-            }
-        }
+        let with_rate = snippet_rate(&extracted, &gt.with_req);
+        let without_rate = snippet_rate(&extracted, &gt.without_req);
+        stats.with_rate_sum += with_rate;
+        stats.without_rate_sum += without_rate;
+        overall.with_rate_sum += with_rate;
+        overall.without_rate_sum += without_rate;
     }
 
     println!(
-        "Extractor: {extractor} | WCXB {split} split | corpus={} scored={} excluded={} ({})",
-        gt_entries.len(),
-        overall.pages,
-        excluded.len(),
-        if excluded.is_empty() {
-            "none".to_string()
-        } else {
-            format!("{} missing main_content", excluded.join(", "))
-        }
+        "Extractor: {extractor} | WCXB {split} split | scored={}",
+        overall.pages
     );
 
     println!();
@@ -205,16 +179,6 @@ fn fixture_entries(dir: &Path, extension: &str) -> Result<HashMap<String, PathBu
         }
     }
     Ok(entries)
-}
-
-fn validate_missing_main_content(id: &str) -> Result<(), String> {
-    if ALLOWED_MISSING_MAIN_CONTENT.contains(&id) {
-        Ok(())
-    } else {
-        Err(format!(
-            "ground truth {id} has no main_content; only IDs 4802 and 4893 may be excluded"
-        ))
-    }
 }
 
 fn extract(kind: &str, html: &str) -> String {
@@ -363,19 +327,27 @@ fn parse_gt(raw: &str) -> Result<GroundTruth, String> {
         .and_then(serde_json::Value::as_object)
         .ok_or("missing object ground_truth")?;
     let main_content = match ground_truth.get("main_content") {
-        Some(serde_json::Value::Null) | None => None,
-        Some(value) => Some(
-            value
-                .as_str()
-                .ok_or("ground_truth.main_content is not a string")?
-                .to_string(),
-        ),
+        Some(serde_json::Value::Null) | None => String::new(),
+        Some(value) => value
+            .as_str()
+            .ok_or("ground_truth.main_content is not a string")?
+            .to_string(),
     };
-    let page_type = value
-        .pointer("/_internal/page_type/primary")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("missing string _internal.page_type.primary")?
-        .to_string();
+    let page_type_value = value.pointer("/_internal/page_type");
+    let page_type = match page_type_value {
+        Some(serde_json::Value::Object(object)) => object
+            .get("primary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("article"),
+        Some(serde_json::Value::String(value)) => value,
+        _ => "article",
+    };
+    let page_type = if page_type == "category" {
+        "collection"
+    } else {
+        page_type
+    }
+    .to_string();
     let string_array = |key: &str| -> Result<Vec<String>, String> {
         ground_truth
             .get(key)
@@ -398,53 +370,16 @@ fn parse_gt(raw: &str) -> Result<GroundTruth, String> {
     })
 }
 
-fn word_prf(predicted: &str, reference: &str) -> (f64, f64, f64) {
-    let pred = word_counter(predicted);
-    let refe = word_counter(reference);
-    if refe.is_empty() {
-        return if pred.is_empty() {
-            (1.0, 1.0, 1.0)
-        } else {
-            (0.0, 1.0, 0.0)
-        };
+fn snippet_rate(text: &str, snippets: &[String]) -> f64 {
+    if snippets.is_empty() {
+        return 1.0;
     }
-    if pred.is_empty() {
-        return (1.0, 0.0, 0.0);
-    }
-    let mut overlap = 0usize;
-    for (w, &pc) in &pred {
-        if let Some(&rc) = refe.get(w) {
-            overlap += pc.min(rc);
-        }
-    }
-    let pred_total: usize = pred.values().sum();
-    let ref_total: usize = refe.values().sum();
-    let p = overlap as f64 / pred_total as f64;
-    let r = overlap as f64 / ref_total as f64;
-    let f1 = if p + r > 0.0 {
-        2.0 * p * r / (p + r)
-    } else {
-        0.0
-    };
-    (p, r, f1)
-}
-
-fn word_counter(s: &str) -> HashMap<String, usize> {
-    let mut c = HashMap::new();
-    let mut word = String::new();
-    for ch in s.chars() {
-        if ch.is_alphanumeric() || ch == '_' {
-            for lc in ch.to_lowercase() {
-                word.push(lc);
-            }
-        } else if !word.is_empty() {
-            *c.entry(std::mem::take(&mut word)).or_insert(0) += 1;
-        }
-    }
-    if !word.is_empty() {
-        *c.entry(word).or_insert(0) += 1;
-    }
-    c
+    let text = text.to_lowercase();
+    let found = snippets
+        .iter()
+        .filter(|snippet| text.contains(&snippet.to_lowercase()))
+        .count();
+    found as f64 / snippets.len() as f64
 }
 
 fn print_row(a: &str, b: &str, c: &str, d: &str, e: &str, f: &str, g: &str) {
@@ -456,16 +391,8 @@ fn print_stats(label: &str, s: &Stats) {
     let f1 = s.f1_sum / n;
     let p = s.p_sum / n;
     let r = s.r_sum / n;
-    let with_pct = if s.with_total > 0 {
-        100.0 * s.with_ok as f64 / s.with_total as f64
-    } else {
-        f64::NAN
-    };
-    let without_pct = if s.without_total > 0 {
-        100.0 * s.without_ok as f64 / s.without_total as f64
-    } else {
-        f64::NAN
-    };
+    let with_pct = 100.0 * s.with_rate_sum / n;
+    let without_pct = 100.0 * s.without_rate_sum / n;
     println!(
         "{label:<14} {:>5} {:>6.3} {:>6.3} {:>6.3} {:>6.1}% {:>6.1}%",
         s.pages, f1, p, r, with_pct, without_pct,
@@ -493,13 +420,26 @@ mod tests {
     }
 
     #[test]
-    fn ground_truth_parser_distinguishes_missing_main_content() {
+    fn ground_truth_parser_matches_reference_defaults() {
         let raw = r#"{
             "_internal":{"page_type":{"primary":"article"}},
             "ground_truth":{"with":[],"without":[]}
         }"#;
         let parsed = parse_gt(raw).unwrap();
-        assert!(parsed.main_content.is_none());
+        assert!(parsed.main_content.is_empty());
+        assert_eq!(parsed.page_type, "article");
+
+        let category = r#"{
+            "_internal":{"page_type":"category"},
+            "ground_truth":{"main_content":"x","with":[],"without":[]}
+        }"#;
+        assert_eq!(parse_gt(category).unwrap().page_type, "collection");
+
+        let malformed_type = r#"{
+            "_internal":{"page_type":7},
+            "ground_truth":{"main_content":"x","with":[],"without":[]}
+        }"#;
+        assert_eq!(parse_gt(malformed_type).unwrap().page_type, "article");
 
         let malformed = r#"{
             "_internal":{"page_type":{"primary":"article"}},
@@ -509,10 +449,13 @@ mod tests {
     }
 
     #[test]
-    fn only_documented_pages_may_be_excluded() {
-        assert!(validate_missing_main_content("4802").is_ok());
-        assert!(validate_missing_main_content("4893").is_ok());
-        assert!(validate_missing_main_content("0001").is_err());
+    fn snippet_rates_are_macro_ready_and_not_complemented() {
+        assert_eq!(snippet_rate("anything", &[]), 1.0);
+        assert_eq!(
+            snippet_rate("Alpha beta", &["alpha".into(), "missing".into()]),
+            0.5
+        );
+        assert_eq!(snippet_rate("forbidden", &["forbidden".into()]), 1.0);
     }
 
     #[test]
