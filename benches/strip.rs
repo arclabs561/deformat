@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use mdream::{html_to_markdown, HTMLToMarkdownOptions};
 
 fn small_fragment() -> &'static str {
     "<p>Hello <b>world</b>! Caf&eacute; in &Lstrok;&oacute;d&zacute;.</p>"
@@ -78,6 +79,25 @@ fn plain_text() -> &'static str {
     "Tim Cook announced that Apple Inc would acquire the German startup DeepL, \
      founded by Jaroslaw Kutylowski in Cologne. The deal, worth EUR 3.2 billion, \
      closes on March 15, 2026. Cook told Reuters he expects 500 new hires."
+}
+
+fn common_markdown_document(repetitions: usize) -> String {
+    let mut html = String::from("<article><h1>Release notes</h1>");
+    for _ in 0..repetitions {
+        html.push_str(
+            "<h2>Parser changes</h2><p>The <strong>streaming parser</strong> keeps <em>visible text</em>.</p><ul><li>bounded input</li><li>stable output</li></ul><blockquote><p>Measure before changing code.</p></blockquote><pre><code>sample text only</code></pre>",
+        );
+    }
+    html.push_str("</article>");
+    html
+}
+
+fn word_tokens(markdown: &str) -> Vec<String> {
+    markdown
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 fn bench_strip(c: &mut Criterion) {
@@ -163,5 +183,39 @@ fn bench_detect(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_strip, bench_decode_entities, bench_detect);
+fn bench_markdown_converters(c: &mut Criterion) {
+    let medium = common_markdown_document(10);
+    let large = common_markdown_document(100);
+    let mut group = c.benchmark_group("html_to_markdown");
+
+    for (name, html) in [("medium_common", &medium), ("large_common", &large)] {
+        let deformat_output = deformat::html::strip_to_markdown(html);
+        let mdream_output = html_to_markdown(html, HTMLToMarkdownOptions::default());
+        assert_eq!(
+            word_tokens(&deformat_output),
+            word_tokens(&mdream_output),
+            "benchmark converters must preserve the same ordered visible words"
+        );
+
+        group.throughput(Throughput::Bytes(html.len() as u64));
+        group.bench_with_input(BenchmarkId::new("deformat", name), html, |b, html| {
+            b.iter(|| deformat::html::strip_to_markdown(black_box(html)))
+        });
+        group.bench_with_input(BenchmarkId::new("mdream", name), html, |b, html| {
+            b.iter(|| {
+                html_to_markdown(black_box(html), black_box(HTMLToMarkdownOptions::default()))
+            })
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_strip,
+    bench_decode_entities,
+    bench_detect,
+    bench_markdown_converters
+);
 criterion_main!(benches);

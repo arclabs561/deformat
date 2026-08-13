@@ -24,6 +24,10 @@ struct TrackingAllocator;
 static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static PEAK_BYTES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static ALLOCATION_EVENTS: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
 fn record_live(live: usize) {
@@ -41,6 +45,8 @@ unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let pointer = unsafe { System.alloc(layout) };
         if !pointer.is_null() {
+            ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            ALLOCATION_EVENTS.fetch_add(1, Ordering::Relaxed);
             let live = LIVE_BYTES.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
             record_live(live);
         }
@@ -55,6 +61,10 @@ unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         let new_pointer = unsafe { System.realloc(pointer, layout, new_size) };
         if !new_pointer.is_null() {
+            if new_size > layout.size() {
+                ALLOCATED_BYTES.fetch_add(new_size - layout.size(), Ordering::Relaxed);
+            }
+            ALLOCATION_EVENTS.fetch_add(1, Ordering::Relaxed);
             let live = if new_size >= layout.size() {
                 LIVE_BYTES.fetch_add(new_size - layout.size(), Ordering::Relaxed) + new_size
                     - layout.size()
@@ -76,6 +86,8 @@ static TEST_ALLOCATOR: TrackingAllocator = TrackingAllocator;
 fn reset_peak() -> usize {
     let baseline = LIVE_BYTES.load(Ordering::Relaxed);
     PEAK_BYTES.store(baseline, Ordering::Relaxed);
+    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+    ALLOCATION_EVENTS.store(0, Ordering::Relaxed);
     baseline
 }
 
@@ -247,7 +259,9 @@ impl TextEmitter {
                     // A main landmark cannot validly be nested in navigation or
                     // complementary content. Recover from unclosed skip tags so
                     // malformed drawers do not swallow the article body.
-                    self.skip_depths.fill(0);
+                    for index in [1, 2, 3, 4] {
+                        self.skip_depths[index] = 0;
+                    }
                 }
             }
             TagKind::End => {
@@ -390,6 +404,7 @@ impl Emitter for TextEmitter {
     fn push_attribute_value(&mut self, value: &[u8]) {
         if self.current_kind == Some(TagKind::Start)
             && self.current_tag == b"img"
+            && !self.is_skipping()
             && !self.current_attribute_overflowed
             && self.current_attribute == b"alt"
         {
@@ -508,6 +523,8 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct ProbeResult {
         peak_bytes: usize,
+        allocated_bytes: usize,
+        allocation_events: usize,
         logical_output_bytes: usize,
         output_capacity: usize,
     }
@@ -520,6 +537,7 @@ mod tests {
             "script" => PatternReader::new(b"<script>", b'x', size, b"</script>"),
             "visible" | "visible_collect" => PatternReader::new(b"<span>", b'x', size, b"</span>"),
             "entity" => PatternReader::new(b"<span>&", b'a', size, b";</span>"),
+            "skipped_alt" => PatternReader::new(b"<nav><img alt=\"", b'x', size, b"\"></nav>"),
             _ => panic!("unknown memory probe case: {case}"),
         }
     }
@@ -534,6 +552,8 @@ mod tests {
         }
         ProbeResult {
             peak_bytes: peak_above(baseline),
+            allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+            allocation_events: ALLOCATION_EVENTS.load(Ordering::Relaxed),
             logical_output_bytes: output_len.get(),
             output_capacity: 0,
         }
@@ -544,6 +564,8 @@ mod tests {
         let output = extract_reader(pattern("visible_collect", size)).unwrap();
         ProbeResult {
             peak_bytes: peak_above(baseline),
+            allocated_bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
+            allocation_events: ALLOCATION_EVENTS.load(Ordering::Relaxed),
             logical_output_bytes: output.len(),
             output_capacity: output.capacity(),
         }
@@ -566,11 +588,15 @@ mod tests {
             )
         });
         let peak_bytes = fields.next().expect("peak field").1;
+        let allocated_bytes = fields.next().expect("allocated field").1;
+        let allocation_events = fields.next().expect("allocation events field").1;
         let logical_output_bytes = fields.next().expect("logical output field").1;
         let output_capacity = fields.next().expect("output capacity field").1;
         assert!(fields.next().is_none(), "unexpected extra probe fields");
         ProbeResult {
             peak_bytes,
+            allocated_bytes,
+            allocation_events,
             logical_output_bytes,
             output_capacity,
         }
@@ -786,10 +812,21 @@ mod tests {
         #[test]
         fn output_is_invariant_across_generated_chunk_schedules(
             chunks in prop::collection::vec(1usize..33, 1..32),
+            fragments in prop::collection::vec(
+                prop_oneof![
+                    Just("<p>visible</p>".to_owned()),
+                    Just("<nav>hidden</nav>".to_owned()),
+                    Just("<img alt=\"caption\">".to_owned()),
+                    Just("&amp;".to_owned()),
+                    Just("<!-- comment -->".to_owned()),
+                    "[A-Za-z0-9 ]{0,32}",
+                ],
+                0..24,
+            ),
         ) {
-            let html = "<main title=\"café &amp; tea\"><p>A &amp; 🙂</p><!-- split --><script>if (a < b) {}</script><style>x{}</style><p>Z</p></main>";
+            let html = format!("<main>{}</main>", fragments.concat());
             let expected = extract_reader(html.as_bytes()).unwrap();
-            prop_assert_eq!(extract_chunked(html, &chunks), expected);
+            prop_assert_eq!(extract_chunked(&html, &chunks), expected);
         }
     }
 
@@ -819,9 +856,173 @@ mod tests {
     }
 
     #[test]
+    fn semantic_differential_corpus_has_only_classified_mismatches() {
+        struct Case {
+            category: &'static str,
+            html: &'static str,
+            parity: bool,
+            expected_mismatch: Option<(&'static str, &'static str)>,
+        }
+
+        let cases = [
+            Case {
+                category: "inline_and_block_spacing",
+                html: "<h1>Title</h1><p>A <b>bold</b> word.</p><ul><li>one</li><li>two</li></ul>",
+                parity: true,
+                expected_mismatch: None,
+            },
+            Case {
+                category: "semantic_and_raw_skip",
+                html: "<nav>nav</nav><main><p>kept</p><aside>aside</aside><script>if (a < b) {}</script><style>x{}</style></main>",
+                parity: true,
+                expected_mismatch: None,
+            },
+            Case {
+                category: "image_alt_and_entities",
+                html: r#"<p>A &amp; B</p><img alt="Caf&eacute; 🙂"><p>end</p>"#,
+                parity: true,
+                expected_mismatch: None,
+            },
+            Case {
+                category: "comments_doctype_and_controls",
+                html: "<!doctype html><!-- hidden --><p>a\0b\u{200b}c</p>",
+                parity: true,
+                expected_mismatch: None,
+            },
+            Case {
+                category: "mismatched_skip_close_recovery",
+                html: "<nav>hidden</aside>still hidden</nav><p>visible</p>",
+                parity: false,
+                expected_mismatch: Some(("still hidden\nvisible", "visible")),
+            },
+            Case {
+                category: "full_whatwg_entity_table",
+                html: "<p>&CounterClockwiseContourIntegral;</p>",
+                parity: false,
+                expected_mismatch: Some(("&CounterClockwiseContourIntegral;", "∳")),
+            },
+            Case {
+                category: "wiki_class_boilerplate",
+                html: r#"<p>lead</p><div class="navbox">boilerplate</div><p>tail</p>"#,
+                parity: false,
+                expected_mismatch: Some(("lead\ntail", "lead\nboilerplate\ntail")),
+            },
+            Case {
+                category: "wiki_id_boilerplate",
+                html: r#"<p>lead</p><ol id="references"><li>citation</li></ol><p>tail</p>"#,
+                parity: false,
+                expected_mismatch: Some(("lead\ntail", "lead\ncitation\ntail")),
+            },
+            Case {
+                category: "malformed_attribute_recovery",
+                html: r#"<p title="unterminated attribute value that exceeds the legacy recovery floor by repeating padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding <p>visible</p>"#,
+                parity: false,
+                expected_mismatch: Some(("visible", "")),
+            },
+        ];
+
+        let mut unexpected = Vec::new();
+        for case in cases {
+            let legacy = strip_to_text(case.html);
+            let streaming = extract_reader(case.html.as_bytes()).unwrap();
+            if let Some((expected_legacy, expected_streaming)) = case.expected_mismatch {
+                assert_eq!(legacy, expected_legacy, "legacy category={}", case.category);
+                assert_eq!(
+                    streaming, expected_streaming,
+                    "streaming category={}",
+                    case.category
+                );
+            }
+            let matches = streaming == legacy;
+            if matches != case.parity {
+                unexpected.push(format!(
+                    "{}: expected parity={}, legacy={legacy:?}, streaming={streaming:?}",
+                    case.category, case.parity
+                ));
+            }
+        }
+
+        assert!(
+            unexpected.is_empty(),
+            "semantic differential classifications changed:\n{}",
+            unexpected.join("\n")
+        );
+    }
+
+    #[test]
     fn mismatched_skip_closes_do_not_end_another_skip_region() {
         let html = "<nav>x</aside>still hidden</nav><p>visible</p>";
         assert_eq!(extract_reader(html.as_bytes()).unwrap(), "visible");
+    }
+
+    #[test]
+    fn main_landmark_recovery_preserves_non_structural_skip_regions() {
+        for tag in [
+            "head",
+            "noscript",
+            "select",
+            "figcaption",
+            "template",
+            "svg",
+            "textarea",
+            "iframe",
+            "rt",
+            "rp",
+        ] {
+            let html = format!("<{tag}><main>hidden</main></{tag}>");
+            assert_eq!(extract_reader(html.as_bytes()).unwrap(), "", "tag={tag}");
+        }
+
+        assert_eq!(
+            extract_reader(b"<nav>drawer<main>visible</main>".as_slice()).unwrap(),
+            "visible"
+        );
+    }
+
+    #[test]
+    fn skipped_image_alt_memory_is_bounded() {
+        const SMALL: usize = 1024 * 1024;
+        const LARGE: usize = 64 * 1024 * 1024;
+        const FIXED_ALLOWANCE: usize = 256 * 1024;
+        const GROWTH_ALLOWANCE: usize = 64 * 1024;
+
+        let small = std::array::from_fn(|_| spawn_probe("skipped_alt", SMALL));
+        let large = std::array::from_fn(|_| spawn_probe("skipped_alt", LARGE));
+        let small_peak = median(small.map(|result| result.peak_bytes));
+        let large_peak = median(large.map(|result| result.peak_bytes));
+
+        assert_eq!(median(small.map(|result| result.logical_output_bytes)), 0);
+        assert_eq!(median(large.map(|result| result.logical_output_bytes)), 0);
+        assert!(large_peak <= FIXED_ALLOWANCE, "large peak={large_peak}");
+        assert!(
+            large_peak <= small_peak + GROWTH_ALLOWANCE,
+            "peak grew from {small_peak} to {large_peak} bytes"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual CPU profiling workload"]
+    fn cpu_profile_streaming_parser() {
+        let mut html = String::from("<article><h1>Profile</h1>");
+        let profile_case =
+            std::env::var("DEFORMAT_PROFILE_CASE").unwrap_or_else(|_| "mixed".into());
+        let fragment = if profile_case == "plain" {
+            r#"<p title="metadata">Visible <strong>text</strong> and words.</p><nav>hidden</nav><img alt="caption">"#
+        } else {
+            r#"<p title="metadata">Visible <strong>text</strong> &amp; entities.</p><nav>hidden</nav><img alt="caption">"#
+        };
+        for _ in 0..200 {
+            html.push_str(fragment);
+        }
+        html.push_str("</article>");
+        let iterations = std::env::var("DEFORMAT_PROFILE_ITERATIONS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(20_000);
+
+        for _ in 0..iterations {
+            std::hint::black_box(extract_reader(std::hint::black_box(html.as_bytes())).unwrap());
+        }
     }
 
     #[test]
@@ -840,8 +1041,12 @@ mod tests {
             run_count_probe(&case, size)
         };
         println!(
-            "DEFORMAT_MEMORY_PROBE peak={} logical={} capacity={}",
-            result.peak_bytes, result.logical_output_bytes, result.output_capacity
+            "DEFORMAT_MEMORY_PROBE peak={} allocated={} allocation_events={} logical={} capacity={}",
+            result.peak_bytes,
+            result.allocated_bytes,
+            result.allocation_events,
+            result.logical_output_bytes,
+            result.output_capacity
         );
     }
 
