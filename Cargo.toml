@@ -43,7 +43,7 @@ html2text = { version = "0.16", optional = true }
 dom_smoothie = { version = "0.15", optional = true }
 
 # Optional: PDF text extraction via pdf_oxide.
-pdf_oxide = { version = "=0.3.38", optional = true }
+pdf_oxide = { version = "=0.3.78", optional = true }
 
 # Optional: DOCX/EPUB extraction (ZIP-based formats)
 zip = { version = "8", optional = true, default-features = false, features = [
