@@ -46,7 +46,7 @@ dom_smoothie = { version = "0.15", optional = true }
 pdf_oxide = { version = "=0.3.38", optional = true }
 
 # Optional: DOCX/EPUB extraction (ZIP-based formats)
-zip = { version = "2", optional = true, default-features = false, features = [
+zip = { version = "8", optional = true, default-features = false, features = [
   "deflate",
 ] }
 
@@ -54,7 +54,7 @@ zip = { version = "2", optional = true, default-features = false, features = [
 rtf-parser-tt = { version = "0.5", optional = true }
 
 # Optional: XLSX/ODS spreadsheet text extraction
-calamine = { version = "0.34", optional = true }
+calamine = { version = "0.36", optional = true }
 
 # Optional: language detection on extracted text
 whichlang = { version = "0.1", optional = true }
