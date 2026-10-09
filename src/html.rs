@@ -3299,23 +3299,31 @@ fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -
     let len = bytes.len();
     debug_assert!(bytes[start] == b'&');
 
-    // Scan for entity end: ';', whitespace, '<', or end of input.
-    // Entity names are ASCII, so byte scanning is safe.
+    // Scan for entity end: ';', whitespace, '<', another '&' (which starts its
+    // own entity), the length cap, or end of input. The longest HTML5 name
+    // (`&CounterClockwiseContourIntegral;`) is 33 bytes, so 40 leaves room for
+    // zero-padded numeric references. Entity names are ASCII, so byte scanning
+    // is safe.
+    const MAX_ENTITY_LEN: usize = 40;
     let mut end = start + 1;
     let mut found_semicolon = false;
 
-    while end < len {
+    while end < len && end - start < MAX_ENTITY_LEN {
         match bytes[end] {
             b';' => {
                 end += 1;
                 found_semicolon = true;
                 break;
             }
-            b' ' | b'\t' | b'\n' | b'\r' | b'<' => break,
+            b' ' | b'\t' | b'\n' | b'\r' | b'<' | b'&' => break,
             _ => end += 1,
         }
     }
 
+    // The length cap can stop inside a multi-byte character.
+    while !s.is_char_boundary(end) {
+        end += 1;
+    }
     let entity_str = &s[start..end];
 
     if found_semicolon {

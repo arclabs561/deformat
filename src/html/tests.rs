@@ -1127,6 +1127,29 @@ fn mixed_case_script_tag() {
 // ===== decode_entities public API =====
 
 #[test]
+fn decode_entities_resumes_at_ampersand_inside_failed_entity() {
+    // "&T&amp;X" is not one entity: the second '&' starts a new one.
+    assert_eq!(decode_entities("AT&T&amp;X"), "AT&T&X");
+    assert_eq!(decode_entities("a & b &amp; c"), "a & b & c");
+}
+
+#[test]
+fn decode_entities_length_cap_respects_char_boundaries() {
+    let input = format!("&{}é tail", "x".repeat(38));
+    assert_eq!(decode_entities(&input), input);
+}
+
+#[test]
+fn decode_entities_entity_scan_is_length_capped() {
+    // A long run with no terminator must not swallow a later real entity.
+    let junk = "x".repeat(200);
+    let input = format!("&{junk} &amp;");
+    assert_eq!(decode_entities(&input), format!("&{junk} &"));
+    let input = format!("&{junk};&amp;");
+    assert_eq!(decode_entities(&input), format!("&{junk};&"));
+}
+
+#[test]
 fn decode_entities_standalone() {
     assert_eq!(decode_entities("Caf&eacute;"), "Café");
     assert_eq!(decode_entities("&#169; 2026"), "\u{00A9} 2026");
