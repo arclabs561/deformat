@@ -5,6 +5,8 @@ permissions:
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
 jobs:
   test:
     runs-on: ubuntu-latest

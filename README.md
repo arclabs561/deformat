@@ -27,6 +27,10 @@ Use `deformat` when one extraction API needs to cover HTML and document files,
 or when plain text, source spans, and document segments matter downstream. It
 does not crawl sites, render JavaScript, or perform OCR. It is not a
 structure-preserving converter and does not stream extraction incrementally.
+For HTML article extraction alone, Trafilatura (Python) or `dom_smoothie`
+(which `deformat` uses as its `readability` backend) are the usual
+alternatives; use `deformat` when the same call also has to handle document
+files.
 
 ## Install
 
