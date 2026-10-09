@@ -42,6 +42,11 @@
 //! | `whichlang` | `whichlang` | Natural-language detection via [`html::detect_language`] |
 //! | `encoding_rs` | `encoding_rs` | Charset sniffing and decoding of non-UTF-8 input via [`detect::decode_bytes`] |
 
+// Compile and run the README's Rust examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 pub mod detect;
 pub mod error;
 pub mod html;
@@ -68,6 +73,9 @@ pub mod xlsx;
 
 #[cfg(feature = "pptx")]
 pub mod pptx;
+
+#[cfg(any(feature = "docx", feature = "epub", feature = "pptx"))]
+mod zip_entry;
 
 pub use detect::Format;
 pub use error::Error;

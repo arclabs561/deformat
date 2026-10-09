@@ -75,8 +75,7 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     for (slide_num, slide_name) in &slide_entries {
         let mut xml = String::new();
         if let Ok(mut entry) = archive.by_name(slide_name) {
-            entry
-                .read_to_string(&mut xml)
+            crate::zip_entry::read_to_string(&mut entry, &mut xml)
                 .map_err(|e| Error::Parse(format!("failed to read {slide_name}: {e}")))?;
         }
         let text = html::strip_to_text(&xml);
@@ -87,7 +86,7 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
         if let Some(notes_name) = notes_by_slide.get(slide_num) {
             let mut notes_xml = String::new();
             if let Ok(mut entry) = archive.by_name(notes_name) {
-                let _ = entry.read_to_string(&mut notes_xml);
+                let _ = crate::zip_entry::read_to_string(&mut entry, &mut notes_xml);
             }
             let notes_text = html::strip_to_text(&notes_xml);
             if !notes_text.trim().is_empty() {

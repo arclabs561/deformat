@@ -63,7 +63,7 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     for name in &content_files {
         if let Ok(mut entry) = archive.by_name(name) {
             let mut xhtml = String::new();
-            if entry.read_to_string(&mut xhtml).is_ok() {
+            if crate::zip_entry::read_to_string(&mut entry, &mut xhtml).is_ok() {
                 let text = html::strip_to_text(&xhtml);
                 let trimmed = text.trim().to_string();
                 if !trimmed.is_empty() {
@@ -95,7 +95,7 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
 fn find_opf_path<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Option<String> {
     let mut entry = archive.by_name("META-INF/container.xml").ok()?;
     let mut xml = String::new();
-    entry.read_to_string(&mut xml).ok()?;
+    crate::zip_entry::read_to_string(&mut entry, &mut xml).ok()?;
     // Look for full-path="..." in the rootfile element
     let idx = xml.find("full-path=\"")?;
     let start = idx + 11;
@@ -110,7 +110,7 @@ fn parse_opf_spine<R: Read + Seek>(
 ) -> Result<Vec<String>, ()> {
     let mut entry = archive.by_name(opf_path).map_err(|_| ())?;
     let mut xml = String::new();
-    entry.read_to_string(&mut xml).map_err(|_| ())?;
+    crate::zip_entry::read_to_string(&mut entry, &mut xml).map_err(|_| ())?;
 
     // Extract the directory prefix for relative paths
     let prefix = if let Some(slash) = opf_path.rfind('/') {
@@ -174,7 +174,7 @@ fn extract_opf_title<R: Read + Seek>(
 ) -> Option<String> {
     let mut entry = archive.by_name(opf_path).ok()?;
     let mut xml = String::new();
-    entry.read_to_string(&mut xml).ok()?;
+    crate::zip_entry::read_to_string(&mut entry, &mut xml).ok()?;
 
     let start = xml
         .find("<dc:title")?

@@ -65,10 +65,10 @@ fn segments_from_reader<R: Read + Seek>(reader: R) -> Result<Vec<Segment>, Error
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|e| Error::Parse(format!("invalid DOCX ZIP: {e}")))?;
     let mut xml = String::new();
-    archive
+    let entry = archive
         .by_name("word/document.xml")
-        .map_err(|_| Error::Parse("DOCX missing word/document.xml".into()))?
-        .read_to_string(&mut xml)
+        .map_err(|_| Error::Parse("DOCX missing word/document.xml".into()))?;
+    crate::zip_entry::read_to_string(entry, &mut xml)
         .map_err(|e| Error::Parse(format!("failed to read document.xml: {e}")))?;
     let segments = split_docx_paragraphs(&xml);
     if segments.is_empty() {
@@ -349,8 +349,7 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     // Extract main document content
     if let Ok(mut entry) = archive.by_name("word/document.xml") {
         let mut xml = String::new();
-        entry
-            .read_to_string(&mut xml)
+        crate::zip_entry::read_to_string(&mut entry, &mut xml)
             .map_err(|e| Error::Parse(format!("failed to read document.xml: {e}")))?;
         let text = html::strip_to_text(&xml);
         if !text.is_empty() {
@@ -444,6 +443,20 @@ mod tests {
         let bytes = zip.finish().unwrap().into_inner();
         let result = extract_bytes(&bytes);
         assert!(result.is_err());
+    }
+
+    /// A small archive whose entry inflates past the entry cap must be
+    /// rejected instead of being read into memory whole (zip bomb).
+    #[test]
+    fn oversized_document_entry_is_rejected() {
+        let padding = " ".repeat(2 * 1024 * 1024);
+        let xml = format!("<w:document><w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p>{padding}</w:body></w:document>");
+        let bytes = make_docx(&xml);
+        match extract_bytes(&bytes) {
+            Err(Error::Parse(msg)) => assert!(msg.contains("exceeds"), "{msg}"),
+            other => panic!("expected a size-limit error, got {other:?}"),
+        }
+        assert!(extract_bytes_to_segments(&bytes).is_err());
     }
 
     #[test]
