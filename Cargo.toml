@@ -40,7 +40,7 @@ serde = { version = "1", optional = true, features = ["derive"] }
 html2text = { version = "0.16", optional = true }
 
 # Optional: readability-style article extraction
-dom_smoothie = { version = "0.15", optional = true }
+dom_smoothie = { version = "0.18", optional = true }
 
 # Optional: PDF text extraction via pdf_oxide.
 pdf_oxide = { version = "=0.3.38", optional = true }
