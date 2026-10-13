@@ -222,6 +222,9 @@ impl SpanMap {
     /// range straddles multiple source regions or entity decodings.
     #[must_use]
     pub fn source_range(&self, output_start: usize, output_end: usize) -> Option<(usize, usize)> {
+        if output_start == output_end {
+            return None;
+        }
         // Binary search: skip spans that end before the query starts.
         let start_idx = self.spans.partition_point(|s| s.output_end <= output_start);
         let mut src_start = usize::MAX;

@@ -1371,6 +1371,42 @@ fn source_range_at_exact_span_boundary() {
 }
 
 #[test]
+fn source_range_empty_query_has_no_coverage_at_any_byte() {
+    // Include interior Direct, decoded, collapsed and Synthetic runs, as well
+    // as boundaries and interior UTF-8 bytes. An empty query contains no bytes.
+    for html in [
+        "<p>AB</p>",
+        "<p>é🦀Z</p>",
+        "<p>A&amp;B<img alt='cat'>C   D</p>",
+    ] {
+        let (text, spans) = strip_to_text_with_spans(html);
+        assert!(!text.is_empty());
+        for position in 0..=text.len() + 1 {
+            assert_eq!(
+                spans.source_range(position, position),
+                None,
+                "empty query at byte {position} in {html:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn source_range_unicode_partial_query_keeps_covering_run() {
+    let html = "<p>é🦀Z</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "é🦀Z");
+    // Z is scalar 2 but byte 6. Point mapping is exact; range mapping
+    // deliberately covers the whole overlapping run, even for one byte.
+    assert_eq!(spans.source_position(6), Some(9));
+    assert_eq!(spans.source_position(2), Some(5));
+    assert_eq!(spans.source_range(6, 7), Some((3, 10)));
+    assert_eq!(spans.source_range(0, 7), Some((3, 10)));
+    assert_eq!(spans.source_range(6, 8), Some((3, 10)));
+    assert_eq!(spans.source_position(7), None);
+}
+
+#[test]
 fn source_range_empty_query_past_end_returns_none() {
     let (text, spans) = strip_to_text_with_spans("<p>hello</p>");
     // Empty range past the end of the span coverage yields None.
