@@ -3,6 +3,13 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
+## Source history (unversioned)
+
+These entries identify source changes without assigning a package release.
+
+- Return no source coverage for empty output ranges in `SpanMap::source_range`.
+  ([e7b01c1](https://github.com/arclabs561/deformat/commit/e7b01c14336533883470082656c05c221191c8e0))
+
 ## Unreleased
 
 ### Added
