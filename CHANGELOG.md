@@ -14,8 +14,23 @@ These entries identify source changes without assigning a package release.
 
 ### Added
 
+- `SpanKind::WhitespaceCollapsed` (non-exhaustive enum) distinguishes spans the
+  whitespace pass normalized from `SpanKind::EntityDecoded`; consumers that
+  expand entities no longer treat collapsed whitespace as an entity.
 - `segments_to_slabs` example showing extracted HTML segments converted into
   `slabs::Slab` retrieval spans.
+
+### Fixed
+
+- `strip_to_text_with_spans` / `strip_to_text_with_paths` now emit a
+  `SpanKind::Synthetic` span for every structural block-boundary newline
+  (`</p>`, `<br>`, `</td>`, `</li>`, ...), so every output byte has a source
+  position. Previously those newlines were unmapped and `source_position`
+  returned `None`.
+- `remap_spans` no longer drops a span whose run survived as the newline of a
+  collapsed whitespace run.
+- `strip_to_segments` ignores structure-only synthetic spans, so the new
+  newline spans do not leak into segment text.
 
 ## 0.15.3 — 2026-06-26
 

@@ -1010,3 +1010,19 @@ fn code_block_language_is_lowercased() {
         Some(["rust".to_string()].as_slice())
     );
 }
+
+#[test]
+fn structural_newline_spans_do_not_leak_into_segment_text() {
+    // PathSpan now carries Synthetic spans for block-boundary newlines. They
+    // must not be appended to segment text: the join between same-block spans
+    // stays exactly as it was before those spans existed.
+    let segs = strip_to_segments("<p>First.</p><p>Second.</p>");
+    assert_eq!(segs.len(), 1, "got: {segs:?}");
+    assert_eq!(segs[0].data().text, "First. Second.");
+
+    let table = strip_to_segments("<table><tr><td>a</td><td>b</td></tr></table>");
+    assert_eq!(table[0].data().text, "a b");
+
+    let br = strip_to_segments("<p>a<br>b</p>");
+    assert_eq!(br[0].data().text, "a b");
+}

@@ -289,13 +289,19 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
     let mut last_title_id: Option<String> = None;
 
     for span in path_spans {
-        let (block_key, block_tag, depth) = classify_block(&span.path);
         let text_slice = full_text
             .get(span.output_start..span.output_end)
             .unwrap_or("");
+        let is_synthetic = span.kind == crate::html::SpanKind::Synthetic;
+        // Structure-only synthetic runs (block-boundary newlines, all-blank
+        // alt text) carry no text of their own and must not join a group.
+        // Whitespace *copied* from the source keeps its grouping role.
+        if is_synthetic && text_slice.trim().is_empty() {
+            continue;
+        }
+        let (block_key, block_tag, depth) = classify_block(&span.path);
         let text_len = text_slice.chars().count();
         let under_anchor = path_has_anchor_below_block(&span.path, &block_key);
-        let is_synthetic = span.kind == crate::html::SpanKind::Synthetic;
 
         match current {
             Some(ref mut acc) if acc.block_key == block_key => {
