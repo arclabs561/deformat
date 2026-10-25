@@ -1039,20 +1039,34 @@ fn source_range_across_entity_boundary() {
 // =============================================================================
 
 #[test]
-fn whitespace_collapse_demotes_direct_to_entity_decoded() {
+fn whitespace_collapse_demotes_direct_to_whitespace_collapsed() {
     // "hello    world" pre-cleanup (14 bytes) collapses to "hello world"
     // post-cleanup (11 bytes). The span is Direct in the scanner but its byte
-    // counts don't match after remap → demoted to EntityDecoded.
+    // counts don't match after remap → demoted to WhitespaceCollapsed.
+    //
+    // Re-baselined: this used to assert EntityDecoded, which conflated
+    // collapse with entity decoding and made consumers expand a non-entity.
     let html = "<p>hello    world</p>";
     let (text, spans) = strip_to_text_with_spans(html);
     assert_eq!(text, "hello world");
 
-    // At least one span should be EntityDecoded purely because of collapse
-    // (there are no actual entities in the input).
-    let demoted = spans.iter().any(|s| s.kind == SpanKind::EntityDecoded);
+    let demoted = spans
+        .iter()
+        .find(|s| s.kind == SpanKind::WhitespaceCollapsed)
+        .expect("collapse produces a WhitespaceCollapsed span");
+    assert_eq!(
+        &text[demoted.output_start..demoted.output_end],
+        "hello world"
+    );
+    assert_eq!(
+        &html[demoted.source_start..demoted.source_end],
+        "hello    world"
+    );
+
+    // No entity was decoded, so nothing may claim EntityDecoded.
     assert!(
-        demoted,
-        "expected collapse to produce at least one EntityDecoded span"
+        !spans.iter().any(|s| s.kind == SpanKind::EntityDecoded),
+        "collapse must not masquerade as entity decoding"
     );
 }
 
@@ -1444,4 +1458,253 @@ fn path_span_kinds_match_origin() {
     assert!(kinds.contains(&SpanKind::Direct));
     assert!(kinds.contains(&SpanKind::EntityDecoded));
     assert!(kinds.contains(&SpanKind::Synthetic));
+}
+
+// =============================================================================
+// Structural newlines (block boundaries) are mapped
+// =============================================================================
+
+/// Assert every byte of `text` — including structural newlines — resolves to a
+/// source position.
+fn assert_every_byte_mapped(text: &str, spans: &deformat::html::SpanMap) {
+    for (i, _) in text.char_indices() {
+        assert!(
+            spans.source_position(i).is_some(),
+            "byte {i} of {text:?} has no source position (spans: {:?})",
+            spans
+                .iter()
+                .map(|s| (s.output_start, s.output_end, s.kind))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The single structural newline in `text`, asserted to be a Synthetic span.
+fn structural_newline(text: &str, spans: &deformat::html::SpanMap) -> (usize, usize, SpanKind) {
+    let nl = text.find('\n').expect("expected a structural newline");
+    let span = spans
+        .iter()
+        .find(|s| s.output_start == nl && s.output_end == nl + 1)
+        .unwrap_or_else(|| {
+            panic!(
+                "newline at {nl} has no dedicated span: {:?}",
+                spans
+                    .iter()
+                    .map(|s| (s.output_start, s.output_end, s.kind))
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(span.kind, SpanKind::Synthetic, "newline span kind");
+    (span.source_start, span.source_end, span.kind)
+}
+
+#[test]
+fn block_boundary_newline_has_source_position() {
+    let html = "<p>First.</p><p>Second.</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "First.\nSecond.");
+
+    assert_every_byte_mapped(&text, &spans);
+
+    // The newline points at the closing tag that introduced the boundary.
+    let (src_start, src_end, _) = structural_newline(&text, &spans);
+    assert_eq!(&html[src_start..src_end], "</p>");
+
+    // A query straddling the boundary covers the closing and opening tags.
+    let nl = text.find('\n').unwrap();
+    let (start, end) = spans.source_range(nl - 1, nl + 2).unwrap();
+    let slice = &html[start..end];
+    assert!(
+        slice.contains("</p><p>"),
+        "boundary union covers both tags: {slice:?}"
+    );
+}
+
+#[test]
+fn br_newline_has_source_position() {
+    let html = "<p>a<br>b</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "a\nb");
+
+    assert_every_byte_mapped(&text, &spans);
+
+    let (src_start, src_end, _) = structural_newline(&text, &spans);
+    assert_eq!(&html[src_start..src_end], "<br>");
+}
+
+#[test]
+fn table_cell_newline_has_source_position() {
+    let html = "<table><tr><td>a</td><td>b</td></tr></table>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "a\nb");
+
+    assert_every_byte_mapped(&text, &spans);
+
+    let (src_start, src_end, _) = structural_newline(&text, &spans);
+    assert_eq!(&html[src_start..src_end], "</td>");
+
+    let (start, end) = spans.source_range(0, text.len()).unwrap();
+    let slice = &html[start..end];
+    assert!(
+        slice.contains("</td><td>"),
+        "cell boundary union covers both cells: {slice:?}"
+    );
+}
+
+#[test]
+fn list_item_newline_has_source_position() {
+    let html = "<ul><li>a</li><li>b</li></ul>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "a\nb");
+
+    assert_every_byte_mapped(&text, &spans);
+
+    let (src_start, src_end, _) = structural_newline(&text, &spans);
+    assert_eq!(&html[src_start..src_end], "</li>");
+}
+
+#[test]
+fn newline_survives_collapsed_whitespace_before_boundary() {
+    // "a " before </p> collapses into the structural newline. The newline must
+    // keep its own mapping to </p> instead of being dropped by remap_spans.
+    let html = "<p>a </p><p>b</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "a\nb");
+
+    assert_every_byte_mapped(&text, &spans);
+
+    let (src_start, src_end, _) = structural_newline(&text, &spans);
+    assert_eq!(&html[src_start..src_end], "</p>");
+
+    // The text that lost a space is tagged as collapsed, not as an entity.
+    let first = spans
+        .iter()
+        .find(|s| s.output_start == 0 && s.output_end == 1)
+        .unwrap();
+    assert_eq!(first.kind, SpanKind::WhitespaceCollapsed);
+}
+
+#[test]
+fn path_spans_cover_block_boundary_newlines() {
+    let html = "<p>First.</p><p>Second.</p>";
+    let (text, spans) = strip_to_text_with_paths(html);
+    assert_eq!(text, "First.\nSecond.");
+
+    let nl = text.find('\n').unwrap();
+    let span = spans
+        .iter()
+        .find(|s| s.output_start == nl && s.output_end == nl + 1)
+        .expect("path twin emits a span for the structural newline");
+    assert_eq!(span.kind, SpanKind::Synthetic);
+    assert_eq!(&html[span.source_start..span.source_end], "</p>");
+    assert_eq!(span.path, "p", "newline carries the closed block's path");
+}
+
+#[test]
+fn path_spans_cover_br_newline_with_container_path() {
+    let html = "<p>a<br>b</p>";
+    let (text, spans) = strip_to_text_with_paths(html);
+    let nl = text.find('\n').unwrap();
+    let span = spans
+        .iter()
+        .find(|s| s.output_start == nl && s.output_end == nl + 1)
+        .expect("path twin emits a span for the <br> newline");
+    assert_eq!(span.kind, SpanKind::Synthetic);
+    assert_eq!(&html[span.source_start..span.source_end], "<br>");
+    // <br> is void, so the boundary belongs to its container.
+    assert_eq!(span.path, "p");
+}
+
+// =============================================================================
+// Entity next to a structural newline
+// =============================================================================
+
+#[test]
+fn entity_adjacent_to_block_boundary_keeps_spans_separate() {
+    let html = "<p>a &amp; b</p><p>c</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "a & b\nc");
+
+    let amp = text.find('&').expect("decoded ampersand");
+    let entity = spans
+        .iter()
+        .find(|s| s.kind == SpanKind::EntityDecoded)
+        .expect("entity span");
+    assert_eq!(
+        (entity.output_start, entity.output_end),
+        (amp, amp + 1),
+        "entity span covers exactly the decoded byte"
+    );
+    assert_eq!(&html[entity.source_start..entity.source_end], "&amp;");
+    // The entity's source range must not swallow the rest of the paragraph.
+    assert_eq!(spans.source_range(amp, amp + 1), Some((5, 10)));
+
+    let (nl_src_start, nl_src_end, _) = structural_newline(&text, &spans);
+    assert_eq!(&html[nl_src_start..nl_src_end], "</p>");
+    assert!(entity.source_end <= nl_src_start, "spans do not overlap");
+
+    // Bytes between the entity and the newline stay outside both spans.
+    let nl = text.find('\n').unwrap();
+    assert_eq!(&text[entity.output_end..nl], " b");
+    assert_eq!(
+        spans.source_range(entity.output_end, nl),
+        Some((10, 12)),
+        "' b' maps to its own source run"
+    );
+}
+
+// =============================================================================
+// Whitespace collapse vs entity decoding kinds
+// =============================================================================
+
+#[test]
+fn whitespace_collapse_inside_split_token_tags_only_collapsed_bytes() {
+    let html = "<p>DE89   <b>3704</b></p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "DE89 3704");
+
+    // The run that lost spaces is WhitespaceCollapsed: not Direct (byte
+    // interpolation would skew), not EntityDecoded (nothing was decoded).
+    let collapsed = spans
+        .iter()
+        .find(|s| text[s.output_start..s.output_end].starts_with("DE89"))
+        .expect("token prefix span");
+    assert_eq!(collapsed.kind, SpanKind::WhitespaceCollapsed);
+    assert_eq!(&text[collapsed.output_start..collapsed.output_end], "DE89 ");
+    assert!(
+        html[collapsed.source_start..collapsed.source_end].starts_with("DE89"),
+        "collapsed span still points at its source text"
+    );
+
+    // The untouched half of the token stays Direct and byte-exact.
+    let direct = spans
+        .iter()
+        .find(|s| &text[s.output_start..s.output_end] == "3704")
+        .expect("inline tag run");
+    assert_eq!(direct.kind, SpanKind::Direct);
+    assert_eq!(&html[direct.source_start..direct.source_end], "3704");
+    assert_eq!(
+        spans.source_position(direct.output_start),
+        Some(direct.source_start)
+    );
+}
+
+// =============================================================================
+// Regression pin: a token split across inline tags is one source range
+// =============================================================================
+
+#[test]
+fn token_split_across_inline_tags_has_one_contiguous_source_range() {
+    let html = "<p><b>DE89</b> <i>3704</i></p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "DE89 3704");
+    assert_every_byte_mapped(&text, &spans);
+
+    // Redaction use case: the account token must resolve to one range that
+    // starts at the first digit and ends at the last, tags or not.
+    let (start, end) = spans.source_range(0, text.len()).unwrap();
+    assert_eq!((start, end), (6, 22));
+    assert_eq!(&html[start..end], "DE89</b> <i>3704");
+    assert_eq!(spans.source_position(0), Some(6));
+    assert_eq!(spans.source_position(text.len() - 1), Some(21));
 }

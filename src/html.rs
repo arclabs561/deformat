@@ -192,8 +192,9 @@ pub struct Span {
 ///
 /// Consumers that highlight or transform extracted text use the kind to
 /// decide whether a span's output bytes can be linearly projected onto its
-/// source range ([`SpanKind::Direct`]) or whether the output is a
-/// substitution ([`SpanKind::EntityDecoded`]) or a fabrication
+/// source range ([`SpanKind::Direct`]) or whether the output was rewritten by
+/// the whitespace pass ([`SpanKind::WhitespaceCollapsed`]), decoded from an
+/// entity ([`SpanKind::EntityDecoded`]), or fabricated
 /// ([`SpanKind::Synthetic`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -205,6 +206,13 @@ pub enum SpanKind {
     /// Output is a decoded HTML entity (`&eacute;` → `é`). Source range
     /// points at the entity reference; byte widths differ.
     EntityDecoded,
+    /// Output was normalized by the whitespace pass: the source range
+    /// contains collapsible whitespace (`"a   b"` → `"a b"`, `" \n"` →
+    /// `"\n"`), dropped invisible characters, or was trimmed at the edge of
+    /// the output. Bytes cannot be linearly projected onto the source range;
+    /// `source_start..source_end` still points at the originating text, though
+    /// whitespace the pass dropped may fall outside it.
+    WhitespaceCollapsed,
     /// Output has no literal counterpart in the source range (e.g. an
     /// `<img alt>` value exposed as text, or an inserted block-boundary
     /// newline). `source_start..source_end` points at the originating
@@ -220,6 +228,16 @@ impl SpanMap {
     /// ranges, so it can be wider than the literal bytes that produced the
     /// queried output range — that is the correct behavior when the output
     /// range straddles multiple source regions or entity decodings.
+    ///
+    /// # Consumer consequence
+    ///
+    /// Because the range is a union, it can include source bytes that
+    /// produced none of the queried output: tags between two text runs,
+    /// entity references, comment markup, or whitespace that collapsed
+    /// away. Callers that redact or rewrite source (rather than only
+    /// highlighting) must re-verify the returned slice — for example
+    /// against [`SpanMap::iter`] — instead of assuming every byte in it
+    /// belongs to the queried output.
     #[must_use]
     pub fn source_range(&self, output_start: usize, output_end: usize) -> Option<(usize, usize)> {
         if output_start == output_end {
@@ -248,10 +266,11 @@ impl SpanMap {
     /// Map a single output byte position to its source byte position.
     ///
     /// For [`SpanKind::Direct`] runs, the result is byte-exact via linear
-    /// interpolation. For [`SpanKind::EntityDecoded`] and
-    /// [`SpanKind::Synthetic`] runs the output byte cannot be projected
-    /// onto a single source byte, so the span's `source_start` is returned
-    /// as a pointer to the originating construct.
+    /// interpolation. For [`SpanKind::EntityDecoded`],
+    /// [`SpanKind::WhitespaceCollapsed`] and [`SpanKind::Synthetic`] runs the
+    /// output byte cannot be projected onto a single source byte, so the
+    /// span's `source_start` is returned as a pointer to the originating
+    /// construct.
     ///
     /// Returns `None` if `output_pos` is not covered by any span.
     #[must_use]
@@ -263,7 +282,9 @@ impl SpanMap {
         }
         match span.kind {
             SpanKind::Direct => Some(span.source_start + (output_pos - span.output_start)),
-            SpanKind::EntityDecoded | SpanKind::Synthetic => Some(span.source_start),
+            SpanKind::EntityDecoded | SpanKind::WhitespaceCollapsed | SpanKind::Synthetic => {
+                Some(span.source_start)
+            }
         }
     }
 
@@ -290,9 +311,10 @@ impl SpanMap {
 /// Like [`strip_to_text`], but also returns a [`SpanMap`] that maps
 /// byte ranges in the output text back to byte ranges in the source HTML.
 ///
-/// Note: the span map tracks direct text copies and entity decoding.
-/// Block-boundary newlines and whitespace-collapsed regions map to
-/// approximate source positions.
+/// Note: the span map tracks direct text copies, entity decoding, and
+/// whitespace collapsing. Block-boundary newlines are [`SpanKind::Synthetic`]
+/// spans pointing at the tag that produced them, so they are mapped like any
+/// other output byte rather than left as unclaimed gaps.
 pub fn strip_to_text_with_spans(html: &str) -> (String, SpanMap) {
     let mut spans = Vec::new();
     let text = strip_impl(html, &StripOptions::default(), Some(&mut spans));
@@ -611,11 +633,17 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     && !is_skip_tag(effective)
                     && effective != "script"
                     && effective != "style";
+                // Path attached to the block-boundary newline span, if one is
+                // emitted for this tag: the element whose boundary it marks.
+                let mut boundary_path: Option<String> = None;
                 if is_trackable {
                     if is_close {
                         if let Some(idx) =
                             path_stack.iter().rposition(|(name, _)| name == effective)
                         {
+                            if is_block_tag(effective) {
+                                boundary_path = Some(build_path(&path_stack[..=idx]));
+                            }
                             path_stack.truncate(idx);
                         }
                     } else if !tag_lower.ends_with('/') && !is_void_element(effective) {
@@ -632,6 +660,13 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                             *count += 1;
                         }
                         path_stack.push((effective.to_string(), std::collections::HashMap::new()));
+                        if is_block_tag(effective) {
+                            boundary_path = Some(build_path(&path_stack));
+                        }
+                    } else if is_block_tag(effective) {
+                        // Void / self-closing block element (br, hr, wbr): its
+                        // boundary belongs to the surrounding container.
+                        boundary_path = Some(build_path(&path_stack));
                     }
                 }
 
@@ -644,7 +679,20 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     && !text.is_empty()
                     && !text.ends_with('\n')
                 {
+                    let nl_start = text.len();
                     text.push('\n');
+                    // The newline has no text counterpart in the source; point
+                    // it at the block tag that introduced the boundary so the
+                    // byte still has a source position.
+                    let path = boundary_path.unwrap_or_else(|| build_path(&path_stack));
+                    path_spans.push(PathSpan {
+                        output_start: nl_start,
+                        output_end: nl_start + 1,
+                        source_start: tag_start.saturating_sub(1),
+                        source_end: pos.min(len),
+                        kind: SpanKind::Synthetic,
+                        path,
+                    });
                 }
 
                 // Img alt text
@@ -2059,7 +2107,20 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                     && !text.is_empty()
                     && !text.ends_with('\n')
                 {
+                    let nl_start = text.len();
                     text.push('\n');
+                    if let Some(ref mut s) = spans {
+                        // The newline has no text counterpart in the source;
+                        // point it at the block tag that introduced the
+                        // boundary so the byte still has a source position.
+                        s.push(Span {
+                            output_start: nl_start,
+                            output_end: nl_start + 1,
+                            source_start: tag_start.saturating_sub(1),
+                            source_end: pos.min(len),
+                            kind: SpanKind::Synthetic,
+                        });
+                    }
                 }
 
                 // Extract alt text from <img> tags
@@ -2264,22 +2325,35 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
 ///
 /// `map[j]` is the pre-cleanup byte that produced output byte `j`; the map
 /// is monotone non-decreasing, so each boundary is recovered by
-/// `partition_point`. Spans that collapse entirely into whitespace are
-/// dropped. The caller may pass `map` truncated at the trim window, in
-/// which case spans outside that window are dropped or clamped.
+/// `partition_point`. Spans whose run survived as a single collapsed byte
+/// (a structural newline at a whitespace run) are clamped to that byte;
+/// spans that vanished entirely — leading/trailing trim, or a whitespace run
+/// that collapsed into a different run — are dropped. The caller may pass
+/// `map` truncated at the trim window, in which case spans outside that
+/// window are dropped or clamped.
 fn remap_spans(spans: &mut Vec<Span>, map: &[u32], pre: &[u8], post: &[u8]) {
     spans.retain_mut(|span| {
         let pre_start = span.output_start as u32;
         let pre_end = span.output_end as u32;
         let new_start = map.partition_point(|&m| m < pre_start);
-        let new_end = map.partition_point(|&m| m < pre_end);
+        let mut new_end = map.partition_point(|&m| m < pre_end);
         if new_start >= new_end {
-            return false;
+            // The run maps to no output byte on its own. It can still own one
+            // when whitespace cleanup kept a single byte from the surrounding
+            // run: `map[new_start]` then points back into this span's pre
+            // range (see the newline preference in
+            // `cleanup_whitespace_with_map`). Keep the span over that byte
+            // instead of dropping a structural newline's only mapping.
+            match map.get(new_start) {
+                Some(&owner) if (pre_start..pre_end).contains(&owner) => new_end = new_start + 1,
+                _ => return false,
+            }
         }
         // If whitespace cleanup collapsed bytes inside a Direct run, the
         // post-cleanup output is shorter than the pre-cleanup source, so
-        // byte-level interpolation would skew. Demote to EntityDecoded,
-        // which documents that source bytes are not indexable byte-for-byte.
+        // byte-level interpolation would skew. Demote to
+        // WhitespaceCollapsed, which documents that source bytes are not
+        // indexable byte-for-byte.
         //
         // Byte-count equality alone isn't sufficient: a whitespace run
         // like ` \n` collapses to `\n`, which preserves the count but
@@ -2300,7 +2374,7 @@ fn remap_spans(spans: &mut Vec<Span>, map: &[u32], pre: &[u8], post: &[u8]) {
                 }
             }
             if !is_direct {
-                span.kind = SpanKind::EntityDecoded;
+                span.kind = SpanKind::WhitespaceCollapsed;
             }
         }
         span.output_start = new_start;
@@ -2344,19 +2418,22 @@ fn cleanup_whitespace_with_map(text: &str) -> (String, Vec<u32>) {
         } else if b <= 0x20 {
             if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
                 let run_start = i;
-                let mut has_newline = b == b'\n';
+                let mut newline_at = if b == b'\n' { Some(i) } else { None };
                 i += 1;
                 while i < text_len {
                     let b2 = text_bytes[i];
                     if b2 == b'\n' {
-                        has_newline = true;
+                        newline_at.get_or_insert(i);
                     } else if b2 != b' ' && b2 != b'\t' && b2 != b'\r' {
                         break;
                     }
                     i += 1;
                 }
-                cleaned.push(if has_newline { '\n' } else { ' ' });
-                map.push(run_start as u32);
+                cleaned.push(if newline_at.is_some() { '\n' } else { ' ' });
+                // Point the collapsed byte at the newline it kept rather than
+                // at the run's first byte, so a structural-newline span that
+                // starts at that newline still covers its own output byte.
+                map.push(newline_at.unwrap_or(run_start) as u32);
                 last_was_space = true;
                 continue;
             }

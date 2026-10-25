@@ -120,9 +120,12 @@ collection +2.9pp, documentation −0.7pp.
   `metadata.text_as_html` preserving the grid; the plain
   `extract_file` path still flattens.
 - **Span positions are post-cleanup.** Spans whose source bytes span
-  collapsed whitespace are tagged `SpanKind::EntityDecoded` rather
-  than `Direct`; byte-level interpolation is exact only for
-  `Direct`.
+  collapsed whitespace are tagged `SpanKind::WhitespaceCollapsed` rather
+  than `Direct`; byte-level interpolation is exact only for `Direct`.
+  Block-boundary newlines are `SpanKind::Synthetic` spans pointing at the
+  tag that produced them, so every output byte has a source position —
+  but `source_range` returns a union that can include intervening tags, so
+  redactors must re-verify the returned slice.
 
 ## License
 
