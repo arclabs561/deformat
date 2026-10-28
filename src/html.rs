@@ -756,8 +756,15 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
     let new_len = trimmed.len();
     if leading > 0 || new_len < text.len() {
         for span in &mut path_spans {
+            let original_len = span.output_end - span.output_start;
             span.output_start = span.output_start.saturating_sub(leading).min(new_len);
             span.output_end = span.output_end.saturating_sub(leading).min(new_len);
+            if span.kind == SpanKind::Direct && span.output_end - span.output_start != original_len
+            {
+                // The source range still includes trimmed whitespace, so
+                // byte-for-byte projection no longer identifies the output.
+                span.kind = SpanKind::WhitespaceCollapsed;
+            }
         }
         path_spans.retain(|s| s.output_start < s.output_end);
     }
