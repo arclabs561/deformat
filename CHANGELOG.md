@@ -22,6 +22,10 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- DOCX and PPTX plain-text extraction puts each `w:p` / `a:p` paragraph on
+  its own line, including in PPTX speaker notes. Word and PowerPoint write no
+  whitespace between paragraphs, so adjacent paragraphs ran together
+  ("HelloWorld").
 - `strip_to_text_with_spans` / `strip_to_text_with_paths` now emit a
   `SpanKind::Synthetic` span for every structural block-boundary newline
   (`</p>`, `<br>`, `</td>`, `</li>`, ...), so every output byte has a source
