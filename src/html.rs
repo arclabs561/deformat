@@ -2240,7 +2240,7 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
 /// For pure ASCII text that is already trimmed, has no double spaces, and no
 /// control characters, returns a zero-copy `Cow::Borrowed`.
 #[inline]
-fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
+pub(crate) fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
     let text_bytes = text.as_bytes();
     let text_len = text_bytes.len();
 

@@ -31,6 +31,19 @@ These entries identify source changes without assigning a package release.
   collapsed whitespace run.
 - `strip_to_segments` ignores structure-only synthetic spans, so the new
   newline spans do not leak into segment text.
+- `strip_to_segments` no longer inserts a space at inline tag and entity
+  boundaries (`Caf&eacute;` was "Caf é", `un<b>believ</b>able` was
+  "un believ able"), and normalizes whitespace the same way as
+  `strip_to_text`. Block boundaries inside one segment still join with a
+  single space.
+- EPUB manifest hrefs are percent-decoded and resolved relative to the OPF
+  directory, so `Chapter%201.xhtml` and `../Text/ch1.xhtml` are no longer
+  dropped (the latter previously failed the whole book with `EmptyResult`).
+- `pdf`/`pdf_oxide`: text no longer depends on previously extracted PDFs in
+  the same process. pdf_oxide 0.3.38 reused a cached font from an earlier
+  document when the font name and `/ToUnicode` object number matched, so a
+  later document decoded through the earlier document's mapping. The
+  `pdf_oxide` pin moves to 0.3.78, which keys that cache on font content.
 
 ## 0.15.3 — 2026-06-26
 

@@ -137,7 +137,9 @@ fn parse_opf_spine<R: Read + Seek>(
 
         if let (Some(id), Some(href), Some(media)) = (id, href, media) {
             if media.contains("xhtml") || media.contains("html") {
-                id_to_href.insert(id.to_string(), format!("{prefix}{href}"));
+                if let Some(path) = resolve_href(prefix, href) {
+                    id_to_href.insert(id.to_string(), path);
+                }
             }
         }
     }
@@ -165,6 +167,61 @@ fn parse_opf_spine<R: Read + Seek>(
     } else {
         Ok(ordered)
     }
+}
+
+/// Resolve a manifest `href` to a ZIP entry name.
+///
+/// OPF hrefs are URLs relative to the OPF file: they may be
+/// percent-encoded (`Chapter%201.xhtml`), climb out of the OPF directory
+/// (`../Text/ch1.xhtml`), or carry a fragment. ZIP entry names are plain
+/// decoded paths, so the raw join would not match any entry. Returns
+/// `None` for hrefs that point outside the container (absolute URLs, or
+/// more `..` segments than directories).
+fn resolve_href(prefix: &str, href: &str) -> Option<String> {
+    let href = href.split(['#', '?']).next().unwrap_or("");
+    if href.is_empty() || href.contains("://") {
+        return None;
+    }
+    let href = percent_decode(href);
+    let joined = match href.strip_prefix('/') {
+        Some(root_relative) => root_relative.to_string(),
+        None => format!("{prefix}{href}"),
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// Decode `%XX` escapes. Malformed escapes and non-UTF-8 results are
+/// returned unchanged.
+fn percent_decode(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = |b: u8| (b as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
 }
 
 /// Extract title from OPF metadata.
