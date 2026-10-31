@@ -66,9 +66,41 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     slide_entries.sort_by_key(|(n, _)| *n);
     notes_entries.sort_by_key(|(n, _)| *n);
 
-    let notes_by_slide: std::collections::HashMap<u32, String> = notes_entries
+    // Notes belong to the slide whose relationships part points at them;
+    // writers number notes parts independently of slides (python-pptx names
+    // the only notes part `notesSlide1.xml` whatever slide owns it). A slide
+    // without a relationships part falls back to the same-numbered notes
+    // part, unless another slide's relationship claims it.
+    let mut linked_notes: std::collections::HashMap<u32, Option<String>> =
+        std::collections::HashMap::new();
+    for (slide_num, slide_name) in &slide_entries {
+        let rels_name = format!("ppt/slides/_rels/slide{slide_num}.xml.rels");
+        let Ok(mut entry) = archive.by_name(&rels_name) else {
+            continue;
+        };
+        let mut rels = String::new();
+        if crate::zip_entry::read_to_string(&mut entry, &mut rels).is_err() {
+            continue;
+        }
+        linked_notes.insert(*slide_num, notes_target(slide_name, &rels));
+    }
+    let claimed: std::collections::HashSet<&str> = linked_notes
+        .values()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    let notes_by_slide: std::collections::HashMap<u32, String> = slide_entries
         .iter()
-        .map(|(n, name)| (*n, name.clone()))
+        .filter_map(|(slide_num, _)| {
+            let notes = match linked_notes.get(slide_num) {
+                Some(target) => target.clone(),
+                None => notes_entries
+                    .iter()
+                    .find(|(n, name)| n == slide_num && !claimed.contains(name.as_str()))
+                    .map(|(_, name)| name.clone()),
+            };
+            notes.map(|name| (*slide_num, name))
+        })
         .collect();
 
     let mut parts: Vec<String> = Vec::with_capacity(slide_entries.len());
@@ -108,6 +140,49 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
         excerpt: None,
         fallback: false,
     })
+}
+
+/// The ZIP entry name of the notes part a slide's relationships point at.
+fn notes_target(slide_name: &str, rels: &str) -> Option<String> {
+    let dir = slide_name.rfind('/').map_or("", |i| &slide_name[..=i]);
+    for (start, _) in rels.match_indices("<Relationship ") {
+        let end = rels[start..].find('>').map_or(rels.len(), |e| start + e);
+        let element = &rels[start..end];
+        let is_notes = xml_attr(element, "Type").is_some_and(|t| t.ends_with("/notesSlide"));
+        if !is_notes {
+            continue;
+        }
+        let target = xml_attr(element, "Target")?;
+        let joined = match target.strip_prefix('/') {
+            Some(absolute) => absolute.to_string(),
+            None => format!("{dir}{target}"),
+        };
+        let mut parts: Vec<&str> = Vec::new();
+        for part in joined.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop()?;
+                }
+                _ => parts.push(part),
+            }
+        }
+        return Some(parts.join("/"));
+    }
+    None
+}
+
+/// An attribute value from an XML start tag, single- or double-quoted.
+fn xml_attr<'a>(element: &'a str, attr: &str) -> Option<&'a str> {
+    for quote in ['"', '\''] {
+        let pattern = format!(" {attr}={quote}");
+        if let Some(idx) = element.find(&pattern) {
+            let start = idx + pattern.len();
+            let end = element[start..].find(quote)? + start;
+            return Some(&element[start..end]);
+        }
+    }
+    None
 }
 
 /// Strip slide or notes XML to text, one line per `a:p` paragraph.
