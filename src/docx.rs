@@ -5,6 +5,7 @@
 //! Also reads `word/header*.xml` and `word/footer*.xml` if present.
 
 use crate::segment::{element_id, Segment, SegmentData, SegmentMetadata};
+use crate::zip_entry::ArchiveBudget;
 use crate::{html, Error, Extracted, Extractor, Format};
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -68,7 +69,8 @@ fn segments_from_reader<R: Read + Seek>(reader: R) -> Result<Vec<Segment>, Error
     let entry = archive
         .by_name("word/document.xml")
         .map_err(|_| Error::Parse("DOCX missing word/document.xml".into()))?;
-    crate::zip_entry::read_to_string(entry, &mut xml)
+    ArchiveBudget::new()
+        .read_to_string(entry, &mut xml)
         .map_err(|e| Error::Parse(format!("failed to read document.xml: {e}")))?;
     let segments = split_docx_paragraphs(&xml);
     if segments.is_empty() {
@@ -349,7 +351,8 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     // Extract main document content
     if let Ok(mut entry) = archive.by_name("word/document.xml") {
         let mut xml = String::new();
-        crate::zip_entry::read_to_string(&mut entry, &mut xml)
+        ArchiveBudget::new()
+            .read_to_string(&mut entry, &mut xml)
             .map_err(|e| Error::Parse(format!("failed to read document.xml: {e}")))?;
         // `w:p` is not an HTML block tag, and Word writes no whitespace
         // between paragraphs, so mark each paragraph end as a line break.

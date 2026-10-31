@@ -14,6 +14,14 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
+  budget per archive and returns `Error::Parse` when it runs out. The
+  64 MiB per-entry cap did not bound the total: 70 distinct 1 MiB EPUB
+  chapters or PPTX slides in a 330 KiB archive produced 70 MiB of text.
+  EPUB used to skip unreadable chapters silently; it still does, except
+  that an exhausted budget is now an error. Archives that used to
+  extract more than 64 MiB in total now fail.
+
 - `detect::decode_bytes` no longer panics when a `<meta>` tag without a
   charset has no `>` inside the 1 KiB prescan window, as a long description
   meta crossing byte 1024 does.

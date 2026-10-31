@@ -170,14 +170,13 @@ fn pptx_notes_follow_the_slide_they_belong_to() {
 
 // ---------------------------------------------------------------- ZIP bombs
 
-/// zip_entry.rs caps each entry at 64 MiB ("a sub-megabyte archive can carry a
-/// multi-gigabyte entry"), but nothing bounds the total: EPUB reads every
-/// spine item (and PPTX every slide) and concatenates the text. 70 distinct
-/// 1 MiB chapters deflate to a few hundred KB and produce 70 MiB of output;
-/// N such chapters scale linearly past any memory limit.
+/// Each ZIP entry is capped at 64 MiB decompressed, and the readers also
+/// share one 64 MiB budget per archive: EPUB reads every spine item (and
+/// PPTX every slide) and concatenates the text, so without a total cap 70
+/// distinct 1 MiB chapters deflate to a few hundred KB and produce 70 MiB of
+/// output, and N such chapters scale linearly past any memory limit.
 #[cfg(feature = "epub")]
 #[test]
-#[ignore = "needs a decision on how an archive-wide decompression budget is reported"]
 fn epub_total_decompressed_text_is_bounded() {
     let n = 70;
     let mut manifest = String::new();
@@ -219,6 +218,64 @@ fn epub_total_decompressed_text_is_bounded() {
         bytes.len() / 1024,
         produced / (1024 * 1024)
     );
+    match out {
+        Err(deformat::Error::Parse(msg)) => assert!(msg.contains("in total"), "{msg}"),
+        other => panic!("expected an archive budget error, got {other:?}"),
+    }
+}
+
+/// PPTX reads every slide; 70 distinct 1 MiB slides must hit the same
+/// archive-wide budget as EPUB chapters.
+#[cfg(feature = "pptx")]
+#[test]
+fn pptx_total_decompressed_text_is_bounded() {
+    let n = 70;
+    let names: Vec<String> = (0..n)
+        .map(|i| format!("ppt/slides/slide{}.xml", i + 1))
+        .collect();
+    let slides: Vec<String> = (0..n)
+        .map(|i| {
+            format!(
+                r#"<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{i} {}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+                "a ".repeat(512 * 1024)
+            )
+        })
+        .collect();
+    let entries: Vec<(&str, &[u8])> = names
+        .iter()
+        .zip(&slides)
+        .map(|(name, body)| (name.as_str(), body.as_bytes()))
+        .collect();
+    let bytes = make_zip(&entries, false);
+    let out = deformat::pptx::extract_bytes(&bytes);
+    let produced = out.as_ref().map_or(0, |o| o.text.len());
+    assert!(
+        produced <= 64 * 1024 * 1024,
+        "{} KiB archive expanded to {} MiB of text with no total cap",
+        bytes.len() / 1024,
+        produced / (1024 * 1024)
+    );
+    match out {
+        Err(deformat::Error::Parse(msg)) => assert!(msg.contains("in total"), "{msg}"),
+        other => panic!("expected an archive budget error, got {other:?}"),
+    }
+}
+
+/// DOCX reads only `word/document.xml`, so the archive budget and the entry
+/// cap coincide: a document.xml past 64 MiB decompressed is rejected with
+/// `Error::Parse` instead of being buffered whole.
+#[cfg(feature = "docx")]
+#[test]
+fn docx_decompressed_document_is_bounded() {
+    let padding = " ".repeat(64 * 1024 * 1024);
+    let xml = format!(
+        "<w:document><w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p>{padding}</w:body></w:document>"
+    );
+    let bytes = make_zip(&[("word/document.xml", xml.as_bytes())], false);
+    match deformat::docx::extract_bytes(&bytes) {
+        Err(deformat::Error::Parse(msg)) => assert!(msg.contains("exceeds"), "{msg}"),
+        other => panic!("expected a size-limit error, got {other:?}"),
+    }
 }
 
 /// RTF paragraphs (\par) and code-page escapes (\'e9 under \ansicpg1252).
