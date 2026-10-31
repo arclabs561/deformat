@@ -18,8 +18,8 @@ from a path or MIME type. Binary formats use explicit `extract_file` /
 
 On the Web Content Extraction Benchmark (WCXB dev split, 1,497 pages
 across 7 page types), the triple-filter
-pipeline reaches **F1 = 0.774 across all page types** and **0.880 on
-articles** (see [Evaluation](#evaluation)).
+pipeline reaches word F1 0.774 across all page types and 0.880 on articles
+(see [Evaluation](#evaluation)).
 
 ## Scope
 
@@ -27,10 +27,6 @@ Use `deformat` when one extraction API needs to cover HTML and document files,
 or when plain text, source spans, and document segments matter downstream. It
 does not crawl sites, render JavaScript, or perform OCR. It is not a
 structure-preserving converter and does not stream extraction incrementally.
-For HTML article extraction alone, Trafilatura (Python) or `dom_smoothie`
-(which `deformat` uses as its `readability` backend) are the usual
-alternatives; use `deformat` when the same call also has to handle document
-files.
 
 ## Install
 
@@ -40,7 +36,7 @@ cargo add deformat --features readability,html2text,pdf   # richer HTML + PDF
 cargo add deformat --features docx,epub,rtf,xlsx,pptx     # office formats
 ```
 
-See [`examples/README.md`](examples/README.md) for runnable examples, feature-gated demos, and the WCXB benchmark command forms.
+See [`examples/README.md`](examples/README.md) for runnable examples, feature-gated demos, and the WCXB benchmark commands.
 
 ## Supported formats
 
@@ -73,9 +69,8 @@ The metric is macro-averaged, per-page word F1 against
 and recall count repeated words; their denominators are the total predicted and
 reference token counts, respectively.
 
-Reporting per page type is the point: a single ALL number hides
-that one category carries the result. The `bench_wcxb` runner emits
-the per-type breakdown alongside the aggregate.
+Articles are over half the split, so the `bench_wcxb` runner prints a
+per-page-type breakdown alongside the aggregate.
 
 ```sh
 scripts/fetch_wcxb.py --split dev
@@ -93,16 +88,15 @@ release. Adversarial scanner repros live in
 
 ### Results (WCXB dev split, 1,497 pages)
 
-| Strategy | ALL F1 | Article F1 | When |
-|---|---:|---:|---|
-| `strip_to_text` (baseline) | 0.746 | 0.854 | Default; recall-first |
-| triple filter pipeline | **0.774** | **0.880** | Mixed corpora |
-| `extract_html_cascade` | 0.748 | 0.858 | Wild HTML; rescues content the scanner drops |
-| `StripOptions::main_landmark` | 0.748 | 0.866 | Article corpora with `<main>`/`<article>` |
+| Strategy | `--extractor` | ALL F1 | Article F1 | When |
+|---|---|---:|---:|---|
+| `strip_to_text` (baseline) | `strip` | 0.746 | 0.854 | Default; recall-first |
+| triple filter pipeline | `triple` | 0.774 | 0.880 | Mixed corpora |
+| `extract_html_cascade` (`readability`) | `cascade` | 0.748 | 0.858 | Wild HTML; rescues content the scanner drops |
+| `StripOptions::main_landmark` | `anchor` | 0.748 | 0.866 | Article corpora with `<main>`/`<article>` |
 
-Per-type triple-pipeline F1 deltas from baseline: article +2.6pp,
-service +4.0pp, forum +4.9pp, product +5.0pp, listing +0.8pp,
-collection +2.9pp, documentation −0.7pp.
+The `cascade` row needs `--features readability`. The triple pipeline lowers
+documentation F1 (0.911 to 0.904) and raises every other page type.
 
 ## Known limitations
 
@@ -123,8 +117,8 @@ collection +2.9pp, documentation −0.7pp.
   collapsed whitespace are tagged `SpanKind::WhitespaceCollapsed` rather
   than `Direct`; byte-level interpolation is exact only for `Direct`.
   Block-boundary newlines are `SpanKind::Synthetic` spans pointing at the
-  tag that produced them, so every output byte has a source position —
-  but `source_range` returns a union that can include intervening tags, so
+  tag that produced them, so every output byte has a source position.
+  `source_range` returns a union that can include intervening tags, so
   redactors must re-verify the returned slice.
 
 ## License
