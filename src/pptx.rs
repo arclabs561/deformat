@@ -11,6 +11,7 @@
 //! lexicographically by filename (`slide1.xml`, `slide10.xml`,
 //! `slide2.xml`), so this module sorts them numerically.
 
+use crate::zip_entry::ArchiveBudget;
 use crate::{html, Error, Extracted, Extractor, Format};
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -42,6 +43,7 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|e| Error::Parse(format!("invalid PPTX ZIP: {e}")))?;
 
+    let mut budget = ArchiveBudget::new();
     let mut slide_entries: Vec<(u32, String)> = Vec::new();
     let mut notes_entries: Vec<(u32, String)> = Vec::new();
     for i in 0..archive.len() {
@@ -79,7 +81,9 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
             continue;
         };
         let mut rels = String::new();
-        if crate::zip_entry::read_to_string(&mut entry, &mut rels).is_err() {
+        let read = budget.read_to_string(&mut entry, &mut rels);
+        budget.check()?;
+        if read.is_err() {
             continue;
         }
         linked_notes.insert(*slide_num, notes_target(slide_name, &rels));
@@ -107,7 +111,8 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     for (slide_num, slide_name) in &slide_entries {
         let mut xml = String::new();
         if let Ok(mut entry) = archive.by_name(slide_name) {
-            crate::zip_entry::read_to_string(&mut entry, &mut xml)
+            budget
+                .read_to_string(&mut entry, &mut xml)
                 .map_err(|e| Error::Parse(format!("failed to read {slide_name}: {e}")))?;
         }
         let text = strip_slide_xml(&xml);
@@ -118,7 +123,8 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
         if let Some(notes_name) = notes_by_slide.get(slide_num) {
             let mut notes_xml = String::new();
             if let Ok(mut entry) = archive.by_name(notes_name) {
-                let _ = crate::zip_entry::read_to_string(&mut entry, &mut notes_xml);
+                let _ = budget.read_to_string(&mut entry, &mut notes_xml);
+                budget.check()?;
             }
             let notes_text = strip_slide_xml(&notes_xml);
             if !notes_text.trim().is_empty() {

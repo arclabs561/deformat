@@ -4,6 +4,7 @@
 //! reading XHTML content documents from the ZIP archive and stripping
 //! tags. Reads the OPF manifest to find content files in reading order.
 
+use crate::zip_entry::ArchiveBudget;
 use crate::{html, Error, Extracted, Extractor, Format};
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -35,16 +36,19 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|e| Error::Parse(format!("invalid EPUB ZIP: {e}")))?;
 
+    let mut budget = ArchiveBudget::new();
+
     // Find content files: look for .xhtml, .html, .htm files in the archive
     let mut content_files: Vec<String> = Vec::new();
 
     // Try to read the OPF file for proper reading order
-    let opf_path = find_opf_path(&mut archive);
+    let opf_path = find_opf_path(&mut archive, &mut budget);
     if let Some(ref opf) = opf_path {
-        if let Ok(items) = parse_opf_spine(&mut archive, opf) {
+        if let Ok(items) = parse_opf_spine(&mut archive, &mut budget, opf) {
             content_files = items;
         }
     }
+    budget.check()?;
 
     // Fallback: collect all HTML/XHTML files sorted by name
     if content_files.is_empty() {
@@ -63,7 +67,9 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     for name in &content_files {
         if let Ok(mut entry) = archive.by_name(name) {
             let mut xhtml = String::new();
-            if crate::zip_entry::read_to_string(&mut entry, &mut xhtml).is_ok() {
+            let read = budget.read_to_string(&mut entry, &mut xhtml);
+            budget.check()?;
+            if read.is_ok() {
                 let text = html::strip_to_text(&xhtml);
                 let trimmed = text.trim().to_string();
                 if !trimmed.is_empty() {
@@ -79,7 +85,8 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     }
 
     // Try to extract title from OPF metadata
-    let title = opf_path.and_then(|p| extract_opf_title(&mut archive, &p));
+    let title = opf_path.and_then(|p| extract_opf_title(&mut archive, &mut budget, &p));
+    budget.check()?;
 
     Ok(Extracted {
         text,
@@ -92,10 +99,13 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
 }
 
 /// Find the OPF file path from META-INF/container.xml.
-fn find_opf_path<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Option<String> {
+fn find_opf_path<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    budget: &mut ArchiveBudget,
+) -> Option<String> {
     let mut entry = archive.by_name("META-INF/container.xml").ok()?;
     let mut xml = String::new();
-    crate::zip_entry::read_to_string(&mut entry, &mut xml).ok()?;
+    budget.read_to_string(&mut entry, &mut xml).ok()?;
     // Look for full-path="..." in the rootfile element
     let idx = xml.find("full-path=\"")?;
     let start = idx + 11;
@@ -106,11 +116,14 @@ fn find_opf_path<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Option<Str
 /// Parse the OPF spine to get content files in reading order.
 fn parse_opf_spine<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
+    budget: &mut ArchiveBudget,
     opf_path: &str,
 ) -> Result<Vec<String>, ()> {
     let mut entry = archive.by_name(opf_path).map_err(|_| ())?;
     let mut xml = String::new();
-    crate::zip_entry::read_to_string(&mut entry, &mut xml).map_err(|_| ())?;
+    budget
+        .read_to_string(&mut entry, &mut xml)
+        .map_err(|_| ())?;
 
     // Extract the directory prefix for relative paths
     let prefix = if let Some(slash) = opf_path.rfind('/') {
@@ -227,11 +240,12 @@ fn percent_decode(s: &str) -> String {
 /// Extract title from OPF metadata.
 fn extract_opf_title<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
+    budget: &mut ArchiveBudget,
     opf_path: &str,
 ) -> Option<String> {
     let mut entry = archive.by_name(opf_path).ok()?;
     let mut xml = String::new();
-    crate::zip_entry::read_to_string(&mut entry, &mut xml).ok()?;
+    budget.read_to_string(&mut entry, &mut xml).ok()?;
 
     let start = xml
         .find("<dc:title")?
