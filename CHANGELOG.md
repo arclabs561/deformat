@@ -12,6 +12,30 @@ These entries identify source changes without assigning a package release.
 
 ## Unreleased
 
+### Fixed
+
+- `detect::decode_bytes` no longer panics when a `<meta>` tag without a
+  charset has no `>` inside the 1 KiB prescan window, as a long description
+  meta crossing byte 1024 does.
+- A `<meta>` charset of UTF-16BE/LE now decodes as UTF-8 and
+  `x-user-defined` as windows-1252, as the WHATWG prescan requires; ASCII
+  pages declaring `utf-16` were decoded as mojibake.
+- `detect_bytes` classifies OOXML archives by ZIP entry names instead of
+  searching every byte for `xl/`, `word/` or `ppt/`; media bytes matched by
+  chance, so DOCX files with large images were reported as XLSX.
+- XML `<![CDATA[...]]>` sections keep their text. The HTML stripper treated
+  them as bogus comments ending at the first `>`, so "Profit > 5% in Q3"
+  became "5% in Q3]]>".
+- A block boundary right after a literal U+00A0 or U+3000 keeps its newline;
+  the paragraphs used to merge ("Hello World").
+- PPTX speaker notes follow the slide whose relationships point at them,
+  instead of being paired by file number; notes written as
+  `notesSlide1.xml` for slide 3 printed under slide 1.
+- RTF `\par` ends a line, and `\'hh` escapes decode with the document's
+  `\ansicpg` code page (cp1252 by default): paragraphs ran together and
+  `\'85` became U+0085 instead of `…`. The `rtf` feature now enables
+  `encoding_rs`.
+
 ## 0.16.0 — 2026-10-30
 
 ### Added

@@ -121,17 +121,19 @@ pub fn detect_bytes(bytes: &[u8]) -> Format {
         if bytes.windows(20).any(|w| w == b"application/epub+zip") {
             return Format::Epub;
         }
-        // XLSX: top-level `xl/` directory
-        if bytes.windows(3).any(|w| w == b"xl/") {
-            return Format::Xlsx;
-        }
-        // DOCX: top-level `word/` directory
-        if bytes.windows(5).any(|w| w == b"word/") {
+        // OOXML: classify by entry names, not by scanning the whole archive.
+        // Compressed or stored media bytes contain `xl/`, `word/` or `ppt/`
+        // by chance, so a byte scan misreads large documents.
+        let names = zip_entry_names(bytes);
+        let has_dir = |dir: &[u8]| names.iter().any(|n| n.starts_with(dir));
+        if has_dir(b"word/") {
             return Format::Docx;
         }
-        // PPTX: top-level `ppt/` directory
-        if bytes.windows(4).any(|w| w == b"ppt/") {
+        if has_dir(b"ppt/") {
             return Format::Pptx;
+        }
+        if has_dir(b"xl/") {
+            return Format::Xlsx;
         }
         // Generic ZIP -- could be JAR, ODT, etc.
         return Format::Unknown;
@@ -143,6 +145,85 @@ pub fn detect_bytes(bytes: &[u8]) -> Format {
     }
 
     Format::Unknown
+}
+
+/// Entry names of a ZIP archive.
+///
+/// Reads the central directory when the end-of-central-directory record is
+/// present; otherwise walks local file headers from the start, which covers
+/// truncated prefixes. Malformed input yields whatever names were read before
+/// the first inconsistency.
+fn zip_entry_names(bytes: &[u8]) -> Vec<&[u8]> {
+    fn u16_at(b: &[u8], at: usize) -> Option<usize> {
+        b.get(at..at + 2)
+            .map(|s| usize::from(u16::from_le_bytes([s[0], s[1]])))
+    }
+    fn u32_at(b: &[u8], at: usize) -> Option<usize> {
+        b.get(at..at + 4)
+            .and_then(|s| usize::try_from(u32::from_le_bytes([s[0], s[1], s[2], s[3]])).ok())
+    }
+
+    let mut names = Vec::new();
+
+    // End of central directory: 22 bytes plus a comment of up to 64 KiB.
+    let search_from = bytes.len().saturating_sub(22 + usize::from(u16::MAX));
+    let eocd = (search_from..bytes.len().saturating_sub(21))
+        .rev()
+        .find(|&i| bytes[i..].starts_with(&[0x50, 0x4B, 0x05, 0x06]));
+    if let Some(eocd) = eocd {
+        if let (Some(count), Some(mut at)) = (u16_at(bytes, eocd + 10), u32_at(bytes, eocd + 16)) {
+            for _ in 0..count {
+                if !bytes
+                    .get(at..)
+                    .is_some_and(|b| b.starts_with(&[0x50, 0x4B, 0x01, 0x02]))
+                {
+                    break;
+                }
+                let (Some(name_len), Some(extra_len), Some(comment_len)) = (
+                    u16_at(bytes, at + 28),
+                    u16_at(bytes, at + 30),
+                    u16_at(bytes, at + 32),
+                ) else {
+                    break;
+                };
+                let Some(name) = bytes.get(at + 46..at + 46 + name_len) else {
+                    break;
+                };
+                names.push(name);
+                at += 46 + name_len + extra_len + comment_len;
+            }
+            if !names.is_empty() {
+                return names;
+            }
+        }
+    }
+
+    // Local file headers.
+    let mut at = 0;
+    while bytes
+        .get(at..)
+        .is_some_and(|b| b.starts_with(&[0x50, 0x4B, 0x03, 0x04]))
+    {
+        let (Some(compressed), Some(name_len), Some(extra_len)) = (
+            u32_at(bytes, at + 18),
+            u16_at(bytes, at + 26),
+            u16_at(bytes, at + 28),
+        ) else {
+            break;
+        };
+        let Some(name) = bytes.get(at + 30..at + 30 + name_len) else {
+            break;
+        };
+        names.push(name);
+        let flags = u16_at(bytes, at + 6).unwrap_or(0);
+        if flags & 0x08 != 0 {
+            // Sizes follow the data in a data descriptor; the next header
+            // cannot be located without decompressing.
+            break;
+        }
+        at += 30 + name_len + extra_len + compressed;
+    }
+    names
 }
 
 /// Detect format from a file path (extension-based).
@@ -257,6 +338,15 @@ fn sniff_encoding(bytes: &[u8], default_label: &str) -> &'static encoding_rs::En
     let prefix = &bytes[..bytes.len().min(1024)];
     if let Some(label) = extract_meta_charset(prefix) {
         if let Some(enc) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+            // WHATWG prescan: a meta declaration cannot select UTF-16 (the
+            // bytes being read are ASCII-compatible), so UTF-16BE/LE become
+            // UTF-8, and x-user-defined becomes windows-1252.
+            if enc == encoding_rs::UTF_16BE || enc == encoding_rs::UTF_16LE {
+                return encoding_rs::UTF_8;
+            }
+            if enc == encoding_rs::X_USER_DEFINED {
+                return encoding_rs::WINDOWS_1252;
+            }
             return enc;
         }
     }
@@ -300,6 +390,9 @@ fn extract_meta_charset(bytes: &[u8]) -> Option<String> {
                     return Some(label.to_string());
                 }
             }
+        }
+        if tag_end >= lower.len() {
+            break;
         }
         pos = tag_end + 1;
     }

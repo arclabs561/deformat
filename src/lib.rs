@@ -191,7 +191,7 @@ pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
         }
         // XML: strip tags just like HTML
         Format::Xml => {
-            let text = html::strip_to_text(content);
+            let text = html::strip_to_text(&escape_xml_cdata(content));
             Ok(Extracted {
                 text,
                 format,
@@ -457,6 +457,40 @@ pub fn extract_html2text(html: &str, width: usize) -> Extracted {
             }
         }
     }
+}
+
+/// Replace each XML `<![CDATA[...]]>` section with its escaped text.
+///
+/// The HTML stripper treats `<![CDATA[` as a bogus comment ending at the
+/// first `>`, which is correct for HTML but drops or mangles XML character
+/// data. Escaping the section lets the stripper decode it back verbatim.
+fn escape_xml_cdata(content: &str) -> std::borrow::Cow<'_, str> {
+    const OPEN: &str = "<![CDATA[";
+    const CLOSE: &str = "]]>";
+    if !content.contains(OPEN) {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(start) = rest.find(OPEN) {
+        out.push_str(&rest[..start]);
+        let body_and_tail = &rest[start + OPEN.len()..];
+        let (body, tail) = match body_and_tail.find(CLOSE) {
+            Some(end) => (&body_and_tail[..end], &body_and_tail[end + CLOSE.len()..]),
+            None => (body_and_tail, ""),
+        };
+        for ch in body.chars() {
+            match ch {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                _ => out.push(ch),
+            }
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(test)]

@@ -2274,7 +2274,12 @@ pub(crate) fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
             // ASCII whitespace or control character.
             // Preserve newlines from block-element boundaries: if a
             // whitespace run contains \n, collapse to \n rather than space.
-            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
+            // A space already emitted for non-ASCII whitespace (U+00A0,
+            // U+3000) must not swallow a following block newline.
+            let after_space = cleaned.ends_with(' ');
+            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r')
+                && (!last_was_space || after_space)
+            {
                 let mut has_newline = b == b'\n';
                 // Scan ahead to collapse the full whitespace run
                 i += 1;
@@ -2287,7 +2292,14 @@ pub(crate) fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
                     }
                     i += 1;
                 }
-                cleaned.push(if has_newline { '\n' } else { ' ' });
+                if has_newline {
+                    if after_space {
+                        cleaned.pop();
+                    }
+                    cleaned.push('\n');
+                } else if !after_space {
+                    cleaned.push(' ');
+                }
                 last_was_space = true;
                 continue;
             }
@@ -2423,7 +2435,12 @@ fn cleanup_whitespace_with_map(text: &str) -> (String, Vec<u32>) {
             }
             last_was_space = false;
         } else if b <= 0x20 {
-            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
+            // A space already emitted for non-ASCII whitespace (U+00A0,
+            // U+3000) must not swallow a following block newline.
+            let after_space = cleaned.ends_with(' ');
+            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r')
+                && (!last_was_space || after_space)
+            {
                 let run_start = i;
                 let mut newline_at = if b == b'\n' { Some(i) } else { None };
                 i += 1;
@@ -2436,11 +2453,21 @@ fn cleanup_whitespace_with_map(text: &str) -> (String, Vec<u32>) {
                     }
                     i += 1;
                 }
-                cleaned.push(if newline_at.is_some() { '\n' } else { ' ' });
-                // Point the collapsed byte at the newline it kept rather than
-                // at the run's first byte, so a structural-newline span that
-                // starts at that newline still covers its own output byte.
-                map.push(newline_at.unwrap_or(run_start) as u32);
+                if let Some(nl) = newline_at {
+                    if after_space {
+                        cleaned.pop();
+                        map.pop();
+                    }
+                    cleaned.push('\n');
+                    // Point the collapsed byte at the newline it kept rather
+                    // than at the run's first byte, so a structural-newline
+                    // span that starts at that newline still covers its own
+                    // output byte.
+                    map.push(nl as u32);
+                } else if !after_space {
+                    cleaned.push(' ');
+                    map.push(run_start as u32);
+                }
                 last_was_space = true;
                 continue;
             }
