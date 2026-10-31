@@ -12,6 +12,8 @@ These entries identify source changes without assigning a package release.
 
 ## Unreleased
 
+## 0.16.0 — 2026-10-30
+
 ### Added
 
 - `SpanKind::WhitespaceCollapsed` (non-exhaustive enum) distinguishes spans the
