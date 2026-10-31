@@ -351,7 +351,9 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
         let mut xml = String::new();
         crate::zip_entry::read_to_string(&mut entry, &mut xml)
             .map_err(|e| Error::Parse(format!("failed to read document.xml: {e}")))?;
-        let text = html::strip_to_text(&xml);
+        // `w:p` is not an HTML block tag, and Word writes no whitespace
+        // between paragraphs, so mark each paragraph end as a line break.
+        let text = html::strip_to_text(&xml.replace("</w:p>", "</w:p><br>"));
         if !text.is_empty() {
             text_parts.push(text);
         }
@@ -457,6 +459,15 @@ mod tests {
             other => panic!("expected a size-limit error, got {other:?}"),
         }
         assert!(extract_bytes_to_segments(&bytes).is_err());
+    }
+
+    /// Word writes `document.xml` with no whitespace between elements, so
+    /// paragraph boundaries must come from `w:p` itself.
+    #[test]
+    fn paragraphs_are_separated_without_source_whitespace() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t>Hello</w:t></w:r></w:p><w:p><w:r><w:t>World</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+        let result = extract_bytes(&make_docx(xml)).unwrap();
+        assert_eq!(result.text, "Hello\nWorld\nA\nB");
     }
 
     #[test]

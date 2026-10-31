@@ -78,7 +78,7 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
             crate::zip_entry::read_to_string(&mut entry, &mut xml)
                 .map_err(|e| Error::Parse(format!("failed to read {slide_name}: {e}")))?;
         }
-        let text = html::strip_to_text(&xml);
+        let text = strip_slide_xml(&xml);
         if !text.trim().is_empty() {
             parts.push(text);
         }
@@ -88,7 +88,7 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
             if let Ok(mut entry) = archive.by_name(notes_name) {
                 let _ = crate::zip_entry::read_to_string(&mut entry, &mut notes_xml);
             }
-            let notes_text = html::strip_to_text(&notes_xml);
+            let notes_text = strip_slide_xml(&notes_xml);
             if !notes_text.trim().is_empty() {
                 parts.push(format!("Notes: {notes_text}"));
             }
@@ -108,6 +108,14 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
         excerpt: None,
         fallback: false,
     })
+}
+
+/// Strip slide or notes XML to text, one line per `a:p` paragraph.
+///
+/// `a:p` is not an HTML block tag, and PowerPoint writes no whitespace
+/// between paragraphs, so each paragraph end is marked as a line break.
+fn strip_slide_xml(xml: &str) -> String {
+    html::strip_to_text(&xml.replace("</a:p>", "</a:p><br>"))
 }
 
 #[cfg(test)]
@@ -173,6 +181,27 @@ mod tests {
             result.text.contains("Notes:"),
             "notes label missing: {}",
             result.text
+        );
+    }
+
+    /// PowerPoint writes slide XML with no whitespace between elements, so
+    /// paragraph boundaries must come from `a:p` itself, in notes too.
+    #[test]
+    fn paragraphs_are_separated_without_source_whitespace() {
+        let bytes = make_pptx(
+            &[(
+                1,
+                "<p:sp><p:txBody><a:p><a:r><a:t>Quarterly results</a:t></a:r></a:p><a:p><a:pPr lvl=\"1\"/><a:r><a:t>Revenue up</a:t></a:r></a:p></p:txBody></p:sp>",
+            )],
+            &[(
+                1,
+                "<p:sp><p:txBody><a:p><a:r><a:t>First note</a:t></a:r></a:p><a:p><a:r><a:t>Second note</a:t></a:r></a:p></p:txBody></p:sp>",
+            )],
+        );
+        let result = extract_bytes(&bytes).unwrap();
+        assert_eq!(
+            result.text,
+            "Quarterly results\nRevenue up\n\nNotes: First note\nSecond note"
         );
     }
 
