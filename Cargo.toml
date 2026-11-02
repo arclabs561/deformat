@@ -51,7 +51,7 @@ zip = { version = "8", optional = true, default-features = false, features = [
 ] }
 
 # Optional: RTF text extraction
-rtf-parser-tt = { version = "0.5", optional = true }
+rtf-parser-tt = { version = "0.6", optional = true }
 
 # Optional: XLSX/ODS spreadsheet text extraction
 calamine = { version = "0.36", optional = true }
