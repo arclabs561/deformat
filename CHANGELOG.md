@@ -14,6 +14,11 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- PDF segment coordinates (`pdf_oxide::extract_*_to_segments_with_coords`)
+  are in the displayed page frame. Points start at the top-left corner as
+  documented (they started bottom-left), are measured from the MediaBox
+  origin rather than absolute user space, and follow the page's `/Rotate`,
+  which also swaps `layout_width` and `layout_height` for 90 and 270.
 - HTML entity decoding follows HTML5 in three places. Only the 106 legacy
   names (`&amp`, `&copy`, `&eacute`, ...) may omit the semicolon; other
   names such as `&mdash` or `&hellip` without `;` now stay literal, as
