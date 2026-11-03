@@ -37,7 +37,7 @@ memchr = "2"
 serde = { version = "1", optional = true, features = ["derive"] }
 
 # Optional: DOM-based HTML-to-text conversion
-html2text = { version = "0.16", optional = true }
+html2text = { version = "0.17", optional = true }
 
 # Optional: readability-style article extraction
 dom_smoothie = { version = "0.15", optional = true }
