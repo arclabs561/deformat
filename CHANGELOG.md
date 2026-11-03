@@ -23,6 +23,11 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- PDF segment coordinates (`pdf_oxide::extract_*_to_segments_with_coords`)
+  are in the displayed page frame. Points start at the top-left corner as
+  documented (they started bottom-left), are measured from the MediaBox
+  origin rather than absolute user space, and follow the page's `/Rotate`,
+  which also swaps `layout_width` and `layout_height` for 90 and 270.
 - `<!-->` and `<!--->` end at once as empty comments, as HTML5 tokenizes
   them; the text after them was swallowed up to the next `-->`. The three
   copies of the comment scanner are now one function.
