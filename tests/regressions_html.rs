@@ -113,7 +113,7 @@ fn non_legacy_entity_without_semicolon_is_literal() {
 /// strip_to_text documents "Whitespace collapsing (HTML rendering
 /// semantics)", but <pre> content is collapsed too.
 #[test]
-#[ignore = "open: <pre> whitespace is collapsed"]
+#[ignore = "open: <pre> whitespace is collapsed (fixed in #33)"]
 fn pre_preserves_whitespace() {
     let t = strip_to_text("<pre>fn main() {\n    let x  =  1;\n}</pre>");
     assert_eq!(t, "fn main() {\n    let x  =  1;\n}");
