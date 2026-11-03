@@ -252,7 +252,9 @@ fn extract_opf_title<R: Read + Seek>(
         .checked_add(xml[xml.find("<dc:title")?..].find('>')?)?;
     let start = start + 1;
     let end = xml[start..].find("</dc:title>")? + start;
-    let title = xml[start..end].trim().to_string();
+    // dc:title is XML character data: decode its references like the
+    // chapter text, which goes through the HTML stripper.
+    let title = html::decode_entities(xml[start..end].trim());
     if title.is_empty() {
         None
     } else {
@@ -374,6 +376,22 @@ mod tests {
             result.text
         );
         assert!(result.text.contains("&"), "amp: {}", result.text);
+    }
+
+    #[test]
+    fn extract_epub_title_decodes_entities() {
+        let epub = make_epub(
+            &[(
+                "ch1.xhtml",
+                "<html><body><p>It is a truth.</p></body></html>",
+            )],
+            "Pride &amp; Prejudice &#8212; Caf&#xE9;",
+        );
+        let result = extract_bytes(&epub).unwrap();
+        assert_eq!(
+            result.title.as_deref(),
+            Some("Pride & Prejudice \u{2014} Caf\u{E9}")
+        );
     }
 
     #[test]

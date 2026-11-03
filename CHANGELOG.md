@@ -14,6 +14,9 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- EPUB titles decode character references, as the chapter text already
+  did: `Pride &amp; Prejudice` in `dc:title` is now "Pride & Prejudice".
+
 - DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
   budget per archive and returns `Error::Parse` when it runs out. The
   64 MiB per-entry cap did not bound the total: 70 distinct 1 MiB EPUB
