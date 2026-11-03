@@ -67,6 +67,38 @@ fn comments_close_as_html5_does() {
 }
 
 #[test]
+fn legacy_no_semicolon_list_is_the_whatwg_set_and_decodes() {
+    // 106 names, the keys without ';' in the WHATWG named reference table.
+    assert_eq!(LEGACY_NO_SEMICOLON.len(), 106);
+    for window in LEGACY_NO_SEMICOLON.windows(2) {
+        assert!(window[0] < window[1], "{} before {}", window[0], window[1]);
+    }
+    for name in LEGACY_NO_SEMICOLON {
+        assert!(
+            decode_named_entity(&format!("&{name};")).is_some(),
+            "legacy &{name}; missing from NAMED_ENTITIES"
+        );
+    }
+}
+
+#[test]
+fn entity_decoding_follows_html5() {
+    // Uppercase legacy names are real references.
+    assert_eq!(
+        decode_entities("&AMP;&LT;&GT;&QUOT;&COPY;&REG;"),
+        "&<>\"\u{a9}\u{ae}"
+    );
+    // Only legacy names may omit the semicolon.
+    assert_eq!(decode_entities("&copy 2026"), "\u{a9} 2026");
+    assert_eq!(decode_entities("Alpha&Beta test"), "Alpha&Beta test");
+    assert_eq!(decode_entities("a&mdash b"), "a&mdash b");
+    assert_eq!(decode_entities("a&mdash; b"), "a\u{2014} b");
+    // Numeric references are digits only.
+    assert_eq!(decode_entities("&#+65;&#x+41;"), "&#+65;&#x+41;");
+    assert_eq!(decode_entities("&#65;&#x41;"), "AA");
+}
+
+#[test]
 fn entity_table_is_sorted() {
     for window in NAMED_ENTITIES.windows(2) {
         assert!(
@@ -852,9 +884,10 @@ fn entity_without_semicolon_amp() {
 
 #[test]
 fn entity_without_semicolon_hellip() {
-    // &hellip without ; -> ellipsis
+    // &hellip is not in the HTML5 legacy set, so without ';' it stays
+    // literal, as browsers render it.
     let text = strip_to_text("<p>Wait&hellip what?</p>");
-    assert!(text.contains('\u{2026}'), "hellip without semi: {text}");
+    assert_eq!(text, "Wait&hellip what?");
 }
 
 #[test]

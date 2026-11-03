@@ -2828,6 +2828,23 @@ fn numeric_entity_to_char(n: u32) -> Option<char> {
     }
 }
 
+/// Named references HTML5 decodes without a trailing ';' (the WHATWG legacy
+/// set, as listed without ';' in the named character reference table). Every
+/// other name needs its semicolon. Sorted for binary search.
+static LEGACY_NO_SEMICOLON: &[&str] = &[
+    "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY", "Ccedil",
+    "ETH", "Eacute", "Ecirc", "Egrave", "Euml", "GT", "Iacute", "Icirc", "Igrave", "Iuml", "LT",
+    "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde", "Ouml", "QUOT", "REG", "THORN",
+    "Uacute", "Ucirc", "Ugrave", "Uuml", "Yacute", "aacute", "acirc", "acute", "aelig", "agrave",
+    "amp", "aring", "atilde", "auml", "brvbar", "ccedil", "cedil", "cent", "copy", "curren", "deg",
+    "divide", "eacute", "ecirc", "egrave", "eth", "euml", "frac12", "frac14", "frac34", "gt",
+    "iacute", "icirc", "iexcl", "igrave", "iquest", "iuml", "laquo", "lt", "macr", "micro",
+    "middot", "nbsp", "not", "ntilde", "oacute", "ocirc", "ograve", "ordf", "ordm", "oslash",
+    "otilde", "ouml", "para", "plusmn", "pound", "quot", "raquo", "reg", "sect", "shy", "sup1",
+    "sup2", "sup3", "szlig", "thorn", "times", "uacute", "ucirc", "ugrave", "uml", "uuml",
+    "yacute", "yen", "yuml",
+];
+
 /// Map a named HTML entity to its Unicode character.
 ///
 /// Covers the most common entities encountered in real web content,
@@ -2839,6 +2856,7 @@ fn numeric_entity_to_char(n: u32) -> Option<char> {
 /// Greek letters, math symbols, arrows, and typographic punctuation.
 static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&AElig;", '\u{00C6}'),
+    ("&AMP;", '&'),
     ("&Aacute;", '\u{00C1}'),
     ("&Abreve;", '\u{0102}'), // Romanian Ă
     ("&Acirc;", '\u{00C2}'),
@@ -2849,6 +2867,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Atilde;", '\u{00C3}'),
     ("&Auml;", '\u{00C4}'),
     ("&Beta;", '\u{0392}'),
+    ("&COPY;", '\u{00A9}'),
     ("&Cacute;", '\u{0106}'), // Polish Ć
     ("&Ccaron;", '\u{010C}'), // Czech Č
     ("&Ccedil;", '\u{00C7}'),
@@ -2866,6 +2885,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Epsilon;", '\u{0395}'),
     ("&Eta;", '\u{0397}'),
     ("&Euml;", '\u{00CB}'),
+    ("&GT;", '>'),
     ("&Gamma;", '\u{0393}'),
     ("&Gbreve;", '\u{011E}'), // Turkish Ğ
     ("&Iacute;", '\u{00CD}'),
@@ -2875,6 +2895,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Iota;", '\u{0399}'),
     ("&Iuml;", '\u{00CF}'),
     ("&Kappa;", '\u{039A}'),
+    ("&LT;", '<'),
     ("&Lambda;", '\u{039B}'),
     ("&Lcaron;", '\u{013D}'), // Slovak Ľ
     ("&Lstrok;", '\u{0141}'), // Polish Ł
@@ -2897,6 +2918,8 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Pi;", '\u{03A0}'),
     ("&Prime;", '\u{2033}'),
     ("&Psi;", '\u{03A8}'),
+    ("&QUOT;", '"'),
+    ("&REG;", '\u{00AE}'),
     ("&Racute;", '\u{0154}'), // Slovak Ŕ
     ("&Rcaron;", '\u{0158}'), // Czech Ř
     ("&Rho;", '\u{03A1}'),
@@ -3195,7 +3218,7 @@ fn decode_named_entity(entity: &str) -> Option<char> {
         "&oacute;" => return Some('\u{F3}'),
         _ => {}
     }
-    // Binary search for the full 303-entity table
+    // Binary search for the full 309-entity table
     NAMED_ENTITIES
         .binary_search_by_key(&entity, |(name, _)| name)
         .ok()
@@ -3436,13 +3459,22 @@ fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -
             text.push(ch);
         } else if entity_str.starts_with("&#") && entity_str.len() > 3 {
             let num_str = &entity_str[2..entity_str.len() - 1];
+            // HTML5 numeric references are digits only; Rust's integer
+            // parsers would also accept a leading '+'.
             let parsed = if let Some(hex) = num_str
                 .strip_prefix('x')
                 .or_else(|| num_str.strip_prefix('X'))
             {
-                u32::from_str_radix(hex, 16).ok()
+                hex.bytes()
+                    .all(|b| b.is_ascii_hexdigit())
+                    .then(|| u32::from_str_radix(hex, 16).ok())
+                    .flatten()
             } else {
-                num_str.parse::<u32>().ok()
+                num_str
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+                    .then(|| num_str.parse::<u32>().ok())
+                    .flatten()
             };
             if let Some(ch) = parsed.and_then(numeric_entity_to_char) {
                 text.push(ch);
@@ -3453,11 +3485,12 @@ fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -
             text.push_str(entity_str);
         }
     } else {
-        // Semicolon-optional: try as named entity with appended ';'
-        // Only for entity-like strings (&alpha...) -- all ASCII alphanumeric after '&'
+        // Semicolon-optional: HTML5 lets only the legacy names omit ';'
+        // ("&copy" decodes, "&mdash" and "&Beta" stay literal text).
         if entity_str.len() > 2
             && bytes[start + 1].is_ascii_alphabetic()
             && entity_str[1..].bytes().all(|b| b.is_ascii_alphanumeric())
+            && LEGACY_NO_SEMICOLON.binary_search(&&entity_str[1..]).is_ok()
         {
             // Use a stack buffer to avoid format! allocation
             let entity_bytes = entity_str.as_bytes();
