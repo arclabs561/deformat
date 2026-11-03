@@ -14,6 +14,9 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- `<!-->` and `<!--->` end at once as empty comments, as HTML5 tokenizes
+  them; the text after them was swallowed up to the next `-->`. The three
+  copies of the comment scanner are now one function.
 - HTML entity decoding follows HTML5 in three places. Only the 106 legacy
   names (`&amp`, `&copy`, `&eacute`, ...) may omit the semicolon; other
   names such as `&mdash` or `&hellip` without `;` now stay literal, as
