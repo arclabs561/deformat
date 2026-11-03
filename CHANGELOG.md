@@ -29,6 +29,10 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- RTF with raw 8-bit bytes decodes with the document's `\ansicpg` code
+  page (cp1252 when absent) instead of failing with "not valid UTF-8".
+  RTF is 7-bit by specification, but common writers emit raw code-page
+  bytes. `rtf::extract_file` reads bytes and follows the same path.
 - EPUB titles decode character references, as the chapter text already
   did: `Pride &amp; Prejudice` in `dc:title` is now "Pride & Prejudice".
 - PDF segment coordinates (`pdf_oxide::extract_*_to_segments_with_coords`)
