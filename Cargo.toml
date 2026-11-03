@@ -46,7 +46,7 @@ dom_smoothie = { version = "0.15", optional = true }
 pdf_oxide = { version = "=0.3.78", optional = true }
 
 # Optional: DOCX/EPUB extraction (ZIP-based formats)
-zip = { version = "8", optional = true, default-features = false, features = [
+zip = { version = "9.0.5", optional = true, default-features = false, features = [
   "deflate",
 ] }
 
