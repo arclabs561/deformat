@@ -154,6 +154,10 @@ proptest! {
 proptest! {
     #[test]
     fn output_never_has_double_spaces(html in arb_html_fragment()) {
+        // <pre> content keeps its whitespace, double spaces included.
+        if html.to_ascii_lowercase().contains("<pre") {
+            return Ok(());
+        }
         let text = deformat::html::strip_to_text(&html);
         prop_assert!(
             !text.contains("  "),
@@ -172,6 +176,12 @@ proptest! {
     #[test]
     fn output_is_always_trimmed(html in arb_html_fragment()) {
         let text = deformat::html::strip_to_text(&html);
+        // <pre> indentation at the start or end of the output is kept; only
+        // whitespace-only output must still come back empty.
+        if html.to_ascii_lowercase().contains("<pre") {
+            prop_assert!(!text.trim().is_empty() || text.is_empty(), "{:?}", text);
+            return Ok(());
+        }
         let trimmed = text.trim().to_string();
         prop_assert_eq!(
             text,
@@ -535,6 +545,11 @@ proptest! {
 proptest! {
     #[test]
     fn strip_is_idempotent(html in arb_html_fragment()) {
+        // <pre> whitespace survives the first pass only: the output no longer
+        // carries the tag that protected it.
+        if html.to_ascii_lowercase().contains("<pre") {
+            return Ok(());
+        }
         let once = deformat::html::strip_to_text(&html);
         // Entity decoding can produce '<' / '>' from &lt; / &gt;, which the
         // second pass would then treat as tag markers. Skip check in that case.

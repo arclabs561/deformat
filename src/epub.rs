@@ -53,8 +53,13 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     // Fallback: collect all HTML/XHTML files sorted by name
     if content_files.is_empty() {
         for i in 0..archive.len() {
-            if let Ok(entry) = archive.by_index(i) {
-                let name = entry.name().to_string();
+            // Entries that cannot be opened, or whose stored name zip
+            // rejects as invalid, are skipped.
+            if let Some(name) = archive
+                .by_index(i)
+                .ok()
+                .and_then(|entry| entry.name().ok().map(|n| n.to_string()))
+            {
                 if name.ends_with(".xhtml") || name.ends_with(".html") || name.ends_with(".htm") {
                     content_files.push(name);
                 }
@@ -252,7 +257,9 @@ fn extract_opf_title<R: Read + Seek>(
         .checked_add(xml[xml.find("<dc:title")?..].find('>')?)?;
     let start = start + 1;
     let end = xml[start..].find("</dc:title>")? + start;
-    let title = xml[start..end].trim().to_string();
+    // dc:title is XML character data: decode its references like the
+    // chapter text, which goes through the HTML stripper.
+    let title = html::decode_entities(xml[start..end].trim());
     if title.is_empty() {
         None
     } else {
@@ -374,6 +381,22 @@ mod tests {
             result.text
         );
         assert!(result.text.contains("&"), "amp: {}", result.text);
+    }
+
+    #[test]
+    fn extract_epub_title_decodes_entities() {
+        let epub = make_epub(
+            &[(
+                "ch1.xhtml",
+                "<html><body><p>It is a truth.</p></body></html>",
+            )],
+            "Pride &amp; Prejudice &#8212; Caf&#xE9;",
+        );
+        let result = extract_bytes(&epub).unwrap();
+        assert_eq!(
+            result.title.as_deref(),
+            Some("Pride & Prejudice \u{2014} Caf\u{E9}")
+        );
     }
 
     #[test]
