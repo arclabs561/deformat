@@ -51,6 +51,11 @@ These entries identify source changes without assigning a package release.
   `\'85` became U+0085 instead of `…`. The `rtf` feature now enables
   `encoding_rs`.
 
+### Documentation
+
+- The `docx` module no longer claims to read headers and footers. It reads
+  only `word/document.xml`, which holds the document body.
+
 ## 0.16.0 — 2026-10-30
 
 ### Added
