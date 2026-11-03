@@ -3394,7 +3394,7 @@ fn decode_named_entity(entity: &str) -> Option<char> {
 /// Handles both `attr="value"` and `attr='value'` formats.
 /// Uses byte-level case-insensitive search to avoid heap allocations.
 /// Returns `None` if the attribute is not found.
-fn extract_attr_value<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
+pub(crate) fn extract_attr_value<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
     let tag_bytes = tag.as_bytes();
     let name_bytes = attr_name.as_bytes();
     let name_len = name_bytes.len();

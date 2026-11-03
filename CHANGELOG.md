@@ -29,6 +29,10 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- `page_type` reads `og:type` and the canonical URL from the tag that
+  declares them. It searched a fixed window of text around the keyword,
+  so `content=` before `property=` could pick up the next tag's content,
+  and the canonical href could come from a neighbouring `<link>`.
 - XLSX rows keep blank cells as empty tab-separated fields, so values stay
   under their column headers; only trailing blanks and empty rows are
   dropped. Previously a blank in the middle of a row shifted every later
