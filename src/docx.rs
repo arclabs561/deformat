@@ -2,7 +2,8 @@
 //!
 //! Requires the `docx` feature. Extracts text from `.docx` files by
 //! reading `word/document.xml` from the ZIP archive and stripping XML tags.
-//! Also reads `word/header*.xml` and `word/footer*.xml` if present.
+//! Headers, footers, footnotes and comments live in other parts of the
+//! archive and are not included.
 
 use crate::segment::{element_id, Segment, SegmentData, SegmentMetadata};
 use crate::zip_entry::ArchiveBudget;

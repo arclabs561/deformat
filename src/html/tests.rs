@@ -56,6 +56,49 @@ fn entity_named() {
 }
 
 #[test]
+fn comments_close_as_html5_does() {
+    // `<!-->` and `<!--->` are complete (abruptly closed) empty comments.
+    assert_eq!(strip_to_text("<p><!-->visible<!-- c --></p>"), "visible");
+    assert_eq!(strip_to_text("<p><!--->visible</p>"), "visible");
+    // Ordinary comments, `--` inside, and `--->` endings still hide content.
+    assert_eq!(strip_to_text("<p>a<!-- x -- y -->b<!-- z --->c</p>"), "abc");
+    // An unterminated comment hides the rest of the input.
+    assert_eq!(strip_to_text("<p>a</p><!-- never closed <p>b</p>"), "a");
+}
+
+#[test]
+fn legacy_no_semicolon_list_is_the_whatwg_set_and_decodes() {
+    // 106 names, the keys without ';' in the WHATWG named reference table.
+    assert_eq!(LEGACY_NO_SEMICOLON.len(), 106);
+    for window in LEGACY_NO_SEMICOLON.windows(2) {
+        assert!(window[0] < window[1], "{} before {}", window[0], window[1]);
+    }
+    for name in LEGACY_NO_SEMICOLON {
+        assert!(
+            decode_named_entity(&format!("&{name};")).is_some(),
+            "legacy &{name}; missing from NAMED_ENTITIES"
+        );
+    }
+}
+
+#[test]
+fn entity_decoding_follows_html5() {
+    // Uppercase legacy names are real references.
+    assert_eq!(
+        decode_entities("&AMP;&LT;&GT;&QUOT;&COPY;&REG;"),
+        "&<>\"\u{a9}\u{ae}"
+    );
+    // Only legacy names may omit the semicolon.
+    assert_eq!(decode_entities("&copy 2026"), "\u{a9} 2026");
+    assert_eq!(decode_entities("Alpha&Beta test"), "Alpha&Beta test");
+    assert_eq!(decode_entities("a&mdash b"), "a&mdash b");
+    assert_eq!(decode_entities("a&mdash; b"), "a\u{2014} b");
+    // Numeric references are digits only.
+    assert_eq!(decode_entities("&#+65;&#x+41;"), "&#+65;&#x+41;");
+    assert_eq!(decode_entities("&#65;&#x41;"), "AA");
+}
+
+#[test]
 fn entity_table_is_sorted() {
     for window in NAMED_ENTITIES.windows(2) {
         assert!(
@@ -841,9 +884,10 @@ fn entity_without_semicolon_amp() {
 
 #[test]
 fn entity_without_semicolon_hellip() {
-    // &hellip without ; -> ellipsis
+    // &hellip is not in the HTML5 legacy set, so without ';' it stays
+    // literal, as browsers render it.
     let text = strip_to_text("<p>Wait&hellip what?</p>");
-    assert!(text.contains('\u{2026}'), "hellip without semi: {text}");
+    assert_eq!(text, "Wait&hellip what?");
 }
 
 #[test]
@@ -2141,4 +2185,55 @@ fn anchor_election_default_off_preserves_byte_exact_strip() {
     let strip = strip_to_text(html);
     assert_eq!(default, strip);
     assert!(default.contains("Outside main"));
+}
+
+#[test]
+fn pre_keeps_its_whitespace() {
+    let text = strip_to_text("<pre>fn main() {\n    let x  =  1;\n}</pre>");
+    assert_eq!(text, "fn main() {\n    let x  =  1;\n}");
+}
+
+#[test]
+fn pre_drops_one_leading_newline_and_keeps_surrounding_collapse() {
+    let html = "<p>Before   the  code</p><pre>\n  a\tb\n\n  c</pre><p>After    it</p>";
+    assert_eq!(
+        strip_to_text(html),
+        "Before the code\n  a\tb\n\n  c\nAfter it"
+    );
+}
+
+#[test]
+fn pre_inside_skipped_content_is_ignored() {
+    let html = "<script><pre>  x  </pre></script><p>a   b</p>";
+    assert_eq!(strip_to_text(html), "a b");
+}
+
+#[test]
+fn unclosed_pre_runs_to_end() {
+    assert_eq!(strip_to_text("<p>x</p><pre>a   b"), "x\na   b");
+}
+
+#[test]
+fn pre_spans_match_strip_to_text_and_point_into_the_source() {
+    let html = "<p>Intro   text</p><pre>let  x = &amp;y;\n  z</pre><p>end</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, strip_to_text(html));
+    // Whitespace inside <pre> is unchanged, so its runs stay byte-exact.
+    let start = text.find("let  x").unwrap();
+    assert_eq!(spans.source_position(start), html.find("let  x"));
+    let z = text.rfind('z').unwrap();
+    assert_eq!(spans.source_position(z), html.rfind('z'));
+}
+
+#[test]
+fn pre_keeps_leading_indentation_at_document_start() {
+    assert_eq!(
+        strip_to_text("<pre>    indented\n  less</pre>"),
+        "    indented\n  less"
+    );
+}
+
+#[test]
+fn whitespace_only_pre_output_is_empty() {
+    assert_eq!(strip_to_text("<pre /><p> </p>"), "");
 }

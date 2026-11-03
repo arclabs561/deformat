@@ -12,12 +12,43 @@ These entries identify source changes without assigning a package release.
 
 ## Unreleased
 
+### Changed
+
+- `html::strip_to_text` and the other plain-text HTML paths keep whitespace
+  inside `<pre>`, as the docs' "HTML rendering semantics" promised; one
+  newline directly after the opening tag is dropped, as in HTML. Code blocks
+  now keep their indentation and line breaks. Output elsewhere is unchanged.
+### Security
+
+- Require `zip` 9.0.5, which fixes the five advisories reported against
+  `zip` below 9.0.5. deformat reads archive entries in memory with only the
+  `deflate` feature, so the extraction, legacy-decoder and AES advisories did
+  not reach its code; the dual-header parsing one could make it read different
+  entry contents than other ZIP readers. Entries whose stored name `zip` now
+  rejects as invalid are skipped like unreadable entries.
+
 ### Fixed
 
 - RTF with raw 8-bit bytes decodes with the document's `\ansicpg` code
   page (cp1252 when absent) instead of failing with "not valid UTF-8".
   RTF is 7-bit by specification, but common writers emit raw code-page
   bytes. `rtf::extract_file` reads bytes and follows the same path.
+- EPUB titles decode character references, as the chapter text already
+  did: `Pride &amp; Prejudice` in `dc:title` is now "Pride & Prejudice".
+- PDF segment coordinates (`pdf_oxide::extract_*_to_segments_with_coords`)
+  are in the displayed page frame. Points start at the top-left corner as
+  documented (they started bottom-left), are measured from the MediaBox
+  origin rather than absolute user space, and follow the page's `/Rotate`,
+  which also swaps `layout_width` and `layout_height` for 90 and 270.
+- `<!-->` and `<!--->` end at once as empty comments, as HTML5 tokenizes
+  them; the text after them was swallowed up to the next `-->`. The three
+  copies of the comment scanner are now one function.
+- HTML entity decoding follows HTML5 in three places. Only the 106 legacy
+  names (`&amp`, `&copy`, `&eacute`, ...) may omit the semicolon; other
+  names such as `&mdash` or `&hellip` without `;` now stay literal, as
+  browsers render them, so "Alpha&Beta" no longer becomes "AlphaΒ". The
+  uppercase legacy names `&AMP;`, `&LT;`, `&GT;`, `&QUOT;`, `&COPY;` and
+  `&REG;` decode. Numeric references with a sign (`&#+65;`) stay literal.
 
 - DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
   budget per archive and returns `Error::Parse` when it runs out. The
@@ -48,6 +79,11 @@ These entries identify source changes without assigning a package release.
   `\ansicpg` code page (cp1252 by default): paragraphs ran together and
   `\'85` became U+0085 instead of `…`. The `rtf` feature now enables
   `encoding_rs`.
+
+### Documentation
+
+- The `docx` module no longer claims to read headers and footers. It reads
+  only `word/document.xml`, which holds the document body.
 
 ## 0.16.0 — 2026-10-30
 
