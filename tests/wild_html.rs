@@ -479,12 +479,13 @@ fn page_with_ad_markup() {
 
 #[test]
 fn entities_without_semicolons() {
-    // Many real-world pages omit semicolons on entities.
+    // Many real-world pages omit semicolons on entities. Browsers decode only
+    // the HTML5 legacy names (&cent, &amp, ...) without ';'; &mdash without
+    // ';' renders literally, and decoding it would also turn "Alpha&Beta"
+    // into "AlphaΒ".
     let html = "<p>5&cent per item &amp shipping &mdash fast delivery</p>";
     let text = strip_to_text(html);
-    assert!(text.contains("\u{00A2}"), "cent decoded: {text}");
-    assert!(text.contains("&"), "amp decoded: {text}");
-    assert!(text.contains("\u{2014}"), "mdash decoded: {text}");
+    assert_eq!(text, "5\u{00A2} per item & shipping &mdash fast delivery");
 }
 
 #[test]

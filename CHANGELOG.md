@@ -14,6 +14,13 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- HTML entity decoding follows HTML5 in three places. Only the 106 legacy
+  names (`&amp`, `&copy`, `&eacute`, ...) may omit the semicolon; other
+  names such as `&mdash` or `&hellip` without `;` now stay literal, as
+  browsers render them, so "Alpha&Beta" no longer becomes "AlphaΒ". The
+  uppercase legacy names `&AMP;`, `&LT;`, `&GT;`, `&QUOT;`, `&COPY;` and
+  `&REG;` decode. Numeric references with a sign (`&#+65;`) stay literal.
+
 - DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
   budget per archive and returns `Error::Parse` when it runs out. The
   64 MiB per-entry cap did not bound the total: 70 distinct 1 MiB EPUB
