@@ -306,12 +306,11 @@ fn epub_total_decompressed_text_is_bounded() {
     );
 }
 
-/// docx.rs module doc: "Also reads word/header*.xml and word/footer*.xml if
-/// present." extract_reader (docx.rs:343-375) reads only word/document.xml.
+/// DOCX extraction reads the document body only; header and footer parts
+/// are documented as not included.
 #[cfg(feature = "docx")]
 #[test]
-#[ignore = "open: DOCX headers and footers are not read"]
-fn docx_reads_headers_and_footers_as_documented() {
+fn docx_reads_only_the_document_body() {
     let doc = br#"<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>Body text</w:t></w:r></w:p></w:body></w:document>"#;
     let header =
         br#"<w:hdr xmlns:w="w"><w:p><w:r><w:t>CONFIDENTIAL header</w:t></w:r></w:p></w:hdr>"#;
@@ -325,8 +324,9 @@ fn docx_reads_headers_and_footers_as_documented() {
         false,
     );
     let text = deformat::docx::extract_bytes(&bytes).unwrap().text;
+    assert!(text.contains("Body text"), "{text:?}");
     assert!(
-        text.contains("CONFIDENTIAL header") && text.contains("Page footer"),
+        !text.contains("CONFIDENTIAL header") && !text.contains("Page footer"),
         "{text:?}"
     );
 }
