@@ -14,6 +14,14 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- XLSX rows keep blank cells as empty tab-separated fields, so values stay
+  under their column headers; only trailing blanks and empty rows are
+  dropped. Previously a blank in the middle of a row shifted every later
+  value one column left.
+- XLSX date cells are written as ISO 8601 (`2024-01-01`, with a time when
+  one is set) instead of the stored serial number (`45292`), for both the
+  1900 and 1904 date systems.
+
 - DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
   budget per archive and returns `Error::Parse` when it runs out. The
   64 MiB per-entry cap did not bound the total: 70 distinct 1 MiB EPUB
