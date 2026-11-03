@@ -53,8 +53,13 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     // Fallback: collect all HTML/XHTML files sorted by name
     if content_files.is_empty() {
         for i in 0..archive.len() {
-            if let Ok(entry) = archive.by_index(i) {
-                let name = entry.name().to_string();
+            // Entries that cannot be opened, or whose stored name zip
+            // rejects as invalid, are skipped.
+            if let Some(name) = archive
+                .by_index(i)
+                .ok()
+                .and_then(|entry| entry.name().ok().map(|n| n.to_string()))
+            {
                 if name.ends_with(".xhtml") || name.ends_with(".html") || name.ends_with(".htm") {
                     content_files.push(name);
                 }
