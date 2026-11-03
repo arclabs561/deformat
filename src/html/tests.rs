@@ -56,6 +56,17 @@ fn entity_named() {
 }
 
 #[test]
+fn comments_close_as_html5_does() {
+    // `<!-->` and `<!--->` are complete (abruptly closed) empty comments.
+    assert_eq!(strip_to_text("<p><!-->visible<!-- c --></p>"), "visible");
+    assert_eq!(strip_to_text("<p><!--->visible</p>"), "visible");
+    // Ordinary comments, `--` inside, and `--->` endings still hide content.
+    assert_eq!(strip_to_text("<p>a<!-- x -- y -->b<!-- z --->c</p>"), "abc");
+    // An unterminated comment hides the rest of the input.
+    assert_eq!(strip_to_text("<p>a</p><!-- never closed <p>b</p>"), "a");
+}
+
+#[test]
 fn legacy_no_semicolon_list_is_the_whatwg_set_and_decodes() {
     // 106 names, the keys without ';' in the WHATWG named reference table.
     assert_eq!(LEGACY_NO_SEMICOLON.len(), 106);

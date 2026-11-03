@@ -493,18 +493,7 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                 if bytes[pos] == b'!' {
                     if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
                         pos += 3;
-                        let mut dashes = 0u32;
-                        while pos < len {
-                            match bytes[pos] {
-                                b'-' => dashes += 1,
-                                b'>' if dashes >= 2 => {
-                                    pos += 1;
-                                    break;
-                                }
-                                _ => dashes = 0,
-                            }
-                            pos += 1;
-                        }
+                        pos = skip_comment_body(bytes, pos);
                         continue;
                     }
                     if let Some(o) = memchr::memchr(b'>', &bytes[pos..]) {
@@ -924,18 +913,7 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                 if bytes[pos] == b'!' {
                     if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
                         pos += 3;
-                        let mut dashes = 0u32;
-                        while pos < len {
-                            match bytes[pos] {
-                                b'-' => dashes += 1,
-                                b'>' if dashes >= 2 => {
-                                    pos += 1;
-                                    break;
-                                }
-                                _ => dashes = 0,
-                            }
-                            pos += 1;
-                        }
+                        pos = skip_comment_body(bytes, pos);
                         continue;
                     }
                     if let Some(o) = memchr::memchr(b'>', &bytes[pos..]) {
@@ -1927,18 +1905,7 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                 if bytes[pos] == b'!' {
                     if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
                         pos += 3; // skip "!--"
-                        let mut dashes = 0u32;
-                        while pos < len {
-                            match bytes[pos] {
-                                b'-' => dashes += 1,
-                                b'>' if dashes >= 2 => {
-                                    pos += 1;
-                                    break;
-                                }
-                                _ => dashes = 0,
-                            }
-                            pos += 1;
-                        }
+                        pos = skip_comment_body(bytes, pos);
                         continue;
                     }
                     // <!DOCTYPE ...> or other <! directive
@@ -3358,6 +3325,30 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&zwj;", '\u{200D}'),
     ("&zwnj;", '\u{200C}'),
 ];
+
+/// Position just past the comment that starts at `pos`, the first byte after
+/// `<!--`. HTML5 ends a comment at `-->`, and also at once for the abruptly
+/// closed empty forms `<!-->` and `<!--->`. An unterminated comment runs to the
+/// end of input.
+fn skip_comment_body(bytes: &[u8], mut pos: usize) -> usize {
+    let len = bytes.len();
+    if bytes[pos..].starts_with(b">") {
+        return pos + 1;
+    }
+    if bytes[pos..].starts_with(b"->") {
+        return pos + 2;
+    }
+    let mut dashes = 0u32;
+    while pos < len {
+        match bytes[pos] {
+            b'-' => dashes += 1,
+            b'>' if dashes >= 2 => return pos + 1,
+            _ => dashes = 0,
+        }
+        pos += 1;
+    }
+    len
+}
 
 fn decode_named_entity(entity: &str) -> Option<char> {
     // Fast path: the ~20 most common HTML entities in web content.
