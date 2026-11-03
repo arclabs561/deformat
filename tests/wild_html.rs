@@ -100,8 +100,16 @@ fn wordpress_post_with_shortcodes_and_widgets() {
     assert!(!text.contains("wp-block"), "CSS class not leaked: {text}");
     assert!(!text.contains("Search..."), "form stripped: {text}");
 
-    // No double spaces
-    assert!(!text.contains("  "), "no double spaces: {text}");
+    // The code block keeps its indentation; prose outside it has no double spaces.
+    assert!(
+        text.contains("\n    if x.len()"),
+        "code indentation kept: {text}"
+    );
+    let prose = text.replace("\n    if x.len()", "\nif x.len()");
+    assert!(
+        !prose.contains("  "),
+        "no double spaces outside <pre>: {text}"
+    );
 }
 
 // =============================================================================
@@ -757,9 +765,8 @@ fn large_document_completes() {
 // =============================================================================
 
 #[test]
-fn pre_tag_content_collapsed() {
-    // <pre> content -- strip_to_text collapses whitespace (it's a text extractor,
-    // not a renderer). Document the behavior.
+fn pre_tag_content_keeps_whitespace() {
+    // <pre> keeps its whitespace, as a browser renders it.
     let html = r#"<pre>
     fn main() {
         println!("hello");
@@ -773,8 +780,10 @@ fn pre_tag_content_collapsed() {
         text.contains("After the pre block"),
         "post-pre content: {text}"
     );
-    // Whitespace is collapsed (strip_to_text doesn't preserve pre formatting)
-    assert!(!text.contains("    fn"), "pre whitespace collapsed: {text}");
+    assert!(
+        text.contains("    fn main()"),
+        "pre indentation kept: {text}"
+    );
 }
 
 #[test]

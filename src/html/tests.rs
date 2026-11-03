@@ -2175,3 +2175,54 @@ fn anchor_election_default_off_preserves_byte_exact_strip() {
     assert_eq!(default, strip);
     assert!(default.contains("Outside main"));
 }
+
+#[test]
+fn pre_keeps_its_whitespace() {
+    let text = strip_to_text("<pre>fn main() {\n    let x  =  1;\n}</pre>");
+    assert_eq!(text, "fn main() {\n    let x  =  1;\n}");
+}
+
+#[test]
+fn pre_drops_one_leading_newline_and_keeps_surrounding_collapse() {
+    let html = "<p>Before   the  code</p><pre>\n  a\tb\n\n  c</pre><p>After    it</p>";
+    assert_eq!(
+        strip_to_text(html),
+        "Before the code\n  a\tb\n\n  c\nAfter it"
+    );
+}
+
+#[test]
+fn pre_inside_skipped_content_is_ignored() {
+    let html = "<script><pre>  x  </pre></script><p>a   b</p>";
+    assert_eq!(strip_to_text(html), "a b");
+}
+
+#[test]
+fn unclosed_pre_runs_to_end() {
+    assert_eq!(strip_to_text("<p>x</p><pre>a   b"), "x\na   b");
+}
+
+#[test]
+fn pre_spans_match_strip_to_text_and_point_into_the_source() {
+    let html = "<p>Intro   text</p><pre>let  x = &amp;y;\n  z</pre><p>end</p>";
+    let (text, spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, strip_to_text(html));
+    // Whitespace inside <pre> is unchanged, so its runs stay byte-exact.
+    let start = text.find("let  x").unwrap();
+    assert_eq!(spans.source_position(start), html.find("let  x"));
+    let z = text.rfind('z').unwrap();
+    assert_eq!(spans.source_position(z), html.rfind('z'));
+}
+
+#[test]
+fn pre_keeps_leading_indentation_at_document_start() {
+    assert_eq!(
+        strip_to_text("<pre>    indented\n  less</pre>"),
+        "    indented\n  less"
+    );
+}
+
+#[test]
+fn whitespace_only_pre_output_is_empty() {
+    assert_eq!(strip_to_text("<pre /><p> </p>"), "");
+}

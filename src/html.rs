@@ -92,7 +92,9 @@ impl StripOptions {
 ///   `<head>`, `<menu>`, `<select>`, `<figcaption>`
 /// - Wikipedia/MediaWiki boilerplate removal (TOC, references, navboxes)
 /// - HTML entity decoding (`&amp;`, `&#123;`, `&#x1F;`, etc.)
-/// - Whitespace collapsing (HTML rendering semantics)
+/// - Whitespace collapsing (HTML rendering semantics): runs of whitespace
+///   become one space or one newline, except inside `<pre>`, which keeps its
+///   whitespace (minus one newline directly after the opening tag)
 ///
 /// Does **not** strip Wikipedia reference markers by default. Use
 /// [`strip_to_text_with_options`] with [`StripOptions::wikipedia()`] for that.
@@ -1826,6 +1828,10 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
     let mut in_style = false;
     let mut skip_depth: u32 = 0;
     let mut wiki_skip_depth: u32 = 0;
+    // Output ranges of <pre> content, which keeps its whitespace.
+    let mut verbatim: Vec<(usize, usize)> = Vec::new();
+    let mut pre_depth: u32 = 0;
+    let mut pre_start = 0;
 
     while pos < len {
         let skipping = in_script || in_style || skip_depth > 0;
@@ -2100,6 +2106,14 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                     wiki_skip_depth = 0;
                 }
 
+                let in_text = !in_script && !in_style && skip_depth == 0;
+                if in_text && tag_lower == "/pre" && pre_depth > 0 {
+                    pre_depth -= 1;
+                    if pre_depth == 0 {
+                        push_verbatim(&mut verbatim, &text, pre_start);
+                    }
+                }
+
                 // Insert newline at block-level element boundaries.
                 // This gives downstream consumers (NER, summarizers) clear
                 // sentence boundaries between headings, paragraphs, table cells,
@@ -2128,6 +2142,13 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                             kind: SpanKind::Synthetic,
                         });
                     }
+                }
+
+                if in_text && tag_lower == "pre" {
+                    if pre_depth == 0 {
+                        pre_start = text.len();
+                    }
+                    pre_depth += 1;
                 }
 
                 // Extract alt text from <img> tags
@@ -2191,16 +2212,29 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
         }
     }
 
+    // An unclosed <pre> runs to the end of the document.
+    if pre_depth > 0 {
+        push_verbatim(&mut verbatim, &text, pre_start);
+    }
+
     // When span tracking is active, run cleanup_whitespace with a position
     // map so the returned text matches strip_to_text while span positions
     // remain accurate against the cleaned output.
     if let Some(ref mut s) = spans {
-        let (cleaned, map) = cleanup_whitespace_with_map(&text);
+        let (cleaned, map) = if verbatim.is_empty() {
+            cleanup_whitespace_with_map(&text)
+        } else {
+            cleanup_whitespace_preserving_with_map(&text, &verbatim)
+        };
         // Leading trim: drop output bytes whose character is whitespace at
         // the start of the string.
-        let lead_trim = cleaned.len() - cleaned.trim_start().len();
+        let keep_pre = !verbatim.is_empty() && !cleaned.trim().is_empty();
+        let lead_trim = cleaned.len()
+            - cleaned
+                .trim_start_matches(|c| is_trimmed(c, keep_pre))
+                .len();
         // Trailing trim: same on the other side.
-        let trail_start = cleaned.trim_end().len();
+        let trail_start = cleaned.trim_end_matches(|c| is_trimmed(c, keep_pre)).len();
 
         let pre_bytes = text.as_bytes();
         if lead_trim > 0 || trail_start < cleaned.len() {
@@ -2218,14 +2252,17 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
     // Optionally strip Wikipedia reference markers [1], [edit], [citation needed].
     // Do this before whitespace cleanup so the cleanup pass collapses any
     // resulting double spaces.
-    let cleaned = if options.strip_wiki_ref_markers {
+    let cleaned = if !verbatim.is_empty() {
+        cleanup_whitespace_preserving(&text, &verbatim, options.strip_wiki_ref_markers)
+    } else if options.strip_wiki_ref_markers {
         let text = strip_wiki_ref_markers(&text);
         cleanup_whitespace(&text).into_owned()
     } else {
         cleanup_whitespace(&text).into_owned()
     };
     // Trim leading/trailing whitespace (including newlines from block boundaries)
-    let trimmed = cleaned.trim();
+    let keep_pre = !verbatim.is_empty() && !cleaned.trim().is_empty();
+    let trimmed = cleaned.trim_matches(|c| is_trimmed(c, keep_pre));
     if trimmed.len() == cleaned.len() {
         cleaned
     } else {
@@ -2400,6 +2437,129 @@ fn remap_spans(spans: &mut Vec<Span>, map: &[u32], pre: &[u8], post: &[u8]) {
         span.output_end = new_end;
         true
     });
+}
+
+/// Whether the final trim of `strip_to_text` output removes `c`. When the
+/// output has `<pre>` content and is not all whitespace, only block newlines
+/// go, so indentation at the start or end of a `<pre>` block survives.
+fn is_trimmed(c: char, keep_pre: bool) -> bool {
+    if keep_pre {
+        c == '\n'
+    } else {
+        c.is_whitespace()
+    }
+}
+
+/// Record the `<pre>` content that starts at `start` and ends at the current
+/// end of `text`. HTML drops one newline directly after the `<pre>` tag.
+fn push_verbatim(verbatim: &mut Vec<(usize, usize)>, text: &str, start: usize) {
+    let rest = &text[start..];
+    let start = start + rest.len()
+        - rest
+            .strip_prefix("\r\n")
+            .or_else(|| rest.strip_prefix('\n'))
+            .unwrap_or(rest)
+            .len();
+    if start < text.len() {
+        verbatim.push((start, text.len()));
+    }
+}
+
+/// The separator a collapsed segment contributes after a `<pre>` range: a
+/// newline if its leading whitespace contains one, otherwise a space. Returns
+/// the separator and its byte offset in `segment`.
+fn leading_separator(segment: &str) -> Option<(char, usize)> {
+    let run = &segment[..segment.len() - segment.trim_start().len()];
+    if run.is_empty() {
+        return None;
+    }
+    Some(run.find('\n').map_or((' ', 0), |i| ('\n', i)))
+}
+
+/// Whether `out` still needs `sep` between it and the next segment.
+fn needs_separator(out: &str, sep: char) -> bool {
+    !out.is_empty() && !out.ends_with('\n') && (sep == '\n' || !out.ends_with(' '))
+}
+
+/// Characters kept inside `<pre>`: everything but control characters other
+/// than newline and tab, which the collapse pass drops everywhere else too.
+fn keep_in_pre(ch: char) -> bool {
+    !ch.is_control() || ch == '\n' || ch == '\t'
+}
+
+/// [`cleanup_whitespace`] for text containing `<pre>` content: whitespace
+/// outside the `verbatim` byte ranges collapses as usual, inside them it is
+/// kept. Wikipedia reference markers are stripped outside the ranges only.
+fn cleanup_whitespace_preserving(
+    text: &str,
+    verbatim: &[(usize, usize)],
+    strip_wiki: bool,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let collapse = |out: &mut String, segment: &str| {
+        if let Some((sep, _)) = leading_separator(segment) {
+            if needs_separator(out, sep) {
+                if sep == '\n' && out.ends_with(' ') {
+                    out.pop();
+                }
+                out.push(sep);
+            }
+        }
+        let segment = if strip_wiki {
+            strip_wiki_ref_markers(segment)
+        } else {
+            Cow::Borrowed(segment)
+        };
+        out.push_str(&cleanup_whitespace(&segment));
+    };
+    let mut pos = 0;
+    for &(start, end) in verbatim {
+        collapse(&mut out, &text[pos..start]);
+        out.extend(text[start..end].chars().filter(|&c| keep_in_pre(c)));
+        pos = end;
+    }
+    collapse(&mut out, &text[pos..]);
+    out
+}
+
+/// [`cleanup_whitespace_preserving`] with the position map of
+/// [`cleanup_whitespace_with_map`]; `<pre>` bytes map to themselves.
+fn cleanup_whitespace_preserving_with_map(
+    text: &str,
+    verbatim: &[(usize, usize)],
+) -> (String, Vec<u32>) {
+    let mut out = String::with_capacity(text.len());
+    let mut map: Vec<u32> = Vec::with_capacity(text.len());
+    let collapse = |out: &mut String, map: &mut Vec<u32>, from: usize, to: usize| {
+        let segment = &text[from..to];
+        if let Some((sep, at)) = leading_separator(segment) {
+            if needs_separator(out, sep) {
+                if sep == '\n' && out.ends_with(' ') {
+                    out.pop();
+                    map.pop();
+                }
+                out.push(sep);
+                map.push((from + at) as u32);
+            }
+        }
+        let (cleaned, segment_map) = cleanup_whitespace_with_map(segment);
+        out.push_str(&cleaned);
+        map.extend(segment_map.iter().map(|&j| j + from as u32));
+    };
+    let mut pos = 0;
+    for &(start, end) in verbatim {
+        collapse(&mut out, &mut map, pos, start);
+        for (offset, ch) in text[start..end].char_indices() {
+            if keep_in_pre(ch) {
+                out.push(ch);
+                map.extend(std::iter::repeat_n((start + offset) as u32, ch.len_utf8()));
+            }
+        }
+        pos = end;
+    }
+    collapse(&mut out, &mut map, pos, text.len());
+    debug_assert_eq!(out.len(), map.len());
+    (out, map)
 }
 
 /// Same semantics as [`cleanup_whitespace`], but also returns a `map`
