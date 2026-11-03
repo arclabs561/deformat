@@ -13,20 +13,29 @@ use std::path::Path;
 /// Returns [`Error::Io`] if the file cannot be read, [`Error::Parse`]
 /// if RTF parsing fails, or [`Error::EmptyResult`] if no text is extracted.
 pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
-    let content = std::fs::read_to_string(path)?;
-    extract_string(&content)
+    extract_bytes(&std::fs::read(path)?)
 }
 
 /// Extract text from RTF bytes in memory.
 ///
+/// RTF is 7-bit by specification, but writers emit raw 8-bit bytes in the
+/// document's code page. Input that is not UTF-8 is decoded with the
+/// `\ansicpg` code page (cp1252 when absent).
+///
 /// # Errors
 ///
-/// Returns [`Error::Parse`] if the input is not valid UTF-8 or RTF
-/// parsing fails, or [`Error::EmptyResult`] if no text is extracted.
+/// Returns [`Error::Parse`] if RTF parsing fails, or
+/// [`Error::EmptyResult`] if no text is extracted.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
-    let content = std::str::from_utf8(bytes)
-        .map_err(|e| Error::Parse(format!("RTF is not valid UTF-8: {e}")))?;
-    extract_string(content)
+    match std::str::from_utf8(bytes) {
+        Ok(content) => extract_string(content),
+        Err(_) => {
+            // Control words are ASCII, so a lossy view still finds \ansicpg.
+            let encoding = code_page_encoding(&String::from_utf8_lossy(bytes));
+            let (content, _) = encoding.decode_without_bom_handling(bytes);
+            extract_string(&content)
+        }
+    }
 }
 
 fn extract_string(content: &str) -> Result<Extracted, Error> {
@@ -174,6 +183,18 @@ fn code_page_encoding(content: &str) -> &'static encoding_rs::Encoding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_code_page_bytes_decode_with_ansicpg() {
+        // 0xE9 is é in cp1252 and й in cp1251.
+        let cp1252 = b"{\\rtf1\\ansi\\ansicpg1252 Caf\xe9 au lait.\\par}";
+        assert_eq!(extract_bytes(cp1252).unwrap().text, "Caf\u{e9} au lait.");
+        let cp1251 = b"{\\rtf1\\ansi\\ansicpg1251 \xe9\\par}";
+        assert_eq!(extract_bytes(cp1251).unwrap().text, "\u{439}");
+        // No \ansicpg: cp1252.
+        let none = b"{\\rtf1\\ansi Caf\xe9.\\par}";
+        assert_eq!(extract_bytes(none).unwrap().text, "Caf\u{e9}.");
+    }
 
     #[test]
     fn extract_basic_rtf() {

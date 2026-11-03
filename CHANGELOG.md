@@ -14,6 +14,11 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- RTF with raw 8-bit bytes decodes with the document's `\ansicpg` code
+  page (cp1252 when absent) instead of failing with "not valid UTF-8".
+  RTF is 7-bit by specification, but common writers emit raw code-page
+  bytes. `rtf::extract_file` reads bytes and follows the same path.
+
 - DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
   budget per archive and returns `Error::Parse` when it runs out. The
   64 MiB per-entry cap did not bound the total: 70 distinct 1 MiB EPUB
