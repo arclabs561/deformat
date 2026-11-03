@@ -179,7 +179,7 @@ fn pdf_line_segments_use_same_text_normalization_as_extract() {
 /// point must therefore have the larger y.
 #[cfg(feature = "pdf_oxide")]
 #[test]
-#[ignore = "open: PDF corners start bottom-left"]
+#[ignore = "open: PDF corners start bottom-left (fixed in #32)"]
 fn pdf_coordinates_first_point_is_top_left() {
     let segs =
         deformat::pdf_oxide::extract_bytes_to_segments_with_coords(&fixture("simple.pdf")).unwrap();
@@ -199,7 +199,7 @@ fn pdf_coordinates_first_point_is_top_left() {
 /// bbox is reported in absolute user space (72, 700), outside the layout.
 #[cfg(feature = "pdf_oxide")]
 #[test]
-#[ignore = "open: PDF points ignore a MediaBox offset"]
+#[ignore = "open: PDF points ignore a MediaBox offset (fixed in #32)"]
 fn pdf_coordinates_lie_inside_layout_for_offset_mediabox() {
     let segs =
         deformat::pdf_oxide::extract_bytes_to_segments_with_coords(&fixture("mediabox_offset.pdf"))
@@ -218,7 +218,7 @@ fn pdf_coordinates_lie_inside_layout_for_offset_mediabox() {
 /// /Rotate 90 on a 612x792 page: the page is displayed 792 wide, 612 high.
 #[cfg(feature = "pdf_oxide")]
 #[test]
-#[ignore = "open: PDF points ignore /Rotate"]
+#[ignore = "open: PDF points ignore /Rotate (fixed in #32)"]
 fn pdf_coordinates_account_for_page_rotation() {
     let segs = deformat::pdf_oxide::extract_bytes_to_segments_with_coords(&fixture("rotated.pdf"))
         .unwrap();
