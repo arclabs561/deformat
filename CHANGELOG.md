@@ -12,6 +12,15 @@ These entries identify source changes without assigning a package release.
 
 ## Unreleased
 
+### Security
+
+- Require `zip` 9.0.5, which fixes the five advisories reported against
+  `zip` below 9.0.5. deformat reads archive entries in memory with only the
+  `deflate` feature, so the extraction, legacy-decoder and AES advisories did
+  not reach its code; the dual-header parsing one could make it read different
+  entry contents than other ZIP readers. Entries whose stored name `zip` now
+  rejects as invalid are skipped like unreadable entries.
+
 ### Fixed
 
 - PDF segment coordinates (`pdf_oxide::extract_*_to_segments_with_coords`)
@@ -19,6 +28,9 @@ These entries identify source changes without assigning a package release.
   documented (they started bottom-left), are measured from the MediaBox
   origin rather than absolute user space, and follow the page's `/Rotate`,
   which also swaps `layout_width` and `layout_height` for 90 and 270.
+- `<!-->` and `<!--->` end at once as empty comments, as HTML5 tokenizes
+  them; the text after them was swallowed up to the next `-->`. The three
+  copies of the comment scanner are now one function.
 - HTML entity decoding follows HTML5 in three places. Only the 106 legacy
   names (`&amp`, `&copy`, `&eacute`, ...) may omit the semicolon; other
   names such as `&mdash` or `&hellip` without `;` now stay literal, as
@@ -55,6 +67,11 @@ These entries identify source changes without assigning a package release.
   `\ansicpg` code page (cp1252 by default): paragraphs ran together and
   `\'85` became U+0085 instead of `…`. The `rtf` feature now enables
   `encoding_rs`.
+
+### Documentation
+
+- The `docx` module no longer claims to read headers and footers. It reads
+  only `word/document.xml`, which holds the document body.
 
 ## 0.16.0 — 2026-10-30
 
