@@ -12,6 +12,12 @@ These entries identify source changes without assigning a package release.
 
 ## Unreleased
 
+### Changed
+
+- `html::strip_to_text` and the other plain-text HTML paths keep whitespace
+  inside `<pre>`, as the docs' "HTML rendering semantics" promised; one
+  newline directly after the opening tag is dropped, as in HTML. Code blocks
+  now keep their indentation and line breaks. Output elsewhere is unchanged.
 ### Security
 
 - Require `zip` 9.0.5, which fixes the five advisories reported against
