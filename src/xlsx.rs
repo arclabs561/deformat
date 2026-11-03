@@ -3,8 +3,10 @@
 //! Requires the `xlsx` feature. Extracts cell text from spreadsheets
 //! using the `calamine` crate. Supports XLSX, XLS, XLSB, and ODS formats.
 //!
-//! Cells are emitted row by row, tab-separated, one row per line.
-//! Empty cells are skipped.
+//! Cells are emitted row by row, tab-separated, one row per line. Blank
+//! cells inside a row stay as empty fields, so values keep their columns;
+//! trailing blanks and empty rows are dropped. Date cells are written as
+//! ISO 8601.
 
 use crate::{Error, Extracted, Extractor, Format};
 use calamine::Reader;
@@ -41,6 +43,22 @@ pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
     extract_workbook(&mut workbook)
 }
 
+/// Text of one cell. Date cells become ISO 8601 (`2024-01-01`, with a time
+/// when one is set) instead of the raw serial number the spreadsheet stores.
+fn cell_text(cell: &calamine::Data) -> String {
+    match cell {
+        calamine::Data::DateTime(dt) if dt.is_datetime() => {
+            let (y, mo, d, h, mi, s, ms) = dt.to_ymd_hms_milli();
+            match (h, mi, s, ms) {
+                (0, 0, 0, 0) => format!("{y:04}-{mo:02}-{d:02}"),
+                (_, _, _, 0) => format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}"),
+                _ => format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{ms:03}"),
+            }
+        }
+        other => other.to_string(),
+    }
+}
+
 fn extract_workbook<RS: std::io::Read + std::io::Seek>(
     workbook: &mut calamine::Sheets<RS>,
 ) -> Result<Extracted, Error> {
@@ -54,17 +72,12 @@ fn extract_workbook<RS: std::io::Read + std::io::Seek>(
 
         let mut sheet_text = String::new();
         for row in range.rows() {
-            let cells: Vec<String> = row
-                .iter()
-                .filter_map(|cell| {
-                    let s = cell.to_string();
-                    if s.is_empty() {
-                        None
-                    } else {
-                        Some(s)
-                    }
-                })
-                .collect();
+            // Keep blank cells so each value stays under its column; drop
+            // only the trailing ones so rows don't end in tabs.
+            let mut cells: Vec<String> = row.iter().map(cell_text).collect();
+            while cells.last().is_some_and(String::is_empty) {
+                cells.pop();
+            }
             if !cells.is_empty() {
                 if !sheet_text.is_empty() {
                     sheet_text.push('\n');
@@ -102,6 +115,27 @@ fn extract_workbook<RS: std::io::Read + std::io::Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use calamine::{Data, ExcelDateTime, ExcelDateTimeType};
+
+    fn date(serial: f64, is_1904: bool) -> Data {
+        Data::DateTime(ExcelDateTime::new(
+            serial,
+            ExcelDateTimeType::DateTime,
+            is_1904,
+        ))
+    }
+
+    #[test]
+    fn date_cells_are_iso_8601() {
+        // Reference serials from Python's datetime: 2024-01-01 is 45292 days
+        // after 1899-12-30 (1900 system) and 43830 after 1904-01-01.
+        assert_eq!(cell_text(&date(45292.0, false)), "2024-01-01");
+        assert_eq!(cell_text(&date(43830.0, true)), "2024-01-01");
+        assert_eq!(cell_text(&date(45292.5, false)), "2024-01-01T12:00:00");
+        // Non-date cells keep their usual text.
+        assert_eq!(cell_text(&Data::Float(45292.0)), "45292");
+        assert_eq!(cell_text(&Data::Empty), "");
+    }
 
     #[test]
     fn extract_xlsx_invalid_bytes() {

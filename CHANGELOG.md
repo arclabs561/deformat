@@ -29,6 +29,13 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- XLSX rows keep blank cells as empty tab-separated fields, so values stay
+  under their column headers; only trailing blanks and empty rows are
+  dropped. Previously a blank in the middle of a row shifted every later
+  value one column left.
+- XLSX date cells are written as ISO 8601 (`2024-01-01`, with a time when
+  one is set) instead of the stored serial number (`45292`), for both the
+  1900 and 1904 date systems.
 - RTF with raw 8-bit bytes decodes with the document's `\ansicpg` code
   page (cp1252 when absent) instead of failing with "not valid UTF-8".
   RTF is 7-bit by specification, but common writers emit raw code-page
