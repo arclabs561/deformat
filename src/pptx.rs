@@ -47,10 +47,15 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     let mut slide_entries: Vec<(u32, String)> = Vec::new();
     let mut notes_entries: Vec<(u32, String)> = Vec::new();
     for i in 0..archive.len() {
-        let Ok(entry) = archive.by_index(i) else {
+        // Entries that cannot be opened, or whose stored name zip rejects
+        // as invalid, are skipped.
+        let Some(name) = archive
+            .by_index(i)
+            .ok()
+            .and_then(|entry| entry.name().ok().map(|n| n.to_string()))
+        else {
             continue;
         };
-        let name = entry.name().to_string();
         if let Some(rest) = name.strip_prefix("ppt/slides/slide") {
             if let Some(num) = rest.strip_suffix(".xml") {
                 if let Ok(n) = num.parse::<u32>() {

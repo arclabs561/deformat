@@ -12,6 +12,15 @@ These entries identify source changes without assigning a package release.
 
 ## Unreleased
 
+### Security
+
+- Require `zip` 9.0.5, which fixes the five advisories reported against
+  `zip` below 9.0.5. deformat reads archive entries in memory with only the
+  `deflate` feature, so the extraction, legacy-decoder and AES advisories did
+  not reach its code; the dual-header parsing one could make it read different
+  entry contents than other ZIP readers. Entries whose stored name `zip` now
+  rejects as invalid are skipped like unreadable entries.
+
 ### Fixed
 
 - `<!-->` and `<!--->` end at once as empty comments, as HTML5 tokenizes
