@@ -2237,3 +2237,13 @@ fn pre_keeps_leading_indentation_at_document_start() {
 fn whitespace_only_pre_output_is_empty() {
     assert_eq!(strip_to_text("<pre /><p> </p>"), "");
 }
+
+#[test]
+fn whitespace_only_pre_output_with_spans_is_empty() {
+    // A <pre> holding only non-breaking space is all whitespace once
+    // decoded, so the trimmed output is empty in both paths.
+    let html = "<pre />&nbsp;";
+    let (text, _spans) = strip_to_text_with_spans(html);
+    assert_eq!(text, "");
+    assert_eq!(strip_to_text(html), "");
+}
