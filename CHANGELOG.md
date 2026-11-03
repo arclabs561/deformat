@@ -29,6 +29,8 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- EPUB titles decode character references, as the chapter text already
+  did: `Pride &amp; Prejudice` in `dc:title` is now "Pride & Prejudice".
 - PDF segment coordinates (`pdf_oxide::extract_*_to_segments_with_coords`)
   are in the displayed page frame. Points start at the top-left corner as
   documented (they started bottom-left), are measured from the MediaBox
