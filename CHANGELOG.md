@@ -14,6 +14,11 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- `page_type` reads `og:type` and the canonical URL from the tag that
+  declares them. It searched a fixed window of text around the keyword,
+  so `content=` before `property=` could pick up the next tag's content,
+  and the canonical href could come from a neighbouring `<link>`.
+
 - DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
   budget per archive and returns `Error::Parse` when it runs out. The
   64 MiB per-entry cap did not bound the total: 70 distinct 1 MiB EPUB
