@@ -14,6 +14,10 @@ These entries identify source changes without assigning a package release.
 
 ### Fixed
 
+- `<!-->` and `<!--->` end at once as empty comments, as HTML5 tokenizes
+  them; the text after them was swallowed up to the next `-->`. The three
+  copies of the comment scanner are now one function.
+
 - DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
   budget per archive and returns `Error::Parse` when it runs out. The
   64 MiB per-entry cap did not bound the total: 70 distinct 1 MiB EPUB
