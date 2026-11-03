@@ -137,7 +137,6 @@ fn epub_dotdot_href_is_resolved() {
 /// dc:title is XML text; epub.rs:203-212 returns it without entity decoding.
 #[cfg(feature = "epub")]
 #[test]
-#[ignore = "open: EPUB dc:title is not entity-decoded"]
 fn epub_title_entities_are_decoded() {
     let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Pride &amp; Prejudice</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
     let bytes = epub(
@@ -225,7 +224,6 @@ fn sheet(rows: &str) -> String {
 /// to the "middle" column.
 #[cfg(feature = "xlsx")]
 #[test]
-#[ignore = "open: blank XLSX cells shift later columns"]
 fn xlsx_blank_cell_keeps_column_position() {
     let rows = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>first</t></is></c><c r="B1" t="inlineStr"><is><t>middle</t></is></c><c r="C1" t="inlineStr"><is><t>last</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Ann</t></is></c><c r="C2" t="inlineStr"><is><t>Lee</t></is></c></row>"#;
     let text = deformat::xlsx::extract_bytes(&xlsx(&sheet(rows), None))
@@ -242,7 +240,6 @@ fn xlsx_blank_cell_keeps_column_position() {
 /// A date-formatted cell (numFmtId 14) is emitted as the raw serial number.
 #[cfg(feature = "xlsx")]
 #[test]
-#[ignore = "open: XLSX dates come out as serial numbers"]
 fn xlsx_date_cell_is_not_a_bare_serial_number() {
     let rows = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>due</t></is></c><c r="B1" s="1"><v>45292</v></c></row>"#;
     let text = deformat::xlsx::extract_bytes(&xlsx(&sheet(rows), None))
@@ -352,7 +349,6 @@ fn rtf_par_and_hex_escapes() {
 /// rejects any non-UTF-8 input outright instead of decoding per \ansicpg.
 #[cfg(feature = "rtf")]
 #[test]
-#[ignore = "open: raw 8-bit RTF bytes are rejected"]
 fn rtf_raw_cp1252_byte_is_not_a_parse_error() {
     let rtf = b"{\\rtf1\\ansi\\ansicpg1252 Caf\xe9 au lait.\\par}";
     let out = deformat::rtf::extract_bytes(rtf);

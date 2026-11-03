@@ -179,7 +179,6 @@ fn pdf_line_segments_use_same_text_normalization_as_extract() {
 /// point must therefore have the larger y.
 #[cfg(feature = "pdf_oxide")]
 #[test]
-#[ignore = "open: PDF corners start bottom-left (fixed in #32)"]
 fn pdf_coordinates_first_point_is_top_left() {
     let segs =
         deformat::pdf_oxide::extract_bytes_to_segments_with_coords(&fixture("simple.pdf")).unwrap();
@@ -199,7 +198,6 @@ fn pdf_coordinates_first_point_is_top_left() {
 /// bbox is reported in absolute user space (72, 700), outside the layout.
 #[cfg(feature = "pdf_oxide")]
 #[test]
-#[ignore = "open: PDF points ignore a MediaBox offset (fixed in #32)"]
 fn pdf_coordinates_lie_inside_layout_for_offset_mediabox() {
     let segs =
         deformat::pdf_oxide::extract_bytes_to_segments_with_coords(&fixture("mediabox_offset.pdf"))
@@ -218,7 +216,6 @@ fn pdf_coordinates_lie_inside_layout_for_offset_mediabox() {
 /// /Rotate 90 on a 612x792 page: the page is displayed 792 wide, 612 high.
 #[cfg(feature = "pdf_oxide")]
 #[test]
-#[ignore = "open: PDF points ignore /Rotate (fixed in #32)"]
 fn pdf_coordinates_account_for_page_rotation() {
     let segs = deformat::pdf_oxide::extract_bytes_to_segments_with_coords(&fixture("rotated.pdf"))
         .unwrap();
@@ -235,7 +232,6 @@ fn pdf_coordinates_account_for_page_rotation() {
 /// og:type with content= before property= (documented: "Match either order"),
 /// followed by another meta: the forward window reads the *next* tag's content.
 #[test]
-#[ignore = "open: page_type reads the wrong meta when content= precedes property="]
 fn page_type_og_type_content_before_property() {
     use deformat::page_type::{detect_page_type, PageType};
     let html = r#"<html><head><meta content="product" property="og:type"><meta content="Blue Widget" property="og:title"></head><body><p>x</p></body></html>"#;
@@ -245,7 +241,6 @@ fn page_type_og_type_content_before_property() {
 /// The canonical href is read from the first href= in a 200-byte window that
 /// starts before rel="canonical", i.e. from the preceding <link>.
 #[test]
-#[ignore = "open: page_type canonical href taken from the wrong link"]
 fn page_type_canonical_href_comes_from_canonical_link() {
     use deformat::page_type::{detect_page_type, PageType};
     let html = r#"<html><head><link rel="alternate" hreflang="de" href="https://example.com/de/forum/thread-9"><link rel="canonical" href="https://example.com/blog/2026/05/post"></head><body><p>x</p></body></html>"#;

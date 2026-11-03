@@ -1,5 +1,5 @@
 //! Regression tests for reported HTML, entity and charset defects. Each
-//! asserts the expected behavior; open ones are #[ignore = "open: ..."].
+//! asserts the expected behavior.
 
 use deformat::html::{decode_entities, strip_to_text};
 
@@ -77,7 +77,6 @@ fn xml_cdata_text_is_kept() {
 /// HTML5 tokenizer: `<!-->` is an (abruptly closed) empty comment, so the
 /// following text is visible.
 #[test]
-#[ignore = "open: <!--> swallows following text (fixed in #22)"]
 fn abrupt_empty_comment_does_not_swallow_text() {
     assert_eq!(strip_to_text("<p><!-->visible<!-- c --></p>"), "visible");
 }
@@ -85,7 +84,6 @@ fn abrupt_empty_comment_does_not_swallow_text() {
 /// `&#+65;` is not a numeric character reference (digits only);
 /// `str::parse::<u32>` accepts a leading '+'.
 #[test]
-#[ignore = "open: signed numeric references decode (fixed in #21)"]
 fn numeric_reference_rejects_plus_sign() {
     assert_eq!(decode_entities("&#+65;"), "&#+65;");
 }
@@ -93,7 +91,6 @@ fn numeric_reference_rejects_plus_sign() {
 /// Uppercase legacy references (&AMP; &LT; &GT; &QUOT; &COPY; &REG;) are
 /// part of the HTML5 named character reference table.
 #[test]
-#[ignore = "open: uppercase legacy entities missing (fixed in #21)"]
 fn uppercase_legacy_entities_decode() {
     assert_eq!(
         decode_entities("&AMP;&LT;&GT;&QUOT;&COPY;&REG;"),
@@ -104,7 +101,6 @@ fn uppercase_legacy_entities_decode() {
 /// Only the legacy subset (amp, lt, copy, eacute, ...) may omit the
 /// semicolon; `&Beta` / `&mdash` without `;` are literal text in browsers.
 #[test]
-#[ignore = "open: non-legacy entities decode without ';' (fixed in #21)"]
 fn non_legacy_entity_without_semicolon_is_literal() {
     assert_eq!(decode_entities("Alpha&Beta test"), "Alpha&Beta test");
     assert_eq!(decode_entities("a&mdash b"), "a&mdash b");
@@ -113,7 +109,6 @@ fn non_legacy_entity_without_semicolon_is_literal() {
 /// strip_to_text documents "Whitespace collapsing (HTML rendering
 /// semantics)", but <pre> content is collapsed too.
 #[test]
-#[ignore = "open: <pre> whitespace is collapsed (fixed in #33)"]
 fn pre_preserves_whitespace() {
     let t = strip_to_text("<pre>fn main() {\n    let x  =  1;\n}</pre>");
     assert_eq!(t, "fn main() {\n    let x  =  1;\n}");
