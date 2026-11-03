@@ -1,4 +1,5 @@
-//! Bug-hunt regression tests (round 3). Each asserts the expected behavior.
+//! Regression tests for reported HTML, entity and charset defects. Each
+//! asserts the expected behavior; open ones are #[ignore = "open: ..."].
 
 use deformat::html::{decode_entities, strip_to_text};
 

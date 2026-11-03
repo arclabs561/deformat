@@ -1,5 +1,5 @@
-//! Bug-hunt regression tests (round 4): ZIP-based formats and detection.
-//! Run with `cargo test --features docx,epub,pptx,xlsx --test bughunt4`.
+//! Regression tests for reported defects in ZIP-based formats and detection.
+//! Run with `cargo test --features docx,epub,pptx,xlsx --test regressions_archives`.
 #![allow(dead_code)]
 
 #[cfg(any(feature = "docx", feature = "epub", feature = "pptx", feature = "xlsx"))]
