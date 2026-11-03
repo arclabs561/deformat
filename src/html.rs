@@ -2200,8 +2200,12 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
             - cleaned
                 .trim_start_matches(|c| is_trimmed(c, keep_pre))
                 .len();
-        // Trailing trim: same on the other side.
-        let trail_start = cleaned.trim_end_matches(|c| is_trimmed(c, keep_pre)).len();
+        // Trailing trim: same on the other side. All-whitespace output (only
+        // possible from <pre> content) trims from both ends; keep the range empty.
+        let trail_start = cleaned
+            .trim_end_matches(|c| is_trimmed(c, keep_pre))
+            .len()
+            .max(lead_trim);
 
         let pre_bytes = text.as_bytes();
         if lead_trim > 0 || trail_start < cleaned.len() {
