@@ -12,6 +12,8 @@ These entries identify source changes without assigning a package release.
 
 ## Unreleased
 
+## 0.17.0 - 2026-11-03
+
 ### Changed
 
 - `html::strip_to_text` and the other plain-text HTML paths keep whitespace
