@@ -1,0 +1,32 @@
+name: Compare RTF text
+on:
+  push:
+    branches: ['experiment/rtf-12-output']
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 3
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
+      - name: Run eight fixtures against three adapters
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/probe/src"
+          printf '[package]\nname="rtf-compare"\nversion="0.1.0"\nedition="2021"\n[dependencies]\ndeformat={path="%s",features=["rtf"]}\n' "$PWD" > "$RUNNER_TEMP/probe/Cargo.toml"
+          cp .github/rtf-probe.rs "$RUNNER_TEMP/probe/src/main.rs"
+          for mode in released bump-only native; do
+            echo "RTF_MODE $mode"
+            case "$mode" in
+              released) git restore --source=a0a0d5da2f1ce6ddd5c8ab4a8edecc526c874b48 -- src/rtf.rs Cargo.toml ;;
+              bump-only) sed -i '/^rtf-parser-tt = /s/"0.5"/"0.6"/' Cargo.toml ;;
+              native) git restore --source=HEAD -- src/rtf.rs Cargo.toml ;;
+            esac
+            cargo run --quiet --manifest-path "$RUNNER_TEMP/probe/Cargo.toml"
+          done
