@@ -809,12 +809,7 @@ fn keep_segment(seg: &Segment, min_chars: usize) -> bool {
 
     match seg {
         Segment::ListItem(_) => has_sentence || text.contains(' '),
-        _ => {
-            if text.chars().count() < min_chars && !has_sentence {
-                return false;
-            }
-            true
-        }
+        _ => has_sentence || text.chars().count() >= min_chars,
     }
 }
 
