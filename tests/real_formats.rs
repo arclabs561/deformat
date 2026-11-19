@@ -220,17 +220,17 @@ mod rtf_tests {
     }
 
     #[test]
-    fn extract_unicode_rtf_does_not_panic() {
-        // Note: rtf-parser-tt does not fully decode `\uN?` escapes --
-        // the unicode chars come through as the ANSI fallback. Not
-        // ideal, but this test just pins the current behavior so a
-        // future upstream fix surfaces as a test update rather than a
-        // silent regression.
+    fn extract_unicode_rtf_skips_ansi_fallback() {
         let result = deformat::rtf::extract_file(&fixtures_dir().join("unicode.rtf")).unwrap();
-        assert_eq!(result.format, deformat::Format::Rtf);
-        assert!(!result.text.is_empty(), "extracted non-empty");
-        // At least the ASCII parts survive.
-        assert!(result.text.contains("hello world"));
+        assert!(result.text.contains("Café in Łódź"), "{:?}", result.text);
+    }
+
+    #[test]
+    fn extract_raw_windows_1251_from_file_and_bytes() {
+        let path = fixtures_dir().join("windows-1251.rtf");
+        assert_eq!(deformat::rtf::extract_file(&path).unwrap().text, "й");
+        let bytes = include_bytes!("fixtures/synthetic/windows-1251.rtf");
+        assert_eq!(deformat::extract_from_bytes(bytes).unwrap().text, "й");
     }
 }
 

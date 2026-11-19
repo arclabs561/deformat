@@ -123,4 +123,5 @@ documentation F1 (0.911 to 0.904) and raises every other page type.
 
 ## License
 
-MIT OR Apache-2.0
+MIT OR Apache-2.0. The bundled RTF parser is distributed under the
+[MIT license](LICENSE-rtf-parser-tt).

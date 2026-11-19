@@ -36,7 +36,7 @@
 //! | `pdf_oxide` | `pdf_oxide` | PDF text extraction with coordinate-aware segment APIs |
 //! | `docx` | `zip` | DOCX text extraction from file paths or bytes |
 //! | `epub` | `zip` | EPUB text extraction with reading-order chapters |
-//! | `rtf` | `rtf-parser-tt` | RTF text extraction |
+//! | `rtf` | `encoding_rs` | RTF text extraction with the bundled `rtf-parser-tt` parser |
 //! | `xlsx` | `calamine` | XLSX/XLS/ODS spreadsheet text extraction |
 //! | `pptx` | `zip` | PPTX presentation text extraction |
 //! | `whichlang` | `whichlang` | Natural-language detection via [`html::detect_language`] |

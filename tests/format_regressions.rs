@@ -302,3 +302,151 @@ fn rtf_unicode_fallback_is_not_duplicated() {
     let text = deformat::rtf::extract_bytes(rtf.as_bytes()).unwrap().text;
     assert_eq!(text, "Café au lait.");
 }
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_font_charset_overrides_document_code_page() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252{\fonttbl{\f0\fcharset204 Cyrillic;}}\f0\'e9}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "й");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_font_switch_is_scoped_to_its_group() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252{\fonttbl{\f0\fcharset0 Latin;}{\f1\fcharset204 Cyrillic;}}\f0\'e9{\f1\'e9}\'e9}";
+    assert_eq!(deformat::extract_from_bytes(rtf).unwrap().text, "éйé");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_font_multibyte_escapes_decode_together() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252{\fonttbl{\f0\fcharset128 Japanese;}}\f0\'82\'a0}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "あ");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_unicode_fallback_length_is_scoped_to_its_group() {
+    let rtf = br"{\rtf1\ansi\uc2\u233??{\uc0\u1049}\u233??Z}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éЙéZ");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_section_and_page_breaks_separate_text() {
+    let rtf = br"{\rtf1\ansi First\sect Second\page Third}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(rtf).unwrap().text,
+        "First\nSecond\nThird"
+    );
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_headers_and_footers_follow_the_body() {
+    let rtf = br"{\rtf1\ansi{\header Head}{\footer Foot}Body}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(rtf).unwrap().text,
+        "Body\nHead\nFoot"
+    );
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_table_cells_are_separate_fields() {
+    let rtf = br"{\rtf1\ansi\trowd\cellx1000\cellx2000\intbl Left\cell Right\cell\row}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(rtf).unwrap().text,
+        "Left\tRight"
+    );
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_visible_body_precedes_numbered_footnotes() {
+    let rtf = br"{\rtf1\ansi Start{\v  hidden} body{\super\chftn}{\footnote\pard\plain{\super\chftn} Note.} end.\par}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(rtf).unwrap().text,
+        "Start body1 end.\n1 Note."
+    );
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_koi8_r_raw_and_escaped_bytes() {
+    let rtf = b"{\\rtf1\\ansi\\ansicpg20866 \xc1\\'c1}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "аа");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_iso_8859_2_raw_and_escaped_bytes() {
+    let rtf = b"{\\rtf1\\ansi\\ansicpg28592 \xa1\\'a1}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "ĄĄ");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_plain_restores_the_declared_default_font() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252\deff1{\fonttbl{\f0\fcharset0 Latin;}{\f1\fcharset204 Cyrillic;}}\f1\'e9\f0\'e9\plain\'e9}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "йéй");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_unicode_fallback_can_be_a_control_word() {
+    let rtf = br"{\rtf1\ansi\uc1\u8212\emdash X}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "—X");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_unknown_code_page_keeps_the_windows_1252_fallback() {
+    let rtf = b"{\\rtf1\\ansi\\ansicpg777 \x80\\'80}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "€€");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_font_code_page_is_scoped_to_its_group() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252{\fonttbl{\f0 Latin;}{\f1\cpg1251 Cyrillic;}}\f0\'e9{\f1\'e9}\'e9}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éйé");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_binary_fallback_consumes_one_character() {
+    // Both bytes belong to the fallback, including the closing brace.
+    let rtf = b"{\\rtf1\\ansi\\uc1\\u233\\bin2 }\xffX}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éX");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_raw_bytes_and_escapes_can_use_different_code_pages() {
+    let rtf = b"{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f1\\fcharset204 Cyrillic;}}\\f1 \xe9\\'e9}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éй");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_unicode_surrogate_pair_preserves_the_following_letter() {
+    let rtf = br"{\rtf1\ansi A\u-10179\u-8704?Z}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "A😀Z");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_bin_prefix_inside_plain_text_preserves_the_following_bytes() {
+    let latin = b"{\\rtf1\\ansi\\ansicpg1252 A\\\\bin9 \xe9Z}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(latin).unwrap().text,
+        "A\\bin9 éZ"
+    );
+    // 0x5c is the second byte of 表 in Shift-JIS.
+    let japanese = b"{\\rtf1\\ansi\\ansicpg932 \x95\x5cbin9 Z\\bin3 abc!}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(japanese).unwrap().text,
+        "表bin9 Z!"
+    );
+}
