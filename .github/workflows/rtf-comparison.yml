@@ -37,7 +37,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          ref: aa2c120e3d709ebf68a24ac7c5da03b46ac3bb33
+          ref: b81a455ffb1a5d6fd933a8bc6bb380f23cff2855
+          fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
@@ -48,3 +49,14 @@ jobs:
         run: cargo test --all-features --all-targets
       - name: Doc tests
         run: cargo test --all-features --doc
+      - name: Check that the old adapter fails the font regressions with 0.6
+        run: |
+          git restore --source=a0a0d5da2f1ce6ddd5c8ab4a8edecc526c874b48 -- src/rtf.rs
+          if cargo test --features rtf,encoding_rs --test format_regressions rtf_font_ > "$RUNNER_TEMP/control.log" 2>&1; then
+            cat "$RUNNER_TEMP/control.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/control.log"
+          for name in charset_overrides_document_code_page switch_is_scoped_to_its_group multibyte_escapes_decode_together; do
+            grep -F "test rtf_font_${name} ... FAILED" "$RUNNER_TEMP/control.log"
+          done
