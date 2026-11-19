@@ -30,3 +30,21 @@ jobs:
             esac
             cargo run --quiet --manifest-path "$RUNNER_TEMP/probe/Cargo.toml"
           done
+
+  suite:
+    name: Verify draft package and regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: aa2c120e3d709ebf68a24ac7c5da03b46ac3bb33
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
+      - name: RTF regression tests
+        run: cargo test --features rtf --test format_regressions rtf_
+      - name: All features and targets
+        run: cargo test --all-features --all-targets
+      - name: Doc tests
+        run: cargo test --all-features --doc
