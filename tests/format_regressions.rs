@@ -384,3 +384,24 @@ fn rtf_iso_8859_2_raw_and_escaped_bytes() {
     let rtf = b"{\\rtf1\\ansi\\ansicpg28592 \xa1\\'a1}";
     assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "ĄĄ");
 }
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_plain_restores_the_declared_default_font() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252\deff1{\fonttbl{\f0\fcharset0 Latin;}{\f1\fcharset204 Cyrillic;}}\f1\'e9\f0\'e9\plain\'e9}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "йéй");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_unicode_fallback_can_be_a_control_word() {
+    let rtf = br"{\rtf1\ansi\uc1\u8212\emdash X}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "—X");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_unknown_code_page_keeps_the_windows_1252_fallback() {
+    let rtf = b"{\\rtf1\\ansi\\ansicpg777 \x80\\'80}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "€€");
+}
