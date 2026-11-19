@@ -1,0 +1,327 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index bbd3993..8582161 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file. The format is b
+ [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
+ [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+ 
++## Unreleased
++
++- A control word, control symbol or binary run after `\uN` consumes one fallback character.
++- `\plain` restores the document's default font. Font-table `\cpgN` overrides `\fcharsetN`.
++- The default feature set decodes KOI8-R, KOI8-U and ISO-8859 code pages for raw bytes and hex escapes.
++  Unknown code pages use Windows-1252.
++
+ ## [0.6.0] - 2026-10-21
+ 
+ ### Added
+diff --git a/README.md b/README.md
+index 1cdfd32..d9dbb14 100644
+--- a/README.md
++++ b/README.md
+@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+ 
+ | Feature | Default | Description |
+ |---------|---------|-------------|
+-| `encoding_rs` | Enabled | Decodes the Japanese (932), Simplified Chinese (936), Korean (949) and Traditional Chinese (950) code pages through [encoding_rs](https://crates.io/crates/encoding_rs). Without it, these bytes are read as Latin-1. |
++| `encoding_rs` | Enabled | Decodes KOI8-R/U, ISO-8859, Japanese (932), Simplified Chinese (936), Korean (949) and Traditional Chinese (950) through [encoding_rs](https://crates.io/crates/encoding_rs). Without it, the four East Asian code pages retain their Latin-1 fallback. Unrecognized code pages use Windows-1252. |
+ | `jsbindings` | Disabled | WebAssembly bindings through `wasm-bindgen`. |
+ 
+ To build without `encoding_rs`:
+diff --git a/src/codepages.rs b/src/codepages.rs
+index 99326b3..ddc9024 100644
+--- a/src/codepages.rs
++++ b/src/codepages.rs
+@@ -102,7 +102,7 @@ const CP1251: [u16; 128] = [
+     0x0448, 0x0449, 0x044A, 0x044B, 0x044C, 0x044D, 0x044E, 0x044F,
+ ];
+ 
+-const CP1252: [u16; 128] = [
++pub(crate) const CP1252: [u16; 128] = [
+     0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039,
+     0x0152, 0xFFFD, 0x017D, 0xFFFD, 0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+     0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178, 0x00A0, 0x00A1, 0x00A2, 0x00A3,
+diff --git a/src/encoding.rs b/src/encoding.rs
+index c1a7812..033dfb4 100644
+--- a/src/encoding.rs
++++ b/src/encoding.rs
+@@ -5,6 +5,9 @@ pub(crate) const DEFAULT_CODE_PAGE: u16 = 1252;
+ pub(crate) const SYMBOL_CODE_PAGE: u16 = 42;
+ 
+ pub(crate) fn code_page_for_font(font: &Font) -> Option<u16> {
++    if let Some(code_page) = font.code_page {
++        return Some(code_page);
++    }
+     if font.character_set == 2 && font.name.eq_ignore_ascii_case("Symbol") {
+         return Some(SYMBOL_CODE_PAGE);
+     }
+@@ -50,12 +53,15 @@ pub(crate) fn code_page_for_document(character_set: &CharacterSet) -> u16 {
+ }
+ 
+ #[cfg(feature = "encoding_rs")]
+-fn multi_byte_encoding(code_page: u16) -> Option<&'static encoding_rs::Encoding> {
++fn external_encoding(code_page: u16) -> Option<&'static encoding_rs::Encoding> {
+     match code_page {
+         932 => Some(encoding_rs::SHIFT_JIS),
+         936 => Some(encoding_rs::GBK),
+         949 => Some(encoding_rs::EUC_KR),
+         950 => Some(encoding_rs::BIG5),
++        20866 => Some(encoding_rs::KOI8_R),
++        21866 => Some(encoding_rs::KOI8_U),
++        28591..=28606 => encoding_rs::Encoding::for_label(format!("iso-8859-{}", code_page - 28590).as_bytes()),
+         _ => None,
+     }
+ }
+@@ -85,7 +91,7 @@ pub(crate) fn decode_into(code_page: u16, bytes: &[u8], out: &mut String) {
+         return;
+     }
+     #[cfg(feature = "encoding_rs")]
+-    if let Some(encoding) = multi_byte_encoding(code_page) {
++    if let Some(encoding) = external_encoding(code_page) {
+         out.push_str(&encoding.decode_without_bom_handling(bytes).0);
+         return;
+     }
+@@ -93,13 +99,27 @@ pub(crate) fn decode_into(code_page: u16, bytes: &[u8], out: &mut String) {
+         out.extend(bytes.iter().map(|&byte| symbol_font_char(byte).unwrap_or(byte as char)));
+         return;
+     }
+-    let table = single_byte_table(code_page);
+-    for &byte in bytes {
+-        match (byte, table) {
+-            (0..=0x7F, _) => out.push(byte as char),
+-            (_, Some(table)) => out.push(char::from_u32(table[(byte - 0x80) as usize] as u32).unwrap_or('\u{FFFD}')),
+-            (_, None) => out.push(byte as char),
++    #[cfg(not(feature = "encoding_rs"))]
++    if matches!(code_page, 932 | 936 | 949 | 950) {
++        out.extend(bytes.iter().map(|&byte| char::from(byte)));
++        return;
++    }
++    let table = match single_byte_table(code_page) {
++        Some(table) => table,
++        #[cfg(feature = "encoding_rs")]
++        None => {
++            out.push_str(&encoding_rs::WINDOWS_1252.decode_without_bom_handling(bytes).0);
++            return;
+         }
++        #[cfg(not(feature = "encoding_rs"))]
++        None => &crate::codepages::CP1252,
++    };
++    for &byte in bytes {
++        out.push(if byte.is_ascii() {
++            char::from(byte)
++        } else {
++            char::from_u32(u32::from(table[usize::from(byte - 0x80)])).unwrap_or('\u{FFFD}')
++        });
+     }
+ }
+ 
+diff --git a/src/header.rs b/src/header.rs
+index 1c98673..c3843aa 100644
+--- a/src/header.rs
++++ b/src/header.rs
+@@ -51,6 +51,9 @@ pub struct RtfHeader {
+ pub struct Font {
+     pub name: String,
+     pub character_set: u8,
++    /// An explicit font code page overrides its character set.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub code_page: Option<u16>,
+     pub font_family: FontFamily,
+ }
+ 
+diff --git a/src/lexer.rs b/src/lexer.rs
+index ea6a69e..c30dfc1 100644
+--- a/src/lexer.rs
++++ b/src/lexer.rs
+@@ -127,7 +127,13 @@ impl Lexer {
+                 }));
+                 Ok(start + 2)
+             }
+-            _ => Ok(start + 1 + src[start + 1..].chars().next().map_or(1, char::len_utf8)),
++            _ => {
++                let end = start + 1 + src[start + 1..].chars().next().map_or(1, char::len_utf8);
++                if next.is_ascii() {
++                    tokens.push(symbol(ControlWord::Unknown(&src[start..end])));
++                }
++                Ok(end)
++            }
+         }
+     }
+ 
+diff --git a/src/parser.rs b/src/parser.rs
+index 7476481..6bafa8c 100644
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -196,6 +196,7 @@ struct ParserState {
+     pub painter: Painter,
+     pub paragraph: Paragraph,
+     pub unicode_ignore_count: i32,
++    default_font: FontRef,
+     destination: Destination,
+     upr_resume: Option<Destination>,
+ }
+@@ -206,6 +207,7 @@ impl Default for ParserState {
+             painter: Default::default(),
+             paragraph: Default::default(),
+             unicode_ignore_count: 1,
++            default_font: 0,
+             destination: Destination::Body,
+             upr_resume: None,
+         }
+@@ -250,7 +252,10 @@ impl ParserState {
+         match control_word {
+             ControlWord::ColorNumber        => painter.color_ref = property.get_value_as::<ColorRef>()?,
+             ControlWord::FontNumber         => painter.font_ref = property.get_value_as::<FontRef>()?,
+-            ControlWord::DefaultFont        => painter.font_ref = property.get_value_as::<FontRef>()?,
++            ControlWord::DefaultFont        => {
++                self.default_font = property.get_value_as::<FontRef>()?;
++                painter.font_ref = self.default_font;
++            }
+             ControlWord::FontSize           => painter.font_size = property.get_value_as::<u16>()?,
+             ControlWord::Bold               => painter.bold = property.as_bool(),
+             ControlWord::Italic             => painter.italic = property.as_bool(),
+@@ -262,7 +267,7 @@ impl ParserState {
+             ControlWord::Strikethrough      => painter.strike = property.as_bool(),
+             ControlWord::Hidden             => painter.hidden = property.as_bool(),
+             ControlWord::Pard               => *paragraph = Paragraph::default(),
+-            ControlWord::Plain              => *painter = Painter::default(),
++            ControlWord::Plain              => *painter = Painter { font_ref: self.default_font, ..Painter::default() },
+             ControlWord::ParDefTab          => paragraph.tab_width = property.get_value(),
+             ControlWord::LeftAligned
+                 | ControlWord::RightAligned
+@@ -514,6 +519,15 @@ impl<'a> Parser<'a> {
+                 }
+                 sink.flush_hex(&states, &mut document)?;
+             }
++            // A control word (including the payload of \bin) or a control symbol is
++            // one fallback character. Braces end fallback skipping at the group boundary.
++            // Some writers omit the fallback between the two halves of a surrogate pair.
++            let continues_surrogate = sink.high_surrogate.is_some()
++                && matches!(token, Token::ControlSymbol((ControlWord::Unicode, Property::Value(value))) if matches!(*value, -9216..=-8193 | 0xDC00..=0xDFFF));
++            if sink.fallback > 0 && !continues_surrogate && matches!(token, Token::ControlSymbol(_) | Token::CRLF | Token::IgnorableDestination) {
++                sink.fallback -= 1;
++                continue;
++            }
+             match token {
+                 Token::OpeningBracket => {
+                     let state = states.last().cloned().unwrap_or_default();
+@@ -574,9 +588,7 @@ impl<'a> Parser<'a> {
+                     let emit = match control_word {
+                         ControlWord::Rtf               => { seen_rtf = true; Emit::Nothing }
+                         ControlWord::HexChar           => {
+-                            if sink.fallback > 0 {
+-                                sink.fallback -= 1;
+-                            } else if let Property::Value(byte) = property {
++                            if let Property::Value(byte) = property {
+                                 sink.hex.push(*byte as u8);
+                             }
+                             Emit::Nothing
+@@ -783,6 +795,11 @@ impl<'a> Parser<'a> {
+                         font.character_set = u8::try_from(property.get_value()).unwrap_or(0);
+                     }
+                 }
++                Token::ControlSymbol((ControlWord::FontCodePage, Property::Value(code_page))) => {
++                    if let Some((_, font)) = current.as_mut() {
++                        font.code_page = u16::try_from(*code_page).ok();
++                    }
++                }
+                 Token::ControlSymbol((ControlWord::Unknown(name), _)) => {
+                     if let (Some((_, font)), Some(font_family)) = (current.as_mut(), FontFamily::from(name)) {
+                         font.font_family = font_family;
+@@ -809,7 +826,7 @@ impl<'a> Parser<'a> {
+             name_bytes.clear();
+             return;
+         };
+-        let code_page = code_page_for_charset(font.character_set).unwrap_or(document_code_page);
++        let code_page = font.code_page.or_else(|| code_page_for_charset(font.character_set)).unwrap_or(document_code_page);
+         let mut name = String::new();
+         match std::str::from_utf8(name_bytes) {
+             Ok(text) if text.is_ascii() || !name_bytes.iter().any(|b| *b >= 0x80 && !text.is_char_boundary(0)) => name.push_str(text),
+@@ -951,7 +968,8 @@ pub mod tests {
+                     Font {
+                         name: "Helvetica".into(),
+                         character_set: 0,
+-                        font_family: Swiss
++                        font_family: Swiss,
++                        ..Font::default()
+                     }
+                 )]),
+                 ..RtfHeader::default()
+@@ -1019,6 +1037,7 @@ Finally, back to the default color.\line
+                             name: "Helvetica".into(),
+                             character_set: 0,
+                             font_family: Swiss,
++                            ..Font::default()
+                         }
+                     ),
+                     (
+@@ -1027,6 +1046,7 @@ Finally, back to the default color.\line
+                             name: "Helvetica-Bold".into(),
+                             character_set: 0,
+                             font_family: Swiss,
++                            ..Font::default()
+                         }
+                     )
+                 ]),
+diff --git a/src/tokens.rs b/src/tokens.rs
+index 2472888..72992df 100644
+--- a/src/tokens.rs
++++ b/src/tokens.rs
+@@ -101,6 +101,7 @@ pub enum ControlWord<'a> {
+ 
+     FontTable,
+     FontCharset,
++    FontCodePage,
+     FontNumber,
+     FontSize, // Expressed in half point
+     ColorNumber,
+@@ -225,6 +226,7 @@ impl<'a> ControlWord<'a> {
+                 _ => ControlWord::Unknown(name),
+             },
+             Some(b'c') => match name {
++                r"\cpg" => ControlWord::FontCodePage,
+                 r"\cf" => ControlWord::ColorNumber,
+                 r"\cell" => ControlWord::Cell,
+                 r"\colortbl" => ControlWord::ColorTable,
+diff --git a/tests/acceptance.rs b/tests/acceptance.rs
+index 26dfba5..1dd3f85 100644
+--- a/tests/acceptance.rs
++++ b/tests/acceptance.rs
+@@ -160,3 +160,36 @@ fn errors_are_send_and_sync() {
+     let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(RtfDocument::try_from(r"{\rtf1 \'zz}").unwrap_err());
+     assert!(!boxed.to_string().is_empty());
+ }
++
++#[test]
++fn control_words_and_symbols_each_consume_one_unicode_fallback() {
++    for fallback in [r"\emdash ", r"\~", r"\@", r"\*", "\\\n", r"\bin2 xy", r"\b "] {
++        let rtf = format!(r"{{\rtf1\ansi\uc1\u8212{fallback}X}}");
++        let doc = rtf_parser_tt::RtfDocument::from_bytes(rtf.as_bytes()).unwrap();
++        assert_eq!(doc.get_text(), "\u{2014}X", "{fallback:?}");
++        assert!(!doc.body.last().unwrap().painter.bold);
++    }
++    let rtf = br"{\rtf1\ansi\uc3\u8212\'2d\~\b X{\uc2\u233?}Y}";
++    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(rtf).unwrap().get_text(), "\u{2014}X\u{e9}Y");
++}
++
++#[test]
++fn plain_restores_the_default_font_and_cpg_overrides_charset() {
++    let rtf = br"{\rtf1\ansi\ansicpg1252\deff1{\fonttbl{\f0\fcharset0 Latin;}{\f1\fcharset0\cpg1251 Cyrillic;}}\f0\'e9{\plain\'e9}\'e9\plain\'e9}";
++    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(rtf).unwrap().get_text(), "\u{e9}\u{439}\u{e9}\u{439}");
++}
++
++#[test]
++fn unknown_code_pages_use_the_ansi_default_for_raw_and_escaped_bytes() {
++    let rtf = b"{\\rtf1\\ansi\\ansicpg777 \x80\\'80}";
++    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(rtf).unwrap().get_text(), "\u{20ac}\u{20ac}");
++}
++
++#[cfg(feature = "encoding_rs")]
++#[test]
++fn legacy_code_pages_apply_to_raw_bytes_and_escapes_in_default_font() {
++    let koi8 = b"{\\rtf1\\ansi\\ansicpg20866{\\fonttbl{\\f0\\fcharset0 Default;}{\\f1\\fcharset204 Cyrillic;}}\\f0 \xc1\\'c1{\\f1\\'c1}\\'c1}";
++    let latin2 = b"{\\rtf1\\ansi\\ansicpg28592 \xa1\\'a1}";
++    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(koi8).unwrap().get_text(), "\u{430}\u{430}\u{411}\u{430}");
++    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(latin2).unwrap().get_text(), "\u{104}\u{104}");
++}

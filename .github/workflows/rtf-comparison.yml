@@ -1,11 +1,11 @@
-name: Compare RTF text
+name: Verify RTF parser fixes
 on:
   push:
     branches: ['experiment/rtf-12-output']
 permissions:
   contents: read
 jobs:
-  legacy:
+  rtf:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           path: deformat
-          ref: 1e92ba70d1bdedbf09767935d5c2555ab901760d
+          ref: 8fb565ec40c7491e75699b22689dd0983bd13eaf
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -24,26 +24,15 @@ jobs:
           ref: 3178d62b0c05a9cb294127b2c42cb58afb62ed5a
           path: upstream
           persist-credentials: false
-      - name: Verify legacy output on the released deformat adapter
-        working-directory: deformat
-        run: |
-          git restore --source=a0a0d5da2f1ce6ddd5c8ab4a8edecc526c874b48 -- src/rtf.rs Cargo.toml
-          cargo test --features rtf --test format_regressions raw_and_escaped_bytes
-          git restore --source=HEAD -- src/rtf.rs Cargo.toml
-      - name: Verify both failures with the published parser
-        working-directory: deformat
-        run: |
-          if cargo test --features rtf --test format_regressions raw_and_escaped_bytes > "$RUNNER_TEMP/legacy.log" 2>&1; then exit 1; fi
-          cat "$RUNNER_TEMP/legacy.log"
-          grep -F 'rtf_koi8_r_raw_and_escaped_bytes ... FAILED' "$RUNNER_TEMP/legacy.log"
-          grep -F 'rtf_iso_8859_2_raw_and_escaped_bytes ... FAILED' "$RUNNER_TEMP/legacy.log"
-      - name: Verify the candidate parser fix
+      - name: Apply the proposed fix to the released parser source
         working-directory: upstream
-        run: |
-          git apply ../experiment/.github/rtf-legacy-codepages.patch
-          cargo test --lib
-          cargo test --no-default-features --lib
-      - name: Verify the deformat RTF tests against the candidate fix
+        run: git apply ../experiment/.github/rtf-parser-fixes.patch
+      - name: Test upstream with all features
+        working-directory: upstream
+        run: cargo test --all-features
+      - name: Test upstream with default features disabled
+        working-directory: upstream
+        run: cargo test --no-default-features
+      - name: Verify the downstream RTF cases
         working-directory: deformat
-        run: |
-          cargo test --config 'patch.crates-io.rtf-parser-tt.path="../upstream"' --features rtf --test format_regressions rtf_
+        run: cargo test --config 'patch.crates-io.rtf-parser-tt.path="../upstream"' --features rtf --test format_regressions rtf_
