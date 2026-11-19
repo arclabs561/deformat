@@ -5,58 +5,45 @@ on:
 permissions:
   contents: read
 jobs:
-  compare:
+  legacy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          fetch-depth: 0
+          path: experiment
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
-        with:
-          toolchain: stable
-      - name: Run eight fixtures against three adapters
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/probe/src"
-          printf '[package]\nname="rtf-compare"\nversion="0.1.0"\nedition="2021"\n[dependencies]\ndeformat={path="%s",features=["rtf"]}\n' "$PWD" > "$RUNNER_TEMP/probe/Cargo.toml"
-          cp .github/rtf-probe.rs "$RUNNER_TEMP/probe/src/main.rs"
-          for mode in released bump-only native; do
-            echo "RTF_MODE $mode"
-            case "$mode" in
-              released) git restore --source=a0a0d5da2f1ce6ddd5c8ab4a8edecc526c874b48 -- src/rtf.rs Cargo.toml ;;
-              bump-only) sed -i '/^rtf-parser-tt = /s/"0.5"/"0.6"/' Cargo.toml ;;
-              native) git restore --source=HEAD -- src/rtf.rs Cargo.toml ;;
-            esac
-            cargo run --quiet --manifest-path "$RUNNER_TEMP/probe/Cargo.toml"
-          done
-
-  suite:
-    name: Verify draft package and regressions
-    runs-on: ubuntu-latest
-    steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          ref: b81a455ffb1a5d6fd933a8bc6bb380f23cff2855
+          path: deformat
+          ref: 1e92ba70d1bdedbf09767935d5c2555ab901760d
           fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          toolchain: stable
-      - name: RTF regression tests
-        run: cargo test --features rtf --test format_regressions rtf_
-      - name: All features and targets
-        run: cargo test --all-features --all-targets
-      - name: Doc tests
-        run: cargo test --all-features --doc
-      - name: Check that the old adapter fails the font regressions with 0.6
+          repository: TwelveTake-Studios/rtf-parser-tt
+          ref: 3178d62b0c05a9cb294127b2c42cb58afb62ed5a
+          path: upstream
+          persist-credentials: false
+      - name: Verify legacy output on the released deformat adapter
+        working-directory: deformat
         run: |
-          git restore --source=a0a0d5da2f1ce6ddd5c8ab4a8edecc526c874b48 -- src/rtf.rs
-          if cargo test --features rtf,encoding_rs --test format_regressions rtf_font_ > "$RUNNER_TEMP/control.log" 2>&1; then
-            cat "$RUNNER_TEMP/control.log"
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/control.log"
-          for name in charset_overrides_document_code_page switch_is_scoped_to_its_group multibyte_escapes_decode_together; do
-            grep -F "test rtf_font_${name} ... FAILED" "$RUNNER_TEMP/control.log"
-          done
+          git restore --source=a0a0d5da2f1ce6ddd5c8ab4a8edecc526c874b48 -- src/rtf.rs Cargo.toml
+          cargo test --features rtf --test format_regressions raw_and_escaped_bytes
+          git restore --source=HEAD -- src/rtf.rs Cargo.toml
+      - name: Verify both failures with the published parser
+        working-directory: deformat
+        run: |
+          if cargo test --features rtf --test format_regressions raw_and_escaped_bytes > "$RUNNER_TEMP/legacy.log" 2>&1; then exit 1; fi
+          cat "$RUNNER_TEMP/legacy.log"
+          grep -F 'rtf_koi8_r_raw_and_escaped_bytes ... FAILED' "$RUNNER_TEMP/legacy.log"
+          grep -F 'rtf_iso_8859_2_raw_and_escaped_bytes ... FAILED' "$RUNNER_TEMP/legacy.log"
+      - name: Verify the candidate parser fix
+        working-directory: upstream
+        run: |
+          git apply ../experiment/.github/rtf-legacy-codepages.patch
+          cargo test --lib
+          cargo test --no-default-features --lib
+      - name: Verify the deformat RTF tests against the candidate fix
+        working-directory: deformat
+        run: |
+          cargo test --config 'patch.crates-io.rtf-parser-tt.path="../upstream"' --features rtf --test format_regressions rtf_

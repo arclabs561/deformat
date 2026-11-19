@@ -1,0 +1,54 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 741e47b..d5d867d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -25,11 +25,13 @@ debug = true
+ 
+ [features]
+ default = ["encoding_rs"]
++encoding_rs = ["dep:encoding_rs", "dep:codepage"]
+ jsbindings = ["dep:wasm-bindgen", "dep:tsify"]
+ 
+ [dependencies]
+ serde = { version = "1.0", features = ["derive"] }
+ encoding_rs = { version = "0.8", optional = true }
++codepage = { version = "0.1.3", optional = true }
+ 
+ #[target.'cfg(target_arch = "wasm32")'.dependencies]
+ wasm-bindgen = { version = "0.2", optional = true }
+diff --git a/src/encoding.rs b/src/encoding.rs
+index c1a7812..8b38bf3 100644
+--- a/src/encoding.rs
++++ b/src/encoding.rs
+@@ -94,6 +94,13 @@ pub(crate) fn decode_into(code_page: u16, bytes: &[u8], out: &mut String) {
+         return;
+     }
+     let table = single_byte_table(code_page);
++    #[cfg(feature = "encoding_rs")]
++    if table.is_none() {
++        if let Some(encoding) = codepage::to_encoding_no_replacement(code_page).filter(|encoding| encoding.is_single_byte()) {
++            out.push_str(&encoding.decode_without_bom_handling(bytes).0);
++            return;
++        }
++    }
+     for &byte in bytes {
+         match (byte, table) {
+             (0..=0x7F, _) => out.push(byte as char),
+@@ -200,6 +207,17 @@ mod tests {
+         assert_eq!(decode_document_bytes(b"{\\rtf1 \x93}"), "{\\rtf1 \u{201C}}");
+     }
+ 
++    #[cfg(feature = "encoding_rs")]
++    #[test]
++    fn legacy_document_code_pages_apply_to_raw_bytes_and_scoped_escapes() {
++        use crate::RtfDocument;
++
++        let koi8 = b"{\\rtf1\\ansi\\ansicpg20866{\\fonttbl{\\f0\\fcharset0 Default;}{\\f1\\fcharset204 Cyrillic;}}\\f0 \xc1\\'c1{\\f1\\'c1}\\'c1}";
++        assert_eq!(RtfDocument::from_bytes(koi8).unwrap().get_text(), "ааБа");
++        let latin2 = b"{\\rtf1\\ansi\\ansicpg28592 \xa1\\'a1}";
++        assert_eq!(RtfDocument::from_bytes(latin2).unwrap().get_text(), "ĄĄ");
++    }
++
+     #[test]
+     fn raw_bytes_drop_binary_payloads() {
+         assert_eq!(decode_document_bytes(b"{a{\\pict\\bin3 \xFF}\xFE}b}"), "{a{\\pict\\bin0 }b}");
