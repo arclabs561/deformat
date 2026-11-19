@@ -1,8 +1,8 @@
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index bbd3993..8582161 100644
+index bbd3993..bd30b1b 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file. The format is b
+@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file. The format is b
  [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
  [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
  
@@ -12,6 +12,7 @@ index bbd3993..8582161 100644
 +- `\plain` restores the document's default font. Font-table `\cpgN` overrides `\fcharsetN`.
 +- The default feature set decodes KOI8-R, KOI8-U and ISO-8859 code pages for raw bytes and hex escapes.
 +  Unknown code pages use Windows-1252.
++- Raw input preserves literal backslashes and multibyte characters before `bin` followed by a number.
 +
  ## [0.6.0] - 2026-10-21
  
@@ -43,7 +44,7 @@ index 99326b3..ddc9024 100644
      0x0152, 0xFFFD, 0x017D, 0xFFFD, 0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
      0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178, 0x00A0, 0x00A1, 0x00A2, 0x00A3,
 diff --git a/src/encoding.rs b/src/encoding.rs
-index c1a7812..033dfb4 100644
+index c1a7812..d26a481 100644
 --- a/src/encoding.rs
 +++ b/src/encoding.rs
 @@ -5,6 +5,9 @@ pub(crate) const DEFAULT_CODE_PAGE: u16 = 1252;
@@ -116,6 +117,25 @@ index c1a7812..033dfb4 100644
      }
  }
  
+@@ -113,8 +133,16 @@ pub(crate) fn decode_document_bytes(bytes: &[u8]) -> String {
+             let digits_start = i + 4;
+             let digits_end = digits_start + bytes[digits_start..].iter().take_while(|b| b.is_ascii_digit()).count();
+             if digits_end > digits_start {
+-                decode_into(code_page, &bytes[run_start..i], &mut out);
+-                out.push_str("\\bin0 ");
++                // Decode through the candidate backslash. It may be a DBCS trail
++                // byte, or pair with a preceding backslash as a literal RTF escape.
++                decode_into(code_page, &bytes[run_start..=i], &mut out);
++                run_start = i + 1;
++                let slashes = out.bytes().rev().take_while(|&byte| byte == b'\\').count();
++                if slashes % 2 == 0 {
++                    i = digits_end;
++                    continue;
++                }
++                out.push_str("bin0 ");
+                 let count: usize = std::str::from_utf8(&bytes[digits_start..digits_end]).ok().and_then(|n| n.parse().ok()).unwrap_or(0);
+                 let payload = if bytes.get(digits_end) == Some(&b' ') { digits_end + 1 } else { digits_end };
+                 i = payload.saturating_add(count).min(bytes.len());
 diff --git a/src/header.rs b/src/header.rs
 index 1c98673..c3843aa 100644
 --- a/src/header.rs
@@ -285,10 +305,10 @@ index 2472888..72992df 100644
                  r"\cell" => ControlWord::Cell,
                  r"\colortbl" => ControlWord::ColorTable,
 diff --git a/tests/acceptance.rs b/tests/acceptance.rs
-index 26dfba5..1dd3f85 100644
+index 26dfba5..e8a00ac 100644
 --- a/tests/acceptance.rs
 +++ b/tests/acceptance.rs
-@@ -160,3 +160,36 @@ fn errors_are_send_and_sync() {
+@@ -160,3 +160,53 @@ fn errors_are_send_and_sync() {
      let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(RtfDocument::try_from(r"{\rtf1 \'zz}").unwrap_err());
      assert!(!boxed.to_string().is_empty());
  }
@@ -324,4 +344,21 @@ index 26dfba5..1dd3f85 100644
 +    let latin2 = b"{\\rtf1\\ansi\\ansicpg28592 \xa1\\'a1}";
 +    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(koi8).unwrap().get_text(), "\u{430}\u{430}\u{411}\u{430}");
 +    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(latin2).unwrap().get_text(), "\u{104}\u{104}");
++}
++
++#[test]
++fn raw_text_distinguishes_a_literal_bin_from_counted_binary_data() {
++    let literal = b"{\\rtf1\\ansi\\ansicpg1252 A\\\\bin9 \xe9Z}";
++    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(literal).unwrap().get_text(), "A\\bin9 \u{e9}Z");
++    // A literal backslash followed by a real \bin3. Its payload includes a brace.
++    let counted = b"{\\rtf1\\ansi\\ansicpg1252 A\\\\\\bin3 }\xff{Z\xe9}";
++    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(counted).unwrap().get_text(), "A\\Z\u{e9}");
++}
++
++#[cfg(feature = "encoding_rs")]
++#[test]
++fn shift_jis_trail_byte_before_bin_is_text() {
++    // 95 5c is U+8868, followed by the ordinary word "bin9".
++    let rtf = b"{\\rtf1\\ansi\\ansicpg932 \x95\x5cbin9 Z\\bin3 abc!}";
++    assert_eq!(rtf_parser_tt::RtfDocument::from_bytes(rtf).unwrap().get_text(), "\u{8868}bin9 Z!");
 +}
