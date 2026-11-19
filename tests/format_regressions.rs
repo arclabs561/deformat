@@ -302,3 +302,30 @@ fn rtf_unicode_fallback_is_not_duplicated() {
     let text = deformat::rtf::extract_bytes(rtf.as_bytes()).unwrap().text;
     assert_eq!(text, "Café au lait.");
 }
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_font_charset_overrides_document_code_page() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252{\fonttbl{\f0\fcharset204 Cyrillic;}}\f0\'e9}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "й");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_table_cells_are_separate_fields() {
+    let rtf = br"{\rtf1\ansi\trowd\cellx1000\cellx2000\intbl Left\cell Right\cell\row}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(rtf).unwrap().text,
+        "Left\tRight"
+    );
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_visible_body_precedes_numbered_footnotes() {
+    let rtf = br"{\rtf1\ansi Start{\v  hidden} body{\super\chftn}{\footnote\pard\plain{\super\chftn} Note.} end.\par}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(rtf).unwrap().text,
+        "Start body1 end.\n1 Note."
+    );
+}

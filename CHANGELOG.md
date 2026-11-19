@@ -12,6 +12,8 @@ These entries identify source changes without assigning a package release.
 
 ## Unreleased
 
+- RTF plain text uses tabs between table cells, omits hidden text, and places numbered footnotes after the body. Escaped bytes respect the active font’s character set.
+
 ## 0.17.0 - 2026-11-03
 
 ### Changed
