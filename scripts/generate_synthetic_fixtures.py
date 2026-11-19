@@ -225,6 +225,8 @@ def epub_chapter(title: str, body: str) -> str:
 # RTF fixtures
 # ---------------------------------------------------------------------------
 
+WINDOWS_1251_RTF = br"{\rtf1\ansi\ansicpg1251 " + b"\xe9}"
+
 MINIMAL_RTF = br"{\rtf1\ansi\ansicpg1252 Hello from RTF. Second sentence here.}"
 
 # Windows-1252 codepage + \uN? Unicode fallback for non-ASCII.
@@ -417,6 +419,9 @@ def main() -> None:
     print(f"  wrote minimal.rtf                  {len(MINIMAL_RTF):>6} bytes")
     (out / "unicode.rtf").write_bytes(UNICODE_RTF)
     print(f"  wrote unicode.rtf                  {len(UNICODE_RTF):>6} bytes")
+
+    (out / "windows-1251.rtf").write_bytes(WINDOWS_1251_RTF)
+    print(f"  wrote windows-1251.rtf             {len(WINDOWS_1251_RTF):>6} bytes")
 
     print("\n== done ==")
     total = sum(p.stat().st_size for p in out.glob("*"))

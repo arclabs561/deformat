@@ -312,6 +312,47 @@ fn rtf_font_charset_overrides_document_code_page() {
 
 #[cfg(feature = "rtf")]
 #[test]
+fn rtf_font_switch_is_scoped_to_its_group() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252{\fonttbl{\f0\fcharset0 Latin;}{\f1\fcharset204 Cyrillic;}}\f0\'e9{\f1\'e9}\'e9}";
+    assert_eq!(deformat::extract_from_bytes(rtf).unwrap().text, "éйé");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_font_multibyte_escapes_decode_together() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252{\fonttbl{\f0\fcharset128 Japanese;}}\f0\'82\'a0}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "あ");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_unicode_fallback_length_is_scoped_to_its_group() {
+    let rtf = br"{\rtf1\ansi\uc2\u233??{\uc0\u1049}\u233??Z}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éЙéZ");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_section_and_page_breaks_separate_text() {
+    let rtf = br"{\rtf1\ansi First\sect Second\page Third}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(rtf).unwrap().text,
+        "First\nSecond\nThird"
+    );
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_headers_and_footers_follow_the_body() {
+    let rtf = br"{\rtf1\ansi{\header Head}{\footer Foot}Body}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(rtf).unwrap().text,
+        "Body\nHead\nFoot"
+    );
+}
+
+#[cfg(feature = "rtf")]
+#[test]
 fn rtf_table_cells_are_separate_fields() {
     let rtf = br"{\rtf1\ansi\trowd\cellx1000\cellx2000\intbl Left\cell Right\cell\row}";
     assert_eq!(

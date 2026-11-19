@@ -36,6 +36,7 @@ only; no external deps). Dual-licensed MIT-OR-Apache-2.0.
 | `minimal.epub` | ~1 KB | Two-chapter EPUB with OPF + XHTML content files |
 | `minimal.rtf` | 62 B | RTF with ASCII content |
 | `unicode.rtf` | 99 B | RTF with `\uN?` unicode escapes and Windows-1252 ANSI codepage |
+| `windows-1251.rtf` | 26 B | Literal Windows-1251 byte in a non-UTF-8 RTF file |
 
 Total: ~10 KB. All exercised by `tests/real_formats.rs`.
 
