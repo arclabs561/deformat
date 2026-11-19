@@ -1,7 +1,11 @@
 //! RTF text extraction.
 //!
 //! Requires the `rtf` feature. Extracts text from Rich Text Format documents
-//! using the `rtf-parser-tt` crate.
+//! using the bundled `rtf-parser-tt` parser.
+
+// Keep the imported parser formatted as upstream ships it.
+#[rustfmt::skip]
+mod parser_core;
 
 use crate::{Error, Extracted, Extractor, Format};
 use std::path::Path;
@@ -26,7 +30,7 @@ pub fn extract_file(path: &Path) -> Result<Extracted, Error> {
 /// Returns [`Error::Parse`] if RTF parsing fails, or
 /// [`Error::EmptyResult`] if no text is extracted.
 pub fn extract_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
-    let doc = rtf_parser_tt::RtfDocument::from_bytes(bytes)
+    let doc = parser_core::RtfDocument::from_bytes(bytes)
         .map_err(|e| Error::Parse(format!("RTF parsing failed: {e}")))?;
     let text = doc.get_text();
     let trimmed = text.trim().to_string();

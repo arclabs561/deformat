@@ -420,3 +420,33 @@ fn rtf_binary_fallback_consumes_one_character() {
     let rtf = b"{\\rtf1\\ansi\\uc1\\u233\\bin2 }\xffX}";
     assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éX");
 }
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_raw_bytes_and_escapes_can_use_different_code_pages() {
+    let rtf = b"{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f1\\fcharset204 Cyrillic;}}\\f1 \xe9\\'e9}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éй");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_unicode_surrogate_pair_preserves_the_following_letter() {
+    let rtf = br"{\rtf1\ansi A\u-10179\u-8704?Z}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "A😀Z");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_bin_prefix_inside_plain_text_preserves_the_following_bytes() {
+    let latin = b"{\\rtf1\\ansi\\ansicpg1252 A\\\\bin9 \xe9Z}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(latin).unwrap().text,
+        "A\\bin9 éZ"
+    );
+    // 0x5c is the second byte of 表 in Shift-JIS.
+    let japanese = b"{\\rtf1\\ansi\\ansicpg932 \x95\x5cbin9 Z\\bin3 abc!}";
+    assert_eq!(
+        deformat::rtf::extract_bytes(japanese).unwrap().text,
+        "表bin9 Z!"
+    );
+}

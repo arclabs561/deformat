@@ -13,6 +13,7 @@ These entries identify source changes without assigning a package release.
 ## Unreleased
 
 - RTF plain text uses tabs between table cells, omits hidden text, and places numbered footnotes after the body. Escaped bytes respect the active font’s character set.
+- RTF extraction preserves legacy code pages and skips Unicode fallback text, including control words and binary runs. The crate bundles the corrected 0.6 parser until these fixes are available upstream.
 
 ## 0.17.0 - 2026-11-03
 

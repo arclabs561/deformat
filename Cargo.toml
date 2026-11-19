@@ -50,16 +50,13 @@ zip = { version = "9.0.5", optional = true, default-features = false, features =
   "deflate",
 ] }
 
-# Optional: RTF text extraction
-rtf-parser-tt = { version = "0.6", optional = true }
-
 # Optional: XLSX/ODS spreadsheet text extraction
 calamine = { version = "0.36", optional = true }
 
 # Optional: language detection on extracted text
 whichlang = { version = "0.1", optional = true }
 
-# Optional: charset detection / decoding for non-UTF-8 HTML input
+# Optional: charset decoding for RTF and non-UTF-8 HTML input
 encoding_rs = { version = "0.8", optional = true }
 
 [features]
@@ -70,7 +67,7 @@ pdf = ["dep:pdf_oxide"]
 pdf_oxide = ["dep:pdf_oxide"]
 docx = ["dep:zip"]
 epub = ["dep:zip"]
-rtf = ["dep:rtf-parser-tt"]
+rtf = ["dep:encoding_rs"]
 xlsx = ["dep:calamine"]
 pptx = ["dep:zip"]
 serde = ["dep:serde"]
