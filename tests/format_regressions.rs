@@ -370,3 +370,17 @@ fn rtf_visible_body_precedes_numbered_footnotes() {
         "Start body1 end.\n1 Note."
     );
 }
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_koi8_r_raw_and_escaped_bytes() {
+    let rtf = b"{\\rtf1\\ansi\\ansicpg20866 \xc1\\'c1}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "аа");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_iso_8859_2_raw_and_escaped_bytes() {
+    let rtf = b"{\\rtf1\\ansi\\ansicpg28592 \xa1\\'a1}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "ĄĄ");
+}
