@@ -405,3 +405,18 @@ fn rtf_unknown_code_page_keeps_the_windows_1252_fallback() {
     let rtf = b"{\\rtf1\\ansi\\ansicpg777 \x80\\'80}";
     assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "€€");
 }
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_font_code_page_is_scoped_to_its_group() {
+    let rtf = br"{\rtf1\ansi\ansicpg1252{\fonttbl{\f0 Latin;}{\f1\cpg1251 Cyrillic;}}\f0\'e9{\f1\'e9}\'e9}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éйé");
+}
+
+#[cfg(feature = "rtf")]
+#[test]
+fn rtf_binary_fallback_consumes_one_character() {
+    // Both bytes belong to the fallback, including the closing brace.
+    let rtf = b"{\\rtf1\\ansi\\uc1\\u233\\bin2 }\xffX}";
+    assert_eq!(deformat::rtf::extract_bytes(rtf).unwrap().text, "éX");
+}
