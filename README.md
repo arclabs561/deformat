@@ -36,6 +36,13 @@ cargo add deformat --features readability,html2text,pdf   # richer HTML + PDF
 cargo add deformat --features docx,epub,rtf,xlsx,pptx     # office formats
 ```
 
+To read a document from a checkout, pass its path to the example. It detects
+the format from the bytes and writes the extracted text to stdout:
+
+```sh
+cargo run --quiet --example extract_document --features docx -- notes.docx
+```
+
 See [`examples/README.md`](examples/README.md) for runnable examples, feature-gated demos, and the WCXB benchmark commands.
 
 ## Supported formats
