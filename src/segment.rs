@@ -289,20 +289,37 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
     let mut last_title_id: Option<String> = None;
 
     for span in path_spans {
-        let (block_key, block_tag, depth) = classify_block(&span.path);
         let text_slice = full_text
             .get(span.output_start..span.output_end)
             .unwrap_or("");
+        let is_synthetic = span.kind == crate::html::SpanKind::Synthetic;
+        // Structure-only synthetic runs (block-boundary newlines, all-blank
+        // alt text) carry no text of their own and must not join a group.
+        // Whitespace *copied* from the source keeps its grouping role.
+        if is_synthetic && text_slice.trim().is_empty() {
+            continue;
+        }
+        let (block_key, block_tag, depth) = classify_block(&span.path);
         let text_len = text_slice.chars().count();
         let under_anchor = path_has_anchor_below_block(&span.path, &block_key);
-        let is_synthetic = span.kind == crate::html::SpanKind::Synthetic;
 
         match current {
             Some(ref mut acc) if acc.block_key == block_key => {
-                if !acc.text.is_empty() && !text_slice.is_empty() {
+                // Only a block boundary inside the group (a skipped
+                // structural newline, e.g. `</td>` or `<br>`) separates
+                // words; it joins as one space. Adjacent spans split by an
+                // inline tag or an entity are one run of text, so
+                // "Caf&eacute;" stays "Café".
+                let gap = full_text
+                    .get(acc.output_end..span.output_start)
+                    .unwrap_or("");
+                if !gap.is_empty() && gap.trim().is_empty() {
                     acc.text.push(' ');
+                } else {
+                    acc.text.push_str(gap);
                 }
                 acc.text.push_str(text_slice);
+                acc.output_end = span.output_end;
                 acc.src_end = acc.src_end.max(span.source_end);
                 acc.total_chars += text_len;
                 if under_anchor {
@@ -321,6 +338,7 @@ fn strip_to_segments_inner(html: &str, link_ratio_cap: Option<f32>) -> Vec<Segme
                     block_tag,
                     depth,
                     text: text_slice.to_string(),
+                    output_end: span.output_end,
                     src_start: span.source_start,
                     src_end: span.source_end,
                     link_chars: if under_anchor { text_len } else { 0 },
@@ -539,6 +557,9 @@ struct GroupAcc {
     /// Heading depth, if the block tag is h1..h6.
     depth: Option<u32>,
     text: String,
+    /// End of the last span appended to `text`, in `strip_to_text` output
+    /// bytes.
+    output_end: usize,
     /// Earliest source byte touched by this group.
     src_start: usize,
     /// Latest source byte touched by this group (exclusive).
@@ -660,7 +681,11 @@ fn finish_group(
     let table_ranges = ctx.table_ranges;
     let code_languages = ctx.code_languages;
     let link_ratio_cap = ctx.link_ratio_cap;
-    let text = acc.text.trim().to_string();
+    // `strip_to_text_with_paths` keeps source whitespace; normalize it the
+    // way `strip_to_text` does so segment text matches that output.
+    let text = crate::html::cleanup_whitespace(&acc.text)
+        .trim()
+        .to_string();
     if text.is_empty() {
         return;
     }
@@ -784,12 +809,7 @@ fn keep_segment(seg: &Segment, min_chars: usize) -> bool {
 
     match seg {
         Segment::ListItem(_) => has_sentence || text.contains(' '),
-        _ => {
-            if text.chars().count() < min_chars && !has_sentence {
-                return false;
-            }
-            true
-        }
+        _ => has_sentence || text.chars().count() >= min_chars,
     }
 }
 

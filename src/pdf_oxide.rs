@@ -149,11 +149,20 @@ fn segments_with_coords(doc: &mut pdf_oxide::PdfDocument) -> Result<Vec<Segment>
     let mut segments: Vec<Segment> = Vec::new();
     let mut ord = 0;
     for i in 0..page_count {
-        // MediaBox gives the logical page dimensions in PDF user-space.
-        let (page_w, page_h) = match doc.get_page_media_box(i) {
-            Ok((x0, y0, x1, y1)) => (f64::from(x1 - x0), f64::from(y1 - y0)),
-            Err(_) => (0.0, 0.0),
-        };
+        // MediaBox gives the page in PDF user space; /Rotate turns it for display.
+        let media_box = doc
+            .get_page_media_box(i)
+            .map(|(x0, y0, x1, y1)| {
+                (
+                    f64::from(x0.min(x1)),
+                    f64::from(y0.min(y1)),
+                    f64::from(x0.max(x1)),
+                    f64::from(y0.max(y1)),
+                )
+            })
+            .unwrap_or_default();
+        let rotation = doc.get_page_rotation(i).unwrap_or(0);
+        let frame = PageFrame::new(media_box, rotation);
         let lines = match doc.extract_text_lines(i) {
             Ok(l) => l,
             Err(e) => return Err(Error::Parse(format!("PDF (oxide) lines page {i}: {e}"))),
@@ -165,15 +174,18 @@ fn segments_with_coords(doc: &mut pdf_oxide::PdfDocument) -> Result<Vec<Segment>
                 continue;
             }
             let bbox = line.bbox;
-            let x = f64::from(bbox.x);
-            let y = f64::from(bbox.y);
-            let w = f64::from(bbox.width);
-            let h = f64::from(bbox.height);
+            let (x0, y0, x1, y1) = frame.map_rect(
+                f64::from(bbox.x),
+                f64::from(bbox.y),
+                f64::from(bbox.x + bbox.width),
+                f64::from(bbox.y + bbox.height),
+            );
+            // PointSpace has y pointing up, so the top edge is y1.
             let coords = Coordinates {
-                points: vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)],
+                points: vec![(x0, y1), (x1, y1), (x1, y0), (x0, y0)],
                 system: "PointSpace".to_string(),
-                layout_width: page_w,
-                layout_height: page_h,
+                layout_width: frame.width,
+                layout_height: frame.height,
             };
             let id = element_id("NarrativeText", text, ord);
             ord += 1;
@@ -195,9 +207,108 @@ fn segments_with_coords(doc: &mut pdf_oxide::PdfDocument) -> Result<Vec<Segment>
     Ok(segments)
 }
 
+/// The page as displayed: origin at the MediaBox's lower-left corner, turned
+/// clockwise by the page's `/Rotate`, y pointing up.
+struct PageFrame {
+    llx: f64,
+    lly: f64,
+    /// Unrotated MediaBox width and height.
+    media_w: f64,
+    media_h: f64,
+    /// Clockwise rotation, one of 0, 90, 180 or 270.
+    rotation: i32,
+    /// Displayed width and height.
+    width: f64,
+    height: f64,
+}
+
+impl PageFrame {
+    fn new((llx, lly, urx, ury): (f64, f64, f64, f64), rotation: i32) -> Self {
+        // /Rotate must be a multiple of 90 (ISO 32000-1, Table 30); treat any
+        // other value as unrotated.
+        let rotation = match rotation.rem_euclid(360) {
+            r @ (90 | 180 | 270) => r,
+            _ => 0,
+        };
+        let (media_w, media_h) = (urx - llx, ury - lly);
+        let (width, height) = if rotation % 180 == 0 {
+            (media_w, media_h)
+        } else {
+            (media_h, media_w)
+        };
+        Self {
+            llx,
+            lly,
+            media_w,
+            media_h,
+            rotation,
+            width,
+            height,
+        }
+    }
+
+    fn map_point(&self, x: f64, y: f64) -> (f64, f64) {
+        let (rx, ry) = (x - self.llx, y - self.lly);
+        match self.rotation {
+            90 => (ry, self.media_w - rx),
+            180 => (self.media_w - rx, self.media_h - ry),
+            270 => (self.media_h - ry, rx),
+            _ => (rx, ry),
+        }
+    }
+
+    /// Map a user-space rectangle; returns `(x0, y0, x1, y1)` with `x0 <= x1`
+    /// and `y0 <= y1`. A quadrant rotation keeps rectangles axis-aligned.
+    fn map_rect(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> (f64, f64, f64, f64) {
+        let (ax, ay) = self.map_point(x0, y0);
+        let (bx, by) = self.map_point(x1, y1);
+        (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_frame_removes_media_box_offset() {
+        let f = PageFrame::new((50.0, 600.0, 400.0, 800.0), 0);
+        assert_eq!((f.width, f.height), (350.0, 200.0));
+        assert_eq!(
+            f.map_rect(72.0, 700.0, 172.0, 712.0),
+            (22.0, 100.0, 122.0, 112.0)
+        );
+    }
+
+    #[test]
+    fn page_frame_rotates_clockwise() {
+        // Letter page, text near its top-left corner in user space.
+        let rect = (72.0, 700.0, 172.0, 712.0);
+        let f = PageFrame::new((0.0, 0.0, 612.0, 792.0), 90);
+        assert_eq!((f.width, f.height), (792.0, 612.0));
+        // Turned clockwise, the page's top-left corner ends up top-right.
+        assert_eq!(
+            f.map_rect(rect.0, rect.1, rect.2, rect.3),
+            (700.0, 440.0, 712.0, 540.0)
+        );
+        let f = PageFrame::new((0.0, 0.0, 612.0, 792.0), 180);
+        assert_eq!(
+            f.map_rect(rect.0, rect.1, rect.2, rect.3),
+            (440.0, 80.0, 540.0, 92.0)
+        );
+        let f = PageFrame::new((0.0, 0.0, 612.0, 792.0), -90);
+        assert_eq!((f.rotation, f.width), (270, 792.0));
+        assert_eq!(
+            f.map_rect(rect.0, rect.1, rect.2, rect.3),
+            (80.0, 72.0, 92.0, 172.0)
+        );
+    }
+
+    #[test]
+    fn page_frame_ignores_non_quadrant_rotation() {
+        let f = PageFrame::new((0.0, 0.0, 612.0, 792.0), 45);
+        assert_eq!((f.rotation, f.width, f.height), (0, 612.0, 792.0));
+    }
 
     #[test]
     fn extract_pdf_oxide_invalid_bytes() {

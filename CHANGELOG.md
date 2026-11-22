@@ -3,12 +3,145 @@
 All notable changes land here. The crate uses SemVer: breaking changes
 bump the minor version while in 0.x.
 
-## Unreleased
+## Source history (unversioned)
+
+These entries identify source changes without assigning a package release.
+
+- Return no source coverage for empty output ranges in `SpanMap::source_range`.
+  ([e7b01c1](https://github.com/arclabs561/deformat/commit/e7b01c14336533883470082656c05c221191c8e0))
+
+## 0.17.1 (pending release)
+
+- XLSX requires calamine 0.38 to pick up RUSTSEC-2026-0436.
+- ZIP entries that fail partway through a read count toward the total decompression limit in DOCX, EPUB and PPTX.
+
+- RTF plain text uses tabs between table cells, omits hidden text, and places numbered footnotes after the body. Escaped bytes respect the active font’s character set.
+- RTF extraction preserves legacy code pages and skips Unicode fallback text, including control words and binary runs. The crate bundles the corrected 0.6 parser until these fixes are available upstream.
+
+## 0.17.0 - 2026-11-03
+
+### Changed
+
+- `html::strip_to_text` and the other plain-text HTML paths keep whitespace
+  inside `<pre>`, as the docs' "HTML rendering semantics" promised; one
+  newline directly after the opening tag is dropped, as in HTML. Code blocks
+  now keep their indentation and line breaks. Output elsewhere is unchanged.
+### Security
+
+- Require `zip` 9.0.5, which fixes the five advisories reported against
+  `zip` below 9.0.5. deformat reads archive entries in memory with only the
+  `deflate` feature, so the extraction, legacy-decoder and AES advisories did
+  not reach its code; the dual-header parsing one could make it read different
+  entry contents than other ZIP readers. Entries whose stored name `zip` now
+  rejects as invalid are skipped like unreadable entries.
+
+### Fixed
+
+- `page_type` reads `og:type` and the canonical URL from the tag that
+  declares them. It searched a fixed window of text around the keyword,
+  so `content=` before `property=` could pick up the next tag's content,
+  and the canonical href could come from a neighbouring `<link>`.
+- XLSX rows keep blank cells as empty tab-separated fields, so values stay
+  under their column headers; only trailing blanks and empty rows are
+  dropped. Previously a blank in the middle of a row shifted every later
+  value one column left.
+- XLSX date cells are written as ISO 8601 (`2024-01-01`, with a time when
+  one is set) instead of the stored serial number (`45292`), for both the
+  1900 and 1904 date systems.
+- RTF with raw 8-bit bytes decodes with the document's `\ansicpg` code
+  page (cp1252 when absent) instead of failing with "not valid UTF-8".
+  RTF is 7-bit by specification, but common writers emit raw code-page
+  bytes. `rtf::extract_file` reads bytes and follows the same path.
+- EPUB titles decode character references, as the chapter text already
+  did: `Pride &amp; Prejudice` in `dc:title` is now "Pride & Prejudice".
+- PDF segment coordinates (`pdf_oxide::extract_*_to_segments_with_coords`)
+  are in the displayed page frame. Points start at the top-left corner as
+  documented (they started bottom-left), are measured from the MediaBox
+  origin rather than absolute user space, and follow the page's `/Rotate`,
+  which also swaps `layout_width` and `layout_height` for 90 and 270.
+- `<!-->` and `<!--->` end at once as empty comments, as HTML5 tokenizes
+  them; the text after them was swallowed up to the next `-->`. The three
+  copies of the comment scanner are now one function.
+- HTML entity decoding follows HTML5 in three places. Only the 106 legacy
+  names (`&amp`, `&copy`, `&eacute`, ...) may omit the semicolon; other
+  names such as `&mdash` or `&hellip` without `;` now stay literal, as
+  browsers render them, so "Alpha&Beta" no longer becomes "AlphaΒ". The
+  uppercase legacy names `&AMP;`, `&LT;`, `&GT;`, `&QUOT;`, `&COPY;` and
+  `&REG;` decode. Numeric references with a sign (`&#+65;`) stay literal.
+
+- DOCX, EPUB and PPTX extraction shares one 64 MiB decompressed-bytes
+  budget per archive and returns `Error::Parse` when it runs out. The
+  64 MiB per-entry cap did not bound the total: 70 distinct 1 MiB EPUB
+  chapters or PPTX slides in a 330 KiB archive produced 70 MiB of text.
+  EPUB used to skip unreadable chapters silently; it still does, except
+  that an exhausted budget is now an error. Archives that used to
+  extract more than 64 MiB in total now fail.
+
+- `detect::decode_bytes` no longer panics when a `<meta>` tag without a
+  charset has no `>` inside the 1 KiB prescan window, as a long description
+  meta crossing byte 1024 does.
+- A `<meta>` charset of UTF-16BE/LE now decodes as UTF-8 and
+  `x-user-defined` as windows-1252, as the WHATWG prescan requires; ASCII
+  pages declaring `utf-16` were decoded as mojibake.
+- `detect_bytes` classifies OOXML archives by ZIP entry names instead of
+  searching every byte for `xl/`, `word/` or `ppt/`; media bytes matched by
+  chance, so DOCX files with large images were reported as XLSX.
+- XML `<![CDATA[...]]>` sections keep their text. The HTML stripper treated
+  them as bogus comments ending at the first `>`, so "Profit > 5% in Q3"
+  became "5% in Q3]]>".
+- A block boundary right after a literal U+00A0 or U+3000 keeps its newline;
+  the paragraphs used to merge ("Hello World").
+- PPTX speaker notes follow the slide whose relationships point at them,
+  instead of being paired by file number; notes written as
+  `notesSlide1.xml` for slide 3 printed under slide 1.
+- RTF `\par` ends a line, and `\'hh` escapes decode with the document's
+  `\ansicpg` code page (cp1252 by default): paragraphs ran together and
+  `\'85` became U+0085 instead of `…`. The `rtf` feature now enables
+  `encoding_rs`.
+
+### Documentation
+
+- The `docx` module no longer claims to read headers and footers. It reads
+  only `word/document.xml`, which holds the document body.
+
+## 0.16.0 — 2026-10-30
 
 ### Added
 
+- `SpanKind::WhitespaceCollapsed` (non-exhaustive enum) distinguishes spans the
+  whitespace pass normalized from `SpanKind::EntityDecoded`; consumers that
+  expand entities no longer treat collapsed whitespace as an entity.
 - `segments_to_slabs` example showing extracted HTML segments converted into
   `slabs::Slab` retrieval spans.
+
+### Fixed
+
+- DOCX and PPTX plain-text extraction puts each `w:p` / `a:p` paragraph on
+  its own line, including in PPTX speaker notes. Word and PowerPoint write no
+  whitespace between paragraphs, so adjacent paragraphs ran together
+  ("HelloWorld").
+- `strip_to_text_with_spans` / `strip_to_text_with_paths` now emit a
+  `SpanKind::Synthetic` span for every structural block-boundary newline
+  (`</p>`, `<br>`, `</td>`, `</li>`, ...), so every output byte has a source
+  position. Previously those newlines were unmapped and `source_position`
+  returned `None`.
+- `remap_spans` no longer drops a span whose run survived as the newline of a
+  collapsed whitespace run.
+- `strip_to_segments` ignores structure-only synthetic spans, so the new
+  newline spans do not leak into segment text.
+- `strip_to_segments` no longer inserts a space at inline tag and entity
+  boundaries (`Caf&eacute;` was "Caf é", `un<b>believ</b>able` was
+  "un believ able"), and normalizes whitespace the same way as
+  `strip_to_text`. Block boundaries inside one segment still join with a
+  single space.
+- EPUB manifest hrefs are percent-decoded and resolved relative to the OPF
+  directory, so `Chapter%201.xhtml` and `../Text/ch1.xhtml` are no longer
+  dropped (the latter previously failed the whole book with `EmptyResult`).
+- `pdf`/`pdf_oxide`: text no longer depends on previously extracted PDFs in
+  the same process. pdf_oxide 0.3.38 reused a cached font from an earlier
+  document when the font name and `/ToUnicode` object number matched, so a
+  later document decoded through the earlier document's mapping. The
+  `pdf_oxide` pin moves to 0.3.78, which keys that cache on font content.
 
 ## 0.15.3 — 2026-06-26
 

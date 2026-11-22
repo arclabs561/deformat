@@ -4,6 +4,7 @@
 
 | I want to... | Run |
 |---|---|
+| Print text from a local document | `extract_document` |
 | Strip HTML from stdin to plain text | `strip` |
 | See the boilerplate filter pipeline step by step | `filter_pipeline` |
 | Inspect typed HTML segments | `segments` |
@@ -33,6 +34,17 @@ printf '<article><h1>Hello</h1><p>world</p></article>' | cargo run --example str
 #01 NarrativeText    bytes=17..79 chars=Some(17..79) text="deformat extracts typed document segments from source formats."
 #02 NarrativeText    bytes=81..148 chars=Some(81..148) text="slabs records those selected spans with byte and character offsets."
 ```
+
+## Read your file
+
+From a checkout:
+
+```sh
+cargo run --quiet --features docx --example extract_document -- tests/fixtures/synthetic/minimal.docx
+```
+
+Replace the path with your own document. For a different binary format, enable
+its feature (for example, `epub`). HTML and plain text work with the default build.
 
 ## Feature-gated examples
 

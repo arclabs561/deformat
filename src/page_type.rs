@@ -27,7 +27,7 @@
 //! assert_eq!(detect_page_type(html), PageType::Article);
 //! ```
 
-use crate::html::extract_metadata;
+use crate::html::{self, extract_metadata};
 
 /// Coarse page type inferred from HTML signals.
 ///
@@ -155,40 +155,28 @@ pub fn detect_page_type(html: &str) -> PageType {
 }
 
 fn extract_og_type(lower_html: &str) -> Option<String> {
-    // Match either order: property=... content=... OR content=... property=...
-    // Keep it simple: find "og:type" then read the nearest content= value.
-    let idx = lower_html.find("og:type")?;
-    // Look for content=" nearby (forward first, then backward). Bound
-    // the window by char boundary so non-ASCII content doesn't panic.
-    let end = floor_char_boundary(lower_html, (idx + 200).min(lower_html.len()));
-    let window = &lower_html[idx..end];
-    if let Some(val) = read_attr(window, "content") {
-        return Some(val);
-    }
-    // Sometimes content= appears before property=, window backwards.
-    let back = ceil_char_boundary(lower_html, idx.saturating_sub(200));
-    let fwd_end = floor_char_boundary(lower_html, (idx + 50).min(lower_html.len()));
-    let window = &lower_html[back..fwd_end];
-    read_attr(window, "content")
+    // Read content= from the <meta> tag that declares og:type, in either
+    // attribute order. A fixed window around "og:type" could read the
+    // content of the next tag instead.
+    lower_html.match_indices("og:type").find_map(|(idx, _)| {
+        let tag = enclosing_tag(lower_html, idx)?;
+        let declares = |attr| html::extract_attr_value(tag, attr) == Some("og:type");
+        (tag.starts_with("<meta") && (declares("property") || declares("name")))
+            .then(|| html::extract_attr_value(tag, "content"))
+            .flatten()
+            .map(str::to_string)
+    })
 }
 
-/// Largest index <= `n` that lies on a UTF-8 char boundary.
-fn floor_char_boundary(s: &str, mut n: usize) -> usize {
-    if n >= s.len() {
-        return s.len();
+/// The whole tag (`<...>`) that contains byte `idx`, or `None` when `idx`
+/// is in text between tags.
+fn enclosing_tag(html: &str, idx: usize) -> Option<&str> {
+    let start = html[..idx].rfind('<')?;
+    if html[start..idx].contains('>') {
+        return None;
     }
-    while n > 0 && !s.is_char_boundary(n) {
-        n -= 1;
-    }
-    n
-}
-
-/// Smallest index >= `n` that lies on a UTF-8 char boundary.
-fn ceil_char_boundary(s: &str, mut n: usize) -> usize {
-    while n < s.len() && !s.is_char_boundary(n) {
-        n += 1;
-    }
-    n
+    let end = idx + html[idx..].find('>')? + 1;
+    Some(&html[start..end])
 }
 
 fn extract_json_ld_type(lower_html: &str) -> Option<String> {
@@ -227,13 +215,18 @@ fn extract_json_ld_type(lower_html: &str) -> Option<String> {
 }
 
 fn extract_canonical_path(lower_html: &str) -> Option<String> {
-    let canon = lower_html.find("rel=\"canonical\"")?;
-    let start = ceil_char_boundary(lower_html, canon.saturating_sub(200));
-    let end = floor_char_boundary(lower_html, (canon + 400).min(lower_html.len()));
-    let window = &lower_html[start..end];
-    let href = read_attr(window, "href")?;
+    // Take href= from the <link> whose rel includes "canonical", not from
+    // whichever link happens to sit nearby.
+    let href = lower_html.match_indices("<link").find_map(|(idx, _)| {
+        let tag = enclosing_tag(lower_html, idx + 1)?;
+        let rel = html::extract_attr_value(tag, "rel")?;
+        rel.split_ascii_whitespace()
+            .any(|token| token == "canonical")
+            .then(|| html::extract_attr_value(tag, "href"))
+            .flatten()
+    })?;
     // Extract the URL path (strip scheme + host).
-    let no_scheme = href.split_once("://").map(|(_, r)| r).unwrap_or(&href);
+    let no_scheme = href.split_once("://").map_or(href, |(_, r)| r);
     let path_start = no_scheme.find('/').unwrap_or(no_scheme.len());
     Some(no_scheme[path_start..].to_string())
 }
@@ -261,24 +254,6 @@ fn classify_by_url_path(path: &str) -> Option<PageType> {
         return Some(PageType::Article);
     }
     None
-}
-
-fn read_attr(src: &str, name: &str) -> Option<String> {
-    let pat = format!("{name}=");
-    let idx = src.find(&pat)?;
-    let after = &src[idx + pat.len()..];
-    let bytes = after.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    let (start, end_ch) = match bytes[0] {
-        b'"' => (1, b'"'),
-        b'\'' => (1, b'\''),
-        _ => (0, b' '),
-    };
-    let after_quote = &after[start..];
-    let end = after_quote.find(end_ch as char)?;
-    Some(after_quote[..end].to_string())
 }
 
 fn count_ci(haystack: &str, needle: &str) -> usize {
@@ -362,6 +337,30 @@ mod tests {
     fn canonical_url_forum_pattern() {
         let html = r#"<link rel="canonical" href="https://forum.example.com/thread/123">"#;
         assert_eq!(detect_page_type(html), PageType::Forum);
+    }
+
+    #[test]
+    fn og_type_is_read_from_its_own_meta_tag() {
+        // content= before property=, followed by another meta.
+        let html = r#"<meta content="product" property="og:type"><meta content="Blue Widget" property="og:title">"#;
+        assert_eq!(detect_page_type(html), PageType::Product);
+        // name= instead of property=, single quotes.
+        let html = r#"<meta name='og:type' content='product'><p>x</p>"#;
+        assert_eq!(detect_page_type(html), PageType::Product);
+        // "og:type" in text is not a declaration.
+        assert_eq!(
+            extract_og_type(r#"<p>set og:type content="product"</p>"#),
+            None
+        );
+    }
+
+    #[test]
+    fn canonical_href_comes_from_the_canonical_link() {
+        let html = r#"<link rel="alternate" hreflang="de" href="https://example.com/de/forum/thread-9"><link rel="canonical" href="https://example.com/blog/2026/05/post">"#;
+        assert_eq!(detect_page_type(html), PageType::Article);
+        // rel may hold several tokens.
+        let html = r#"<link rel="nofollow canonical" href="https://example.com/products/42">"#;
+        assert_eq!(detect_page_type(html), PageType::Product);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! reading XHTML content documents from the ZIP archive and stripping
 //! tags. Reads the OPF manifest to find content files in reading order.
 
+use crate::zip_entry::ArchiveBudget;
 use crate::{html, Error, Extracted, Extractor, Format};
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -35,22 +36,30 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|e| Error::Parse(format!("invalid EPUB ZIP: {e}")))?;
 
+    let mut budget = ArchiveBudget::new();
+
     // Find content files: look for .xhtml, .html, .htm files in the archive
     let mut content_files: Vec<String> = Vec::new();
 
     // Try to read the OPF file for proper reading order
-    let opf_path = find_opf_path(&mut archive);
+    let opf_path = find_opf_path(&mut archive, &mut budget);
     if let Some(ref opf) = opf_path {
-        if let Ok(items) = parse_opf_spine(&mut archive, opf) {
+        if let Ok(items) = parse_opf_spine(&mut archive, &mut budget, opf) {
             content_files = items;
         }
     }
+    budget.check()?;
 
     // Fallback: collect all HTML/XHTML files sorted by name
     if content_files.is_empty() {
         for i in 0..archive.len() {
-            if let Ok(entry) = archive.by_index(i) {
-                let name = entry.name().to_string();
+            // Entries that cannot be opened, or whose stored name zip
+            // rejects as invalid, are skipped.
+            if let Some(name) = archive
+                .by_index(i)
+                .ok()
+                .and_then(|entry| entry.name().ok().map(|n| n.to_string()))
+            {
                 if name.ends_with(".xhtml") || name.ends_with(".html") || name.ends_with(".htm") {
                     content_files.push(name);
                 }
@@ -63,7 +72,9 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     for name in &content_files {
         if let Ok(mut entry) = archive.by_name(name) {
             let mut xhtml = String::new();
-            if crate::zip_entry::read_to_string(&mut entry, &mut xhtml).is_ok() {
+            let read = budget.read_to_string(&mut entry, &mut xhtml);
+            budget.check()?;
+            if read.is_ok() {
                 let text = html::strip_to_text(&xhtml);
                 let trimmed = text.trim().to_string();
                 if !trimmed.is_empty() {
@@ -79,7 +90,8 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
     }
 
     // Try to extract title from OPF metadata
-    let title = opf_path.and_then(|p| extract_opf_title(&mut archive, &p));
+    let title = opf_path.and_then(|p| extract_opf_title(&mut archive, &mut budget, &p));
+    budget.check()?;
 
     Ok(Extracted {
         text,
@@ -92,10 +104,13 @@ fn extract_reader<R: Read + Seek>(reader: R) -> Result<Extracted, Error> {
 }
 
 /// Find the OPF file path from META-INF/container.xml.
-fn find_opf_path<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Option<String> {
+fn find_opf_path<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    budget: &mut ArchiveBudget,
+) -> Option<String> {
     let mut entry = archive.by_name("META-INF/container.xml").ok()?;
     let mut xml = String::new();
-    crate::zip_entry::read_to_string(&mut entry, &mut xml).ok()?;
+    budget.read_to_string(&mut entry, &mut xml).ok()?;
     // Look for full-path="..." in the rootfile element
     let idx = xml.find("full-path=\"")?;
     let start = idx + 11;
@@ -106,11 +121,14 @@ fn find_opf_path<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Option<Str
 /// Parse the OPF spine to get content files in reading order.
 fn parse_opf_spine<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
+    budget: &mut ArchiveBudget,
     opf_path: &str,
 ) -> Result<Vec<String>, ()> {
     let mut entry = archive.by_name(opf_path).map_err(|_| ())?;
     let mut xml = String::new();
-    crate::zip_entry::read_to_string(&mut entry, &mut xml).map_err(|_| ())?;
+    budget
+        .read_to_string(&mut entry, &mut xml)
+        .map_err(|_| ())?;
 
     // Extract the directory prefix for relative paths
     let prefix = if let Some(slash) = opf_path.rfind('/') {
@@ -137,7 +155,9 @@ fn parse_opf_spine<R: Read + Seek>(
 
         if let (Some(id), Some(href), Some(media)) = (id, href, media) {
             if media.contains("xhtml") || media.contains("html") {
-                id_to_href.insert(id.to_string(), format!("{prefix}{href}"));
+                if let Some(path) = resolve_href(prefix, href) {
+                    id_to_href.insert(id.to_string(), path);
+                }
             }
         }
     }
@@ -167,21 +187,79 @@ fn parse_opf_spine<R: Read + Seek>(
     }
 }
 
+/// Resolve a manifest `href` to a ZIP entry name.
+///
+/// OPF hrefs are URLs relative to the OPF file: they may be
+/// percent-encoded (`Chapter%201.xhtml`), climb out of the OPF directory
+/// (`../Text/ch1.xhtml`), or carry a fragment. ZIP entry names are plain
+/// decoded paths, so the raw join would not match any entry. Returns
+/// `None` for hrefs that point outside the container (absolute URLs, or
+/// more `..` segments than directories).
+fn resolve_href(prefix: &str, href: &str) -> Option<String> {
+    let href = href.split(['#', '?']).next().unwrap_or("");
+    if href.is_empty() || href.contains("://") {
+        return None;
+    }
+    let href = percent_decode(href);
+    let joined = match href.strip_prefix('/') {
+        Some(root_relative) => root_relative.to_string(),
+        None => format!("{prefix}{href}"),
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// Decode `%XX` escapes. Malformed escapes and non-UTF-8 results are
+/// returned unchanged.
+fn percent_decode(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = |b: u8| (b as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
 /// Extract title from OPF metadata.
 fn extract_opf_title<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
+    budget: &mut ArchiveBudget,
     opf_path: &str,
 ) -> Option<String> {
     let mut entry = archive.by_name(opf_path).ok()?;
     let mut xml = String::new();
-    crate::zip_entry::read_to_string(&mut entry, &mut xml).ok()?;
+    budget.read_to_string(&mut entry, &mut xml).ok()?;
 
     let start = xml
         .find("<dc:title")?
         .checked_add(xml[xml.find("<dc:title")?..].find('>')?)?;
     let start = start + 1;
     let end = xml[start..].find("</dc:title>")? + start;
-    let title = xml[start..end].trim().to_string();
+    // dc:title is XML character data: decode its references like the
+    // chapter text, which goes through the HTML stripper.
+    let title = html::decode_entities(xml[start..end].trim());
     if title.is_empty() {
         None
     } else {
@@ -303,6 +381,22 @@ mod tests {
             result.text
         );
         assert!(result.text.contains("&"), "amp: {}", result.text);
+    }
+
+    #[test]
+    fn extract_epub_title_decodes_entities() {
+        let epub = make_epub(
+            &[(
+                "ch1.xhtml",
+                "<html><body><p>It is a truth.</p></body></html>",
+            )],
+            "Pride &amp; Prejudice &#8212; Caf&#xE9;",
+        );
+        let result = extract_bytes(&epub).unwrap();
+        assert_eq!(
+            result.title.as_deref(),
+            Some("Pride & Prejudice \u{2014} Caf\u{E9}")
+        );
     }
 
     #[test]

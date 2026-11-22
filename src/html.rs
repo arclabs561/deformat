@@ -92,7 +92,9 @@ impl StripOptions {
 ///   `<head>`, `<menu>`, `<select>`, `<figcaption>`
 /// - Wikipedia/MediaWiki boilerplate removal (TOC, references, navboxes)
 /// - HTML entity decoding (`&amp;`, `&#123;`, `&#x1F;`, etc.)
-/// - Whitespace collapsing (HTML rendering semantics)
+/// - Whitespace collapsing (HTML rendering semantics): runs of whitespace
+///   become one space or one newline, except inside `<pre>`, which keeps its
+///   whitespace (minus one newline directly after the opening tag)
 ///
 /// Does **not** strip Wikipedia reference markers by default. Use
 /// [`strip_to_text_with_options`] with [`StripOptions::wikipedia()`] for that.
@@ -192,8 +194,9 @@ pub struct Span {
 ///
 /// Consumers that highlight or transform extracted text use the kind to
 /// decide whether a span's output bytes can be linearly projected onto its
-/// source range ([`SpanKind::Direct`]) or whether the output is a
-/// substitution ([`SpanKind::EntityDecoded`]) or a fabrication
+/// source range ([`SpanKind::Direct`]) or whether the output was rewritten by
+/// the whitespace pass ([`SpanKind::WhitespaceCollapsed`]), decoded from an
+/// entity ([`SpanKind::EntityDecoded`]), or fabricated
 /// ([`SpanKind::Synthetic`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -205,6 +208,13 @@ pub enum SpanKind {
     /// Output is a decoded HTML entity (`&eacute;` → `é`). Source range
     /// points at the entity reference; byte widths differ.
     EntityDecoded,
+    /// Output was normalized by the whitespace pass: the source range
+    /// contains collapsible whitespace (`"a   b"` → `"a b"`, `" \n"` →
+    /// `"\n"`), dropped invisible characters, or was trimmed at the edge of
+    /// the output. Bytes cannot be linearly projected onto the source range;
+    /// `source_start..source_end` still points at the originating text, though
+    /// whitespace the pass dropped may fall outside it.
+    WhitespaceCollapsed,
     /// Output has no literal counterpart in the source range (e.g. an
     /// `<img alt>` value exposed as text, or an inserted block-boundary
     /// newline). `source_start..source_end` points at the originating
@@ -220,8 +230,21 @@ impl SpanMap {
     /// ranges, so it can be wider than the literal bytes that produced the
     /// queried output range — that is the correct behavior when the output
     /// range straddles multiple source regions or entity decodings.
+    ///
+    /// # Consumer consequence
+    ///
+    /// Because the range is a union, it can include source bytes that
+    /// produced none of the queried output: tags between two text runs,
+    /// entity references, comment markup, or whitespace that collapsed
+    /// away. Callers that redact or rewrite source (rather than only
+    /// highlighting) must re-verify the returned slice — for example
+    /// against [`SpanMap::iter`] — instead of assuming every byte in it
+    /// belongs to the queried output.
     #[must_use]
     pub fn source_range(&self, output_start: usize, output_end: usize) -> Option<(usize, usize)> {
+        if output_start == output_end {
+            return None;
+        }
         // Binary search: skip spans that end before the query starts.
         let start_idx = self.spans.partition_point(|s| s.output_end <= output_start);
         let mut src_start = usize::MAX;
@@ -245,10 +268,11 @@ impl SpanMap {
     /// Map a single output byte position to its source byte position.
     ///
     /// For [`SpanKind::Direct`] runs, the result is byte-exact via linear
-    /// interpolation. For [`SpanKind::EntityDecoded`] and
-    /// [`SpanKind::Synthetic`] runs the output byte cannot be projected
-    /// onto a single source byte, so the span's `source_start` is returned
-    /// as a pointer to the originating construct.
+    /// interpolation. For [`SpanKind::EntityDecoded`],
+    /// [`SpanKind::WhitespaceCollapsed`] and [`SpanKind::Synthetic`] runs the
+    /// output byte cannot be projected onto a single source byte, so the
+    /// span's `source_start` is returned as a pointer to the originating
+    /// construct.
     ///
     /// Returns `None` if `output_pos` is not covered by any span.
     #[must_use]
@@ -260,7 +284,9 @@ impl SpanMap {
         }
         match span.kind {
             SpanKind::Direct => Some(span.source_start + (output_pos - span.output_start)),
-            SpanKind::EntityDecoded | SpanKind::Synthetic => Some(span.source_start),
+            SpanKind::EntityDecoded | SpanKind::WhitespaceCollapsed | SpanKind::Synthetic => {
+                Some(span.source_start)
+            }
         }
     }
 
@@ -287,9 +313,10 @@ impl SpanMap {
 /// Like [`strip_to_text`], but also returns a [`SpanMap`] that maps
 /// byte ranges in the output text back to byte ranges in the source HTML.
 ///
-/// Note: the span map tracks direct text copies and entity decoding.
-/// Block-boundary newlines and whitespace-collapsed regions map to
-/// approximate source positions.
+/// Note: the span map tracks direct text copies, entity decoding, and
+/// whitespace collapsing. Block-boundary newlines are [`SpanKind::Synthetic`]
+/// spans pointing at the tag that produced them, so they are mapped like any
+/// other output byte rather than left as unclaimed gaps.
 pub fn strip_to_text_with_spans(html: &str) -> (String, SpanMap) {
     let mut spans = Vec::new();
     let text = strip_impl(html, &StripOptions::default(), Some(&mut spans));
@@ -466,18 +493,7 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                 if bytes[pos] == b'!' {
                     if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
                         pos += 3;
-                        let mut dashes = 0u32;
-                        while pos < len {
-                            match bytes[pos] {
-                                b'-' => dashes += 1,
-                                b'>' if dashes >= 2 => {
-                                    pos += 1;
-                                    break;
-                                }
-                                _ => dashes = 0,
-                            }
-                            pos += 1;
-                        }
+                        pos = skip_comment_body(bytes, pos);
                         continue;
                     }
                     if let Some(o) = memchr::memchr(b'>', &bytes[pos..]) {
@@ -608,11 +624,17 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     && !is_skip_tag(effective)
                     && effective != "script"
                     && effective != "style";
+                // Path attached to the block-boundary newline span, if one is
+                // emitted for this tag: the element whose boundary it marks.
+                let mut boundary_path: Option<String> = None;
                 if is_trackable {
                     if is_close {
                         if let Some(idx) =
                             path_stack.iter().rposition(|(name, _)| name == effective)
                         {
+                            if is_block_tag(effective) {
+                                boundary_path = Some(build_path(&path_stack[..=idx]));
+                            }
                             path_stack.truncate(idx);
                         }
                     } else if !tag_lower.ends_with('/') && !is_void_element(effective) {
@@ -629,6 +651,13 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                             *count += 1;
                         }
                         path_stack.push((effective.to_string(), std::collections::HashMap::new()));
+                        if is_block_tag(effective) {
+                            boundary_path = Some(build_path(&path_stack));
+                        }
+                    } else if is_block_tag(effective) {
+                        // Void / self-closing block element (br, hr, wbr): its
+                        // boundary belongs to the surrounding container.
+                        boundary_path = Some(build_path(&path_stack));
                     }
                 }
 
@@ -641,7 +670,20 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     && !text.is_empty()
                     && !text.ends_with('\n')
                 {
+                    let nl_start = text.len();
                     text.push('\n');
+                    // The newline has no text counterpart in the source; point
+                    // it at the block tag that introduced the boundary so the
+                    // byte still has a source position.
+                    let path = boundary_path.unwrap_or_else(|| build_path(&path_stack));
+                    path_spans.push(PathSpan {
+                        output_start: nl_start,
+                        output_end: nl_start + 1,
+                        source_start: tag_start.saturating_sub(1),
+                        source_end: pos.min(len),
+                        kind: SpanKind::Synthetic,
+                        path,
+                    });
                 }
 
                 // Img alt text
@@ -705,8 +747,15 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
     let new_len = trimmed.len();
     if leading > 0 || new_len < text.len() {
         for span in &mut path_spans {
+            let original_len = span.output_end - span.output_start;
             span.output_start = span.output_start.saturating_sub(leading).min(new_len);
             span.output_end = span.output_end.saturating_sub(leading).min(new_len);
+            if span.kind == SpanKind::Direct && span.output_end - span.output_start != original_len
+            {
+                // The source range still includes trimmed whitespace, so
+                // byte-for-byte projection no longer identifies the output.
+                span.kind = SpanKind::WhitespaceCollapsed;
+            }
         }
         path_spans.retain(|s| s.output_start < s.output_end);
     }
@@ -864,18 +913,7 @@ fn markdown_impl(html: &str, options: &StripOptions) -> String {
                 if bytes[pos] == b'!' {
                     if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
                         pos += 3;
-                        let mut dashes = 0u32;
-                        while pos < len {
-                            match bytes[pos] {
-                                b'-' => dashes += 1,
-                                b'>' if dashes >= 2 => {
-                                    pos += 1;
-                                    break;
-                                }
-                                _ => dashes = 0,
-                            }
-                            pos += 1;
-                        }
+                        pos = skip_comment_body(bytes, pos);
                         continue;
                     }
                     if let Some(o) = memchr::memchr(b'>', &bytes[pos..]) {
@@ -1768,6 +1806,10 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
     let mut in_style = false;
     let mut skip_depth: u32 = 0;
     let mut wiki_skip_depth: u32 = 0;
+    // Output ranges of <pre> content, which keeps its whitespace.
+    let mut verbatim: Vec<(usize, usize)> = Vec::new();
+    let mut pre_depth: u32 = 0;
+    let mut pre_start = 0;
 
     while pos < len {
         let skipping = in_script || in_style || skip_depth > 0;
@@ -1863,18 +1905,7 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                 if bytes[pos] == b'!' {
                     if pos + 2 < len && bytes[pos + 1] == b'-' && bytes[pos + 2] == b'-' {
                         pos += 3; // skip "!--"
-                        let mut dashes = 0u32;
-                        while pos < len {
-                            match bytes[pos] {
-                                b'-' => dashes += 1,
-                                b'>' if dashes >= 2 => {
-                                    pos += 1;
-                                    break;
-                                }
-                                _ => dashes = 0,
-                            }
-                            pos += 1;
-                        }
+                        pos = skip_comment_body(bytes, pos);
                         continue;
                     }
                     // <!DOCTYPE ...> or other <! directive
@@ -2042,6 +2073,14 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                     wiki_skip_depth = 0;
                 }
 
+                let in_text = !in_script && !in_style && skip_depth == 0;
+                if in_text && tag_lower == "/pre" && pre_depth > 0 {
+                    pre_depth -= 1;
+                    if pre_depth == 0 {
+                        push_verbatim(&mut verbatim, &text, pre_start);
+                    }
+                }
+
                 // Insert newline at block-level element boundaries.
                 // This gives downstream consumers (NER, summarizers) clear
                 // sentence boundaries between headings, paragraphs, table cells,
@@ -2056,7 +2095,27 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                     && !text.is_empty()
                     && !text.ends_with('\n')
                 {
+                    let nl_start = text.len();
                     text.push('\n');
+                    if let Some(ref mut s) = spans {
+                        // The newline has no text counterpart in the source;
+                        // point it at the block tag that introduced the
+                        // boundary so the byte still has a source position.
+                        s.push(Span {
+                            output_start: nl_start,
+                            output_end: nl_start + 1,
+                            source_start: tag_start.saturating_sub(1),
+                            source_end: pos.min(len),
+                            kind: SpanKind::Synthetic,
+                        });
+                    }
+                }
+
+                if in_text && tag_lower == "pre" {
+                    if pre_depth == 0 {
+                        pre_start = text.len();
+                    }
+                    pre_depth += 1;
                 }
 
                 // Extract alt text from <img> tags
@@ -2120,16 +2179,33 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
         }
     }
 
+    // An unclosed <pre> runs to the end of the document.
+    if pre_depth > 0 {
+        push_verbatim(&mut verbatim, &text, pre_start);
+    }
+
     // When span tracking is active, run cleanup_whitespace with a position
     // map so the returned text matches strip_to_text while span positions
     // remain accurate against the cleaned output.
     if let Some(ref mut s) = spans {
-        let (cleaned, map) = cleanup_whitespace_with_map(&text);
+        let (cleaned, map) = if verbatim.is_empty() {
+            cleanup_whitespace_with_map(&text)
+        } else {
+            cleanup_whitespace_preserving_with_map(&text, &verbatim)
+        };
         // Leading trim: drop output bytes whose character is whitespace at
         // the start of the string.
-        let lead_trim = cleaned.len() - cleaned.trim_start().len();
-        // Trailing trim: same on the other side.
-        let trail_start = cleaned.trim_end().len();
+        let keep_pre = !verbatim.is_empty() && !cleaned.trim().is_empty();
+        let lead_trim = cleaned.len()
+            - cleaned
+                .trim_start_matches(|c| is_trimmed(c, keep_pre))
+                .len();
+        // Trailing trim: same on the other side. All-whitespace output (only
+        // possible from <pre> content) trims from both ends; keep the range empty.
+        let trail_start = cleaned
+            .trim_end_matches(|c| is_trimmed(c, keep_pre))
+            .len()
+            .max(lead_trim);
 
         let pre_bytes = text.as_bytes();
         if lead_trim > 0 || trail_start < cleaned.len() {
@@ -2147,14 +2223,17 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
     // Optionally strip Wikipedia reference markers [1], [edit], [citation needed].
     // Do this before whitespace cleanup so the cleanup pass collapses any
     // resulting double spaces.
-    let cleaned = if options.strip_wiki_ref_markers {
+    let cleaned = if !verbatim.is_empty() {
+        cleanup_whitespace_preserving(&text, &verbatim, options.strip_wiki_ref_markers)
+    } else if options.strip_wiki_ref_markers {
         let text = strip_wiki_ref_markers(&text);
         cleanup_whitespace(&text).into_owned()
     } else {
         cleanup_whitespace(&text).into_owned()
     };
     // Trim leading/trailing whitespace (including newlines from block boundaries)
-    let trimmed = cleaned.trim();
+    let keep_pre = !verbatim.is_empty() && !cleaned.trim().is_empty();
+    let trimmed = cleaned.trim_matches(|c| is_trimmed(c, keep_pre));
     if trimmed.len() == cleaned.len() {
         cleaned
     } else {
@@ -2169,7 +2248,7 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
 /// For pure ASCII text that is already trimmed, has no double spaces, and no
 /// control characters, returns a zero-copy `Cow::Borrowed`.
 #[inline]
-fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
+pub(crate) fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
     let text_bytes = text.as_bytes();
     let text_len = text_bytes.len();
 
@@ -2203,7 +2282,12 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
             // ASCII whitespace or control character.
             // Preserve newlines from block-element boundaries: if a
             // whitespace run contains \n, collapse to \n rather than space.
-            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
+            // A space already emitted for non-ASCII whitespace (U+00A0,
+            // U+3000) must not swallow a following block newline.
+            let after_space = cleaned.ends_with(' ');
+            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r')
+                && (!last_was_space || after_space)
+            {
                 let mut has_newline = b == b'\n';
                 // Scan ahead to collapse the full whitespace run
                 i += 1;
@@ -2216,7 +2300,14 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
                     }
                     i += 1;
                 }
-                cleaned.push(if has_newline { '\n' } else { ' ' });
+                if has_newline {
+                    if after_space {
+                        cleaned.pop();
+                    }
+                    cleaned.push('\n');
+                } else if !after_space {
+                    cleaned.push(' ');
+                }
                 last_was_space = true;
                 continue;
             }
@@ -2261,22 +2352,35 @@ fn cleanup_whitespace(text: &str) -> Cow<'_, str> {
 ///
 /// `map[j]` is the pre-cleanup byte that produced output byte `j`; the map
 /// is monotone non-decreasing, so each boundary is recovered by
-/// `partition_point`. Spans that collapse entirely into whitespace are
-/// dropped. The caller may pass `map` truncated at the trim window, in
-/// which case spans outside that window are dropped or clamped.
+/// `partition_point`. Spans whose run survived as a single collapsed byte
+/// (a structural newline at a whitespace run) are clamped to that byte;
+/// spans that vanished entirely — leading/trailing trim, or a whitespace run
+/// that collapsed into a different run — are dropped. The caller may pass
+/// `map` truncated at the trim window, in which case spans outside that
+/// window are dropped or clamped.
 fn remap_spans(spans: &mut Vec<Span>, map: &[u32], pre: &[u8], post: &[u8]) {
     spans.retain_mut(|span| {
         let pre_start = span.output_start as u32;
         let pre_end = span.output_end as u32;
         let new_start = map.partition_point(|&m| m < pre_start);
-        let new_end = map.partition_point(|&m| m < pre_end);
+        let mut new_end = map.partition_point(|&m| m < pre_end);
         if new_start >= new_end {
-            return false;
+            // The run maps to no output byte on its own. It can still own one
+            // when whitespace cleanup kept a single byte from the surrounding
+            // run: `map[new_start]` then points back into this span's pre
+            // range (see the newline preference in
+            // `cleanup_whitespace_with_map`). Keep the span over that byte
+            // instead of dropping a structural newline's only mapping.
+            match map.get(new_start) {
+                Some(&owner) if (pre_start..pre_end).contains(&owner) => new_end = new_start + 1,
+                _ => return false,
+            }
         }
         // If whitespace cleanup collapsed bytes inside a Direct run, the
         // post-cleanup output is shorter than the pre-cleanup source, so
-        // byte-level interpolation would skew. Demote to EntityDecoded,
-        // which documents that source bytes are not indexable byte-for-byte.
+        // byte-level interpolation would skew. Demote to
+        // WhitespaceCollapsed, which documents that source bytes are not
+        // indexable byte-for-byte.
         //
         // Byte-count equality alone isn't sufficient: a whitespace run
         // like ` \n` collapses to `\n`, which preserves the count but
@@ -2297,13 +2401,136 @@ fn remap_spans(spans: &mut Vec<Span>, map: &[u32], pre: &[u8], post: &[u8]) {
                 }
             }
             if !is_direct {
-                span.kind = SpanKind::EntityDecoded;
+                span.kind = SpanKind::WhitespaceCollapsed;
             }
         }
         span.output_start = new_start;
         span.output_end = new_end;
         true
     });
+}
+
+/// Whether the final trim of `strip_to_text` output removes `c`. When the
+/// output has `<pre>` content and is not all whitespace, only block newlines
+/// go, so indentation at the start or end of a `<pre>` block survives.
+fn is_trimmed(c: char, keep_pre: bool) -> bool {
+    if keep_pre {
+        c == '\n'
+    } else {
+        c.is_whitespace()
+    }
+}
+
+/// Record the `<pre>` content that starts at `start` and ends at the current
+/// end of `text`. HTML drops one newline directly after the `<pre>` tag.
+fn push_verbatim(verbatim: &mut Vec<(usize, usize)>, text: &str, start: usize) {
+    let rest = &text[start..];
+    let start = start + rest.len()
+        - rest
+            .strip_prefix("\r\n")
+            .or_else(|| rest.strip_prefix('\n'))
+            .unwrap_or(rest)
+            .len();
+    if start < text.len() {
+        verbatim.push((start, text.len()));
+    }
+}
+
+/// The separator a collapsed segment contributes after a `<pre>` range: a
+/// newline if its leading whitespace contains one, otherwise a space. Returns
+/// the separator and its byte offset in `segment`.
+fn leading_separator(segment: &str) -> Option<(char, usize)> {
+    let run = &segment[..segment.len() - segment.trim_start().len()];
+    if run.is_empty() {
+        return None;
+    }
+    Some(run.find('\n').map_or((' ', 0), |i| ('\n', i)))
+}
+
+/// Whether `out` still needs `sep` between it and the next segment.
+fn needs_separator(out: &str, sep: char) -> bool {
+    !out.is_empty() && !out.ends_with('\n') && (sep == '\n' || !out.ends_with(' '))
+}
+
+/// Characters kept inside `<pre>`: everything but control characters other
+/// than newline and tab, which the collapse pass drops everywhere else too.
+fn keep_in_pre(ch: char) -> bool {
+    !ch.is_control() || ch == '\n' || ch == '\t'
+}
+
+/// [`cleanup_whitespace`] for text containing `<pre>` content: whitespace
+/// outside the `verbatim` byte ranges collapses as usual, inside them it is
+/// kept. Wikipedia reference markers are stripped outside the ranges only.
+fn cleanup_whitespace_preserving(
+    text: &str,
+    verbatim: &[(usize, usize)],
+    strip_wiki: bool,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let collapse = |out: &mut String, segment: &str| {
+        if let Some((sep, _)) = leading_separator(segment) {
+            if needs_separator(out, sep) {
+                if sep == '\n' && out.ends_with(' ') {
+                    out.pop();
+                }
+                out.push(sep);
+            }
+        }
+        let segment = if strip_wiki {
+            strip_wiki_ref_markers(segment)
+        } else {
+            Cow::Borrowed(segment)
+        };
+        out.push_str(&cleanup_whitespace(&segment));
+    };
+    let mut pos = 0;
+    for &(start, end) in verbatim {
+        collapse(&mut out, &text[pos..start]);
+        out.extend(text[start..end].chars().filter(|&c| keep_in_pre(c)));
+        pos = end;
+    }
+    collapse(&mut out, &text[pos..]);
+    out
+}
+
+/// [`cleanup_whitespace_preserving`] with the position map of
+/// [`cleanup_whitespace_with_map`]; `<pre>` bytes map to themselves.
+fn cleanup_whitespace_preserving_with_map(
+    text: &str,
+    verbatim: &[(usize, usize)],
+) -> (String, Vec<u32>) {
+    let mut out = String::with_capacity(text.len());
+    let mut map: Vec<u32> = Vec::with_capacity(text.len());
+    let collapse = |out: &mut String, map: &mut Vec<u32>, from: usize, to: usize| {
+        let segment = &text[from..to];
+        if let Some((sep, at)) = leading_separator(segment) {
+            if needs_separator(out, sep) {
+                if sep == '\n' && out.ends_with(' ') {
+                    out.pop();
+                    map.pop();
+                }
+                out.push(sep);
+                map.push((from + at) as u32);
+            }
+        }
+        let (cleaned, segment_map) = cleanup_whitespace_with_map(segment);
+        out.push_str(&cleaned);
+        map.extend(segment_map.iter().map(|&j| j + from as u32));
+    };
+    let mut pos = 0;
+    for &(start, end) in verbatim {
+        collapse(&mut out, &mut map, pos, start);
+        for (offset, ch) in text[start..end].char_indices() {
+            if keep_in_pre(ch) {
+                out.push(ch);
+                map.extend(std::iter::repeat_n((start + offset) as u32, ch.len_utf8()));
+            }
+        }
+        pos = end;
+    }
+    collapse(&mut out, &mut map, pos, text.len());
+    debug_assert_eq!(out.len(), map.len());
+    (out, map)
 }
 
 /// Same semantics as [`cleanup_whitespace`], but also returns a `map`
@@ -2339,21 +2566,39 @@ fn cleanup_whitespace_with_map(text: &str) -> (String, Vec<u32>) {
             }
             last_was_space = false;
         } else if b <= 0x20 {
-            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !last_was_space {
+            // A space already emitted for non-ASCII whitespace (U+00A0,
+            // U+3000) must not swallow a following block newline.
+            let after_space = cleaned.ends_with(' ');
+            if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r')
+                && (!last_was_space || after_space)
+            {
                 let run_start = i;
-                let mut has_newline = b == b'\n';
+                let mut newline_at = if b == b'\n' { Some(i) } else { None };
                 i += 1;
                 while i < text_len {
                     let b2 = text_bytes[i];
                     if b2 == b'\n' {
-                        has_newline = true;
+                        newline_at.get_or_insert(i);
                     } else if b2 != b' ' && b2 != b'\t' && b2 != b'\r' {
                         break;
                     }
                     i += 1;
                 }
-                cleaned.push(if has_newline { '\n' } else { ' ' });
-                map.push(run_start as u32);
+                if let Some(nl) = newline_at {
+                    if after_space {
+                        cleaned.pop();
+                        map.pop();
+                    }
+                    cleaned.push('\n');
+                    // Point the collapsed byte at the newline it kept rather
+                    // than at the run's first byte, so a structural-newline
+                    // span that starts at that newline still covers its own
+                    // output byte.
+                    map.push(nl as u32);
+                } else if !after_space {
+                    cleaned.push(' ');
+                    map.push(run_start as u32);
+                }
                 last_was_space = true;
                 continue;
             }
@@ -2747,6 +2992,23 @@ fn numeric_entity_to_char(n: u32) -> Option<char> {
     }
 }
 
+/// Named references HTML5 decodes without a trailing ';' (the WHATWG legacy
+/// set, as listed without ';' in the named character reference table). Every
+/// other name needs its semicolon. Sorted for binary search.
+static LEGACY_NO_SEMICOLON: &[&str] = &[
+    "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY", "Ccedil",
+    "ETH", "Eacute", "Ecirc", "Egrave", "Euml", "GT", "Iacute", "Icirc", "Igrave", "Iuml", "LT",
+    "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde", "Ouml", "QUOT", "REG", "THORN",
+    "Uacute", "Ucirc", "Ugrave", "Uuml", "Yacute", "aacute", "acirc", "acute", "aelig", "agrave",
+    "amp", "aring", "atilde", "auml", "brvbar", "ccedil", "cedil", "cent", "copy", "curren", "deg",
+    "divide", "eacute", "ecirc", "egrave", "eth", "euml", "frac12", "frac14", "frac34", "gt",
+    "iacute", "icirc", "iexcl", "igrave", "iquest", "iuml", "laquo", "lt", "macr", "micro",
+    "middot", "nbsp", "not", "ntilde", "oacute", "ocirc", "ograve", "ordf", "ordm", "oslash",
+    "otilde", "ouml", "para", "plusmn", "pound", "quot", "raquo", "reg", "sect", "shy", "sup1",
+    "sup2", "sup3", "szlig", "thorn", "times", "uacute", "ucirc", "ugrave", "uml", "uuml",
+    "yacute", "yen", "yuml",
+];
+
 /// Map a named HTML entity to its Unicode character.
 ///
 /// Covers the most common entities encountered in real web content,
@@ -2758,6 +3020,7 @@ fn numeric_entity_to_char(n: u32) -> Option<char> {
 /// Greek letters, math symbols, arrows, and typographic punctuation.
 static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&AElig;", '\u{00C6}'),
+    ("&AMP;", '&'),
     ("&Aacute;", '\u{00C1}'),
     ("&Abreve;", '\u{0102}'), // Romanian Ă
     ("&Acirc;", '\u{00C2}'),
@@ -2768,6 +3031,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Atilde;", '\u{00C3}'),
     ("&Auml;", '\u{00C4}'),
     ("&Beta;", '\u{0392}'),
+    ("&COPY;", '\u{00A9}'),
     ("&Cacute;", '\u{0106}'), // Polish Ć
     ("&Ccaron;", '\u{010C}'), // Czech Č
     ("&Ccedil;", '\u{00C7}'),
@@ -2785,6 +3049,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Epsilon;", '\u{0395}'),
     ("&Eta;", '\u{0397}'),
     ("&Euml;", '\u{00CB}'),
+    ("&GT;", '>'),
     ("&Gamma;", '\u{0393}'),
     ("&Gbreve;", '\u{011E}'), // Turkish Ğ
     ("&Iacute;", '\u{00CD}'),
@@ -2794,6 +3059,7 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Iota;", '\u{0399}'),
     ("&Iuml;", '\u{00CF}'),
     ("&Kappa;", '\u{039A}'),
+    ("&LT;", '<'),
     ("&Lambda;", '\u{039B}'),
     ("&Lcaron;", '\u{013D}'), // Slovak Ľ
     ("&Lstrok;", '\u{0141}'), // Polish Ł
@@ -2816,6 +3082,8 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&Pi;", '\u{03A0}'),
     ("&Prime;", '\u{2033}'),
     ("&Psi;", '\u{03A8}'),
+    ("&QUOT;", '"'),
+    ("&REG;", '\u{00AE}'),
     ("&Racute;", '\u{0154}'), // Slovak Ŕ
     ("&Rcaron;", '\u{0158}'), // Czech Ř
     ("&Rho;", '\u{03A1}'),
@@ -3062,6 +3330,30 @@ static NAMED_ENTITIES: &[(&str, char)] = &[
     ("&zwnj;", '\u{200C}'),
 ];
 
+/// Position just past the comment that starts at `pos`, the first byte after
+/// `<!--`. HTML5 ends a comment at `-->`, and also at once for the abruptly
+/// closed empty forms `<!-->` and `<!--->`. An unterminated comment runs to the
+/// end of input.
+fn skip_comment_body(bytes: &[u8], mut pos: usize) -> usize {
+    let len = bytes.len();
+    if bytes[pos..].starts_with(b">") {
+        return pos + 1;
+    }
+    if bytes[pos..].starts_with(b"->") {
+        return pos + 2;
+    }
+    let mut dashes = 0u32;
+    while pos < len {
+        match bytes[pos] {
+            b'-' => dashes += 1,
+            b'>' if dashes >= 2 => return pos + 1,
+            _ => dashes = 0,
+        }
+        pos += 1;
+    }
+    len
+}
+
 fn decode_named_entity(entity: &str) -> Option<char> {
     // Fast path: the ~20 most common HTML entities in web content.
     // The compiler turns this into efficient dispatch (length + byte checks).
@@ -3090,7 +3382,7 @@ fn decode_named_entity(entity: &str) -> Option<char> {
         "&oacute;" => return Some('\u{F3}'),
         _ => {}
     }
-    // Binary search for the full 303-entity table
+    // Binary search for the full 309-entity table
     NAMED_ENTITIES
         .binary_search_by_key(&entity, |(name, _)| name)
         .ok()
@@ -3102,7 +3394,7 @@ fn decode_named_entity(entity: &str) -> Option<char> {
 /// Handles both `attr="value"` and `attr='value'` formats.
 /// Uses byte-level case-insensitive search to avoid heap allocations.
 /// Returns `None` if the attribute is not found.
-fn extract_attr_value<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
+pub(crate) fn extract_attr_value<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
     let tag_bytes = tag.as_bytes();
     let name_bytes = attr_name.as_bytes();
     let name_len = name_bytes.len();
@@ -3331,13 +3623,22 @@ fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -
             text.push(ch);
         } else if entity_str.starts_with("&#") && entity_str.len() > 3 {
             let num_str = &entity_str[2..entity_str.len() - 1];
+            // HTML5 numeric references are digits only; Rust's integer
+            // parsers would also accept a leading '+'.
             let parsed = if let Some(hex) = num_str
                 .strip_prefix('x')
                 .or_else(|| num_str.strip_prefix('X'))
             {
-                u32::from_str_radix(hex, 16).ok()
+                hex.bytes()
+                    .all(|b| b.is_ascii_hexdigit())
+                    .then(|| u32::from_str_radix(hex, 16).ok())
+                    .flatten()
             } else {
-                num_str.parse::<u32>().ok()
+                num_str
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+                    .then(|| num_str.parse::<u32>().ok())
+                    .flatten()
             };
             if let Some(ch) = parsed.and_then(numeric_entity_to_char) {
                 text.push(ch);
@@ -3348,11 +3649,12 @@ fn decode_entity_bytes(s: &str, bytes: &[u8], start: usize, text: &mut String) -
             text.push_str(entity_str);
         }
     } else {
-        // Semicolon-optional: try as named entity with appended ';'
-        // Only for entity-like strings (&alpha...) -- all ASCII alphanumeric after '&'
+        // Semicolon-optional: HTML5 lets only the legacy names omit ';'
+        // ("&copy" decodes, "&mdash" and "&Beta" stay literal text).
         if entity_str.len() > 2
             && bytes[start + 1].is_ascii_alphabetic()
             && entity_str[1..].bytes().all(|b| b.is_ascii_alphanumeric())
+            && LEGACY_NO_SEMICOLON.binary_search(&&entity_str[1..]).is_ok()
         {
             // Use a stack buffer to avoid format! allocation
             let entity_bytes = entity_str.as_bytes();

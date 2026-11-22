@@ -273,9 +273,12 @@ fn tag_with_200_attributes() {
 
 #[test]
 fn entity_at_eof_without_semicolon() {
+    // A legacy name (HTML5 lets it omit ';') decodes even at end of input.
+    let text = strip_to_text("<p>Price: &pound");
+    assert_eq!(text, "Price: \u{a3}");
+    // A non-legacy name needs its ';', so at end of input it stays literal.
     let text = strip_to_text("<p>Price: &euro");
-    assert!(text.contains("Price"), "text: {text}");
-    assert!(text.contains('\u{20AC}'), "euro decoded: {text}");
+    assert_eq!(text, "Price: &euro");
 }
 
 #[test]
