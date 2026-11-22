@@ -48,22 +48,25 @@ impl ArchiveBudget {
         entry: R,
         out: &mut String,
     ) -> std::io::Result<()> {
+        if self.exceeded {
+            return Err(budget_error());
+        }
         let limit = MAX_ENTRY_BYTES.min(self.remaining);
         let mut bytes = Vec::new();
-        entry.take(limit + 1).read_to_end(&mut bytes)?;
+        let result = entry.take(limit + 1).read_to_end(&mut bytes);
         let read = bytes.len() as u64;
+        self.exceeded = read > self.remaining;
+        self.remaining = self.remaining.saturating_sub(read);
         if read > MAX_ENTRY_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("ZIP entry exceeds {MAX_ENTRY_BYTES} bytes decompressed"),
             ));
         }
-        if read > self.remaining {
-            self.remaining = 0;
-            self.exceeded = true;
+        if self.exceeded {
             return Err(budget_error());
         }
-        self.remaining -= read;
+        result?;
         let text = String::from_utf8(bytes)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         out.push_str(&text);
@@ -87,4 +90,58 @@ fn budget_error() -> std::io::Error {
         std::io::ErrorKind::InvalidData,
         format!("ZIP archive exceeds {MAX_ARCHIVE_BYTES} bytes decompressed in total"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Cursor};
+
+    #[test]
+    fn charges_partial_reads_even_when_reader_fails() {
+        struct Fails;
+        impl Read for Fails {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("read failed"))
+            }
+        }
+        let mut budget = ArchiveBudget {
+            remaining: 4,
+            exceeded: false,
+        };
+        let mut out = String::new();
+        assert!(budget
+            .read_to_string(Cursor::new(b"abc").chain(Fails), &mut out)
+            .is_err());
+        assert_eq!(budget.remaining, 1);
+        assert!(out.is_empty());
+        assert!(budget.read_to_string(&b"ab"[..], &mut out).is_err());
+        assert!(budget.check().is_err());
+    }
+
+    #[test]
+    fn equal_entry_and_archive_limits_leave_budget_exhausted() {
+        let mut budget = ArchiveBudget {
+            remaining: MAX_ENTRY_BYTES,
+            exceeded: false,
+        };
+        let mut out = String::new();
+        assert!(budget.read_to_string(io::repeat(0), &mut out).is_err());
+        assert!(budget.check().is_err());
+        assert!(budget.read_to_string(io::empty(), &mut out).is_err());
+    }
+
+    #[test]
+    fn charges_skipped_entries_and_stops_after_archive_limit() {
+        let mut budget = ArchiveBudget {
+            remaining: MAX_ENTRY_BYTES + 2,
+            exceeded: false,
+        };
+        let mut out = String::new();
+        assert!(budget.read_to_string(io::repeat(0), &mut out).is_err());
+        assert_eq!(budget.remaining, 1);
+        assert!(budget.read_to_string(&b"ab"[..], &mut out).is_err());
+        assert!(budget.read_to_string(io::empty(), &mut out).is_err());
+        assert!(out.is_empty());
+    }
 }
