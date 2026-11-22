@@ -4,6 +4,10 @@ permissions:
 
 on:
   push:
+    # Dependabot's proposed commits run on pull_request.
+    branches-ignore: ["dependabot/**"]
+    tags: ["**"]
+  workflow_dispatch:
   pull_request:
   schedule:
     - cron: "17 6 * * 1"
