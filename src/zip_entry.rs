@@ -110,15 +110,25 @@ mod tests {
             exceeded: false,
         };
         let mut out = String::new();
-        assert!(
-            budget
-                .read_to_string(Cursor::new(b"abc").chain(Fails), &mut out)
-                .is_err()
-        );
+        assert!(budget
+            .read_to_string(Cursor::new(b"abc").chain(Fails), &mut out)
+            .is_err());
         assert_eq!(budget.remaining, 1);
         assert!(out.is_empty());
         assert!(budget.read_to_string(&b"ab"[..], &mut out).is_err());
         assert!(budget.check().is_err());
+    }
+
+    #[test]
+    fn equal_entry_and_archive_limits_leave_budget_exhausted() {
+        let mut budget = ArchiveBudget {
+            remaining: MAX_ENTRY_BYTES,
+            exceeded: false,
+        };
+        let mut out = String::new();
+        assert!(budget.read_to_string(io::repeat(0), &mut out).is_err());
+        assert!(budget.check().is_err());
+        assert!(budget.read_to_string(io::empty(), &mut out).is_err());
     }
 
     #[test]
