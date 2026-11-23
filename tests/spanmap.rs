@@ -1708,3 +1708,48 @@ fn token_split_across_inline_tags_has_one_contiguous_source_range() {
     assert_eq!(spans.source_position(0), Some(6));
     assert_eq!(spans.source_position(text.len() - 1), Some(21));
 }
+
+#[test]
+fn fragments_clip_direct_runs_and_keep_rewritten_origins() {
+    let html = "<p>🦊 Zoë, Zo<b>ë</b> &amp; tea.</p>";
+    let (display, map) = strip_to_text_with_spans(html);
+    let start = display.rfind("Zoë").unwrap();
+    let end = display.find(" tea").unwrap();
+    let pieces: Vec<_> = map.source_fragments(start, end).collect();
+    let slices: Vec<_> = pieces
+        .iter()
+        .map(|p| &html[p.source_start..p.source_end])
+        .collect();
+    assert_eq!(slices, ["Zo", "ë", " ", "&amp;"]);
+    assert_eq!(pieces[0].source_start, html.rfind("Zo").unwrap());
+    assert_eq!(pieces.last().unwrap().kind, SpanKind::EntityDecoded);
+    assert_eq!(pieces[0].output_start, start);
+    assert_eq!(pieces.last().unwrap().output_end, end);
+    assert!(pieces
+        .windows(2)
+        .all(|w| w[0].output_end == w[1].output_start));
+    assert!(map.source_fragments(end, start).next().is_none());
+    assert!(map.source_fragments(start, start).next().is_none());
+    assert!(map
+        .source_fragments(display.len(), usize::MAX)
+        .next()
+        .is_none());
+    let inside = display.find("tea").unwrap();
+    assert_eq!(map.source_range(inside + 2, inside), None);
+}
+
+#[test]
+fn fragments_retain_coarse_origins_for_synthetic_or_normalized_text() {
+    let html = "<p>A   B</p><p>C</p>";
+    let (display, map) = strip_to_text_with_spans(html);
+    let space = display.find(' ').unwrap();
+    let normalized = map.source_fragments(space, space + 1).next().unwrap();
+    assert_eq!(normalized.kind, SpanKind::WhitespaceCollapsed);
+    assert_eq!(
+        &html[normalized.source_start..normalized.source_end],
+        "A   B"
+    );
+    let newline = display.find('\n').unwrap();
+    let inserted = map.source_fragments(newline, newline + 1).next().unwrap();
+    assert_eq!(inserted.kind, SpanKind::Synthetic);
+}

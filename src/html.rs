@@ -242,7 +242,7 @@ impl SpanMap {
     /// belongs to the queried output.
     #[must_use]
     pub fn source_range(&self, output_start: usize, output_end: usize) -> Option<(usize, usize)> {
-        if output_start == output_end {
+        if output_start >= output_end {
             return None;
         }
         // Binary search: skip spans that end before the query starts.
@@ -263,6 +263,48 @@ impl SpanMap {
         } else {
             None
         }
+    }
+
+    /// Project the overlap with a half-open output byte range, in display order.
+    ///
+    /// Each returned run is clipped to the requested output bytes. A
+    /// [`SpanKind::Direct`] run also has a byte-exact, clipped source range.
+    /// For other kinds the source range covers the entire originating reference,
+    /// normalized region, or synthetic construct. A query crossing markup can
+    /// therefore return multiple fragments with gaps between their source ranges.
+    /// Bytes outside the mapped output contribute no fragments. Empty or reversed
+    /// queries produce an empty iterator. Use UTF-8 character boundaries when
+    /// the result will be used to slice strings.
+    pub fn source_fragments(
+        &self,
+        output_start: usize,
+        output_end: usize,
+    ) -> impl Iterator<Item = Span> + '_ {
+        let first = self
+            .spans
+            .partition_point(|span| span.output_end <= output_start);
+        self.spans[first..]
+            .iter()
+            .take_while(move |span| output_start < output_end && span.output_start < output_end)
+            .map(move |span| {
+                let start = output_start.max(span.output_start);
+                let end = output_end.min(span.output_end);
+                let (source_start, source_end) = if span.kind == SpanKind::Direct {
+                    (
+                        span.source_start + (start - span.output_start),
+                        span.source_start + (end - span.output_start),
+                    )
+                } else {
+                    (span.source_start, span.source_end)
+                };
+                Span {
+                    output_start: start,
+                    output_end: end,
+                    source_start,
+                    source_end,
+                    kind: span.kind,
+                }
+            })
     }
 
     /// Map a single output byte position to its source byte position.
