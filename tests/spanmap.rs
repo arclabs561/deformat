@@ -1753,3 +1753,23 @@ fn fragments_retain_coarse_origins_for_synthetic_or_normalized_text() {
     let inserted = map.source_fragments(newline, newline + 1).next().unwrap();
     assert_eq!(inserted.kind, SpanKind::Synthetic);
 }
+
+#[test]
+fn image_alt_inserted_separators_have_a_synthetic_source_in_both_maps() {
+    let html = "L<img alt='β'>R";
+    let (display, map) = strip_to_text_with_spans(html);
+    let (path_display, paths) = strip_to_text_with_paths(html);
+    assert_eq!(display, "L β R");
+    assert_eq!(display, path_display);
+    for (byte, _) in display.match_indices(' ') {
+        let span = map.source_fragments(byte, byte + 1).next().unwrap();
+        assert_eq!(span.kind, SpanKind::Synthetic);
+        assert_eq!(&html[span.source_start..span.source_end], "<img alt='β'>");
+        let path = paths
+            .iter()
+            .find(|p| (p.output_start..p.output_end).contains(&byte))
+            .unwrap();
+        assert_eq!(path.kind, SpanKind::Synthetic);
+        assert_eq!(&html[path.source_start..path.source_end], "<img alt='β'>");
+    }
+}

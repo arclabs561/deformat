@@ -350,6 +350,18 @@ impl SpanMap {
     }
 }
 
+// The renderer inserts separators around alternative text. They share the
+// image's synthetic origin even when the surrounding source has no whitespace.
+fn append_image_alt(text: &mut String, decoded: &str) -> std::ops::Range<usize> {
+    let start = text.len();
+    if !text.is_empty() && !text.ends_with(' ') {
+        text.push(' ');
+    }
+    text.push_str(decoded);
+    text.push(' ');
+    start..text.len()
+}
+
 /// Strip HTML tags and return both the clean text and a source offset map.
 ///
 /// Like [`strip_to_text`], but also returns a [`SpanMap`] that maps
@@ -735,20 +747,15 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     if let Some(alt) = extract_attr_value(tag_buffer, "alt") {
                         if !alt.is_empty() {
                             let decoded = decode_entities_in_str(alt);
-                            if !text.ends_with(' ') && !text.is_empty() {
-                                text.push(' ');
-                            }
-                            let out_start = text.len();
-                            text.push_str(&decoded);
+                            let output = append_image_alt(&mut text, &decoded);
                             path_spans.push(PathSpan {
-                                output_start: out_start,
-                                output_end: text.len(),
+                                output_start: output.start,
+                                output_end: output.end,
                                 source_start: tag_buf_start,
                                 source_end: pos.min(len),
                                 kind: SpanKind::Synthetic,
                                 path: build_path(&path_stack),
                             });
-                            text.push(' ');
                         }
                     }
                 }
@@ -2167,22 +2174,17 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                     if let Some(alt) = extract_attr_value(tag_buffer, "alt") {
                         if !alt.is_empty() {
                             let decoded = decode_entities_in_str(alt);
-                            if !text.ends_with(' ') && !text.is_empty() {
-                                text.push(' ');
-                            }
-                            let out_start = text.len();
-                            text.push_str(&decoded);
+                            let output = append_image_alt(&mut text, &decoded);
                             if let Some(ref mut s) = spans {
                                 // Map alt text to the <img> tag's source range
                                 s.push(Span {
-                                    output_start: out_start,
-                                    output_end: text.len(),
+                                    output_start: output.start,
+                                    output_end: output.end,
                                     source_start: tag_buf_start,
                                     source_end: pos.min(len),
                                     kind: SpanKind::Synthetic,
                                 });
                             }
-                            text.push(' ');
                         }
                     }
                 }
