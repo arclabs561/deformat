@@ -242,7 +242,7 @@ impl SpanMap {
     /// belongs to the queried output.
     #[must_use]
     pub fn source_range(&self, output_start: usize, output_end: usize) -> Option<(usize, usize)> {
-        if output_start == output_end {
+        if output_start >= output_end {
             return None;
         }
         // Binary search: skip spans that end before the query starts.
@@ -263,6 +263,48 @@ impl SpanMap {
         } else {
             None
         }
+    }
+
+    /// Project the overlap with a half-open output byte range, in display order.
+    ///
+    /// Each returned run is clipped to the requested output bytes. A
+    /// [`SpanKind::Direct`] run also has a byte-exact, clipped source range.
+    /// For other kinds the source range covers the entire originating reference,
+    /// normalized region, or synthetic construct. A query crossing markup can
+    /// therefore return multiple fragments with gaps between their source ranges.
+    /// Bytes outside the mapped output contribute no fragments. Empty or reversed
+    /// queries produce an empty iterator. Use UTF-8 character boundaries when
+    /// the result will be used to slice strings.
+    pub fn source_fragments(
+        &self,
+        output_start: usize,
+        output_end: usize,
+    ) -> impl Iterator<Item = Span> + '_ {
+        let first = self
+            .spans
+            .partition_point(|span| span.output_end <= output_start);
+        self.spans[first..]
+            .iter()
+            .take_while(move |span| output_start < output_end && span.output_start < output_end)
+            .map(move |span| {
+                let start = output_start.max(span.output_start);
+                let end = output_end.min(span.output_end);
+                let (source_start, source_end) = if span.kind == SpanKind::Direct {
+                    (
+                        span.source_start + (start - span.output_start),
+                        span.source_start + (end - span.output_start),
+                    )
+                } else {
+                    (span.source_start, span.source_end)
+                };
+                Span {
+                    output_start: start,
+                    output_end: end,
+                    source_start,
+                    source_end,
+                    kind: span.kind,
+                }
+            })
     }
 
     /// Map a single output byte position to its source byte position.
@@ -306,6 +348,18 @@ impl SpanMap {
     pub fn is_empty(&self) -> bool {
         self.spans.is_empty()
     }
+}
+
+// The renderer inserts separators around alternative text. They share the
+// image's synthetic origin even when the surrounding source has no whitespace.
+fn append_image_alt(text: &mut String, decoded: &str) -> std::ops::Range<usize> {
+    let start = text.len();
+    if !text.is_empty() && !text.ends_with(' ') {
+        text.push(' ');
+    }
+    text.push_str(decoded);
+    text.push(' ');
+    start..text.len()
 }
 
 /// Strip HTML tags and return both the clean text and a source offset map.
@@ -693,20 +747,15 @@ pub fn strip_to_text_with_paths(html: &str) -> (String, Vec<PathSpan>) {
                     if let Some(alt) = extract_attr_value(tag_buffer, "alt") {
                         if !alt.is_empty() {
                             let decoded = decode_entities_in_str(alt);
-                            if !text.ends_with(' ') && !text.is_empty() {
-                                text.push(' ');
-                            }
-                            let out_start = text.len();
-                            text.push_str(&decoded);
+                            let output = append_image_alt(&mut text, &decoded);
                             path_spans.push(PathSpan {
-                                output_start: out_start,
-                                output_end: text.len(),
+                                output_start: output.start,
+                                output_end: output.end,
                                 source_start: tag_buf_start,
                                 source_end: pos.min(len),
                                 kind: SpanKind::Synthetic,
                                 path: build_path(&path_stack),
                             });
-                            text.push(' ');
                         }
                     }
                 }
@@ -2125,22 +2174,17 @@ fn strip_impl(html: &str, options: &StripOptions, mut spans: Option<&mut Vec<Spa
                     if let Some(alt) = extract_attr_value(tag_buffer, "alt") {
                         if !alt.is_empty() {
                             let decoded = decode_entities_in_str(alt);
-                            if !text.ends_with(' ') && !text.is_empty() {
-                                text.push(' ');
-                            }
-                            let out_start = text.len();
-                            text.push_str(&decoded);
+                            let output = append_image_alt(&mut text, &decoded);
                             if let Some(ref mut s) = spans {
                                 // Map alt text to the <img> tag's source range
                                 s.push(Span {
-                                    output_start: out_start,
-                                    output_end: text.len(),
+                                    output_start: output.start,
+                                    output_end: output.end,
                                     source_start: tag_buf_start,
                                     source_end: pos.min(len),
                                     kind: SpanKind::Synthetic,
                                 });
                             }
-                            text.push(' ');
                         }
                     }
                 }
