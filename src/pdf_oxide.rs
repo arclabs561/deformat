@@ -162,7 +162,11 @@ fn segments_with_coords(doc: &mut pdf_oxide::PdfDocument) -> Result<Vec<Segment>
             })
             .unwrap_or_default();
         let rotation = doc.get_page_rotation(i).unwrap_or(0);
-        let frame = PageFrame::new(media_box, rotation);
+        // pdf_oxide 0.3.78 already turns every span on a 180-degree page
+        // before assembling lines, keeping the MediaBox origin. Applying the
+        // half-turn again would send a citation back to its unrotated location.
+        let remaining_rotation = if rotation == 180 { 0 } else { rotation };
+        let frame = PageFrame::new(media_box, remaining_rotation);
         let lines = match doc.extract_text_lines(i) {
             Ok(l) => l,
             Err(e) => return Err(Error::Parse(format!("PDF (oxide) lines page {i}: {e}"))),

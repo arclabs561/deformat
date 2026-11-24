@@ -7,6 +7,7 @@ bump the minor version while in 0.x.
 
 These entries identify source changes without assigning a package release.
 
+- Place PDF line citations over the displayed text on pages rotated 180 degrees.
 - Return no source coverage for empty output ranges in `SpanMap::source_range`.
   ([e7b01c1](https://github.com/arclabs561/deformat/commit/e7b01c14336533883470082656c05c221191c8e0))
 

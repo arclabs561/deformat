@@ -6,7 +6,7 @@
 //! Run: cargo test --features pdf,pdf_oxide --test regressions_pdf
 #![allow(dead_code)]
 
-#[cfg(feature = "pdf")]
+#[cfg(any(feature = "pdf", feature = "pdf_oxide"))]
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!(
         "{}/tests/regressions_pdf_data/{name}",
@@ -225,6 +225,43 @@ fn pdf_coordinates_account_for_page_rotation() {
         (792.0, 612.0),
         "rotation ignored"
     );
+}
+
+/// The fixture draws "Hello world" in 12 pt Helvetica at (72, 700). Its
+/// 59.34 pt advance and shifted MediaBox put it at x=22..81.34 on the
+/// unrotated page, with the baseline at y=100. These expected rectangles
+/// allow four points for differences in font ascent and descent estimates.
+#[cfg(feature = "pdf_oxide")]
+#[test]
+fn citation_boxes_follow_the_text_on_each_physical_page() {
+    let pages = [
+        (1, (350.0, 200.0), (22.0, 97.5, 81.34, 108.6)),
+        (2, (200.0, 350.0), (97.5, 268.66, 108.6, 328.0)),
+        // The third page is blank.
+        (4, (350.0, 200.0), (268.66, 91.4, 328.0, 102.5)),
+        (5, (200.0, 350.0), (91.4, 22.0, 102.5, 81.34)),
+    ];
+    let segments =
+        deformat::pdf_oxide::extract_bytes_to_segments_with_coords(&fixture("citation_frames.pdf"))
+            .unwrap();
+    assert_eq!(segments.len(), pages.len());
+
+    for (segment, (page, size, (left, bottom, right, top))) in segments.iter().zip(pages) {
+        let data = segment.data();
+        assert_eq!(data.text, "Hello world");
+        assert_eq!(data.metadata.page_number, Some(page));
+        let coords = data.metadata.coordinates.as_ref().unwrap();
+        assert_eq!(coords.system, "PointSpace");
+        assert_eq!((coords.layout_width, coords.layout_height), size);
+        let expected = [(left, top), (right, top), (right, bottom), (left, bottom)];
+        assert_eq!(coords.points.len(), expected.len());
+        for (&(x, y), (want_x, want_y)) in coords.points.iter().zip(expected) {
+            assert!(
+                (x - want_x).abs() <= 4.0 && (y - want_y).abs() <= 4.0,
+                "page {page}: got ({x}, {y}), expected ({want_x}, {want_y}) within 4 pt"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------- page_type

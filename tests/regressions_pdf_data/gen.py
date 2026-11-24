@@ -79,6 +79,17 @@ for pg in r.pages:
 w.pages[0].mediabox = RectangleObject([50, 600, 400, 800])
 w.write(p("mediabox_offset.pdf"))
 
+# The same citation on a shifted MediaBox at every legal rotation. Keep a blank
+# third page so segment counters cannot stand in for physical page numbers.
+w = PdfWriter()
+for angle in (0, 90, 180, 270):
+    if angle == 180:
+        w.add_blank_page(width=350, height=200)
+    page = w.add_page(PdfReader(p("simple.pdf")).pages[0])
+    page.mediabox = RectangleObject([50, 600, 400, 800])
+    page.rotate(angle)
+w.write(p("citation_frames.pdf"))
+
 # 10 TTF font (reportlab subset, ligature codepoints present in text)
 pdfmetrics.registerFont(TTFont("DejaVu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
 c = canvas.Canvas(p("ttf_lig.pdf"), pagesize=letter)
