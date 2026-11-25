@@ -1,6 +1,6 @@
 [package]
 name = "deformat"
-version = "0.17.1"
+version = "0.17.2"
 edition = "2021"
 rust-version = "1.91.0"
 license = "MIT OR Apache-2.0"
@@ -32,6 +32,8 @@ exclude = ["fuzz"]
 
 [dependencies]
 memchr = "2"
+textprep-source-map = { version = "0.1", path = "../textprep/crates/source-map", default-features = false, optional = true }
+textprep = { version = "0.3.2", path = "../textprep", default-features = false, features = ["source-map"], optional = true }
 
 # Optional: JSON serialization for Extracted, Format, Extractor
 serde = { version = "1", optional = true, features = ["derive"] }
@@ -61,6 +63,8 @@ encoding_rs = { version = "=0.8.44", optional = true }
 
 [features]
 default = []
+source-map = ["dep:textprep-source-map"]
+prepare = ["source-map", "dep:textprep"]
 html2text = ["dep:html2text"]
 readability = ["dep:dom_smoothie"]
 pdf = ["dep:pdf_oxide"]
@@ -70,7 +74,7 @@ epub = ["dep:zip"]
 rtf = ["dep:encoding_rs"]
 xlsx = ["dep:calamine"]
 pptx = ["dep:zip"]
-serde = ["dep:serde"]
+serde = ["dep:serde", "textprep-source-map?/serde"]
 whichlang = ["dep:whichlang"]
 encoding_rs = ["dep:encoding_rs"]
 
