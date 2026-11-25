@@ -32,8 +32,8 @@ exclude = ["fuzz"]
 
 [dependencies]
 memchr = "2"
-textprep-source-map = { version = "0.1", path = "../textprep/crates/source-map", default-features = false, optional = true }
-textprep = { version = "0.3.2", path = "../textprep", default-features = false, features = ["source-map"], optional = true }
+textprep-source-map = { version = "0.1", git = "https://github.com/arclabs561/textprep", rev = "6beb88a6b48ecb8ef30984b137473da6a2af2b92", default-features = false, optional = true }
+textprep = { version = "0.3.2", git = "https://github.com/arclabs561/textprep", rev = "6beb88a6b48ecb8ef30984b137473da6a2af2b92", default-features = false, features = ["source-map"], optional = true }
 
 # Optional: JSON serialization for Extracted, Format, Extractor
 serde = { version = "1", optional = true, features = ["derive"] }
