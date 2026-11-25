@@ -29,6 +29,8 @@
 //!
 //! | Feature | Crate | What it adds |
 //! |---------|-------|-------------|
+//! | `source-map` | `textprep::spanmap` | Rendered-to-original byte ranges and artifact digests |
+//! | `prepare` | `textprep` | Text cleanup with source maps composed through rendering |
 //! | `serde` | `serde` | [`serde::Serialize`]/[`serde::Deserialize`] on [`Extracted`], [`Format`], [`Extractor`], and [`html::HtmlMetadata`] |
 //! | `readability` | `dom_smoothie` | Mozilla Readability article extraction |
 //! | `html2text` | `html2text` | DOM-based HTML-to-text with layout awareness |
@@ -50,6 +52,8 @@ pub struct ReadmeDoctests;
 pub mod detect;
 pub mod error;
 pub mod html;
+#[cfg(feature = "source-map")]
+pub mod mapped;
 pub mod page_type;
 pub mod segment;
 
@@ -248,7 +252,10 @@ pub fn extract_as(content: &str, format: Format) -> Result<Extracted, Error> {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn extract_from_bytes(bytes: &[u8]) -> Result<Extracted, Error> {
-    let format = detect::detect_bytes(bytes);
+    extract_detected_bytes(bytes, detect::detect_bytes(bytes))
+}
+
+fn extract_detected_bytes(bytes: &[u8], format: Format) -> Result<Extracted, Error> {
     match format {
         Format::Html | Format::Xml | Format::PlainText | Format::Markdown | Format::Unknown => {
             let text = std::str::from_utf8(bytes).map_err(|e| {

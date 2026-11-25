@@ -11,6 +11,12 @@ These entries identify source changes without assigning a package release.
 - Return no source coverage for empty output ranges in `SpanMap::source_range`.
   ([e7b01c1](https://github.com/arclabs561/deformat/commit/e7b01c14336533883470082656c05c221191c8e0))
 
+## 0.17.2 (pending release)
+
+- The optional `source-map` feature maps rendered spans back to original document
+  bytes. The `prepare` feature composes those maps with textprep cleanup,
+  preserving disjoint contributors when NFC spans HTML markup.
+
 ## 0.17.1 (pending release)
 
 - XLSX requires calamine 0.38 to pick up RUSTSEC-2026-0436.

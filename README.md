@@ -21,6 +21,29 @@ across 7 page types), the triple-filter
 pipeline reaches word F1 0.774 across all page types and 0.880 on articles
 (see [Evaluation](#evaluation)).
 
+## Prepare text with source offsets
+
+Enable `prepare` to render input bytes, apply textprep cleanup, and project a
+span in the prepared text back to the original document. Unicode normalization
+can combine characters on opposite sides of an HTML tag. Its output then has
+separate contributing byte ranges in the source.
+
+```rust
+# #[cfg(feature = "prepare")] {
+use deformat::mapped::{prepare, CleanOptions};
+let html = "<p>e<b>&#x301;</b></p>";
+let options = CleanOptions { normalize_unicode: true, clean_whitespace: true };
+let doc = prepare(html.as_bytes(), &options).unwrap();
+assert_eq!(doc.extracted.text, "é");
+let origins = doc.source_map.project_chars(&doc.extracted.text, 0..1).unwrap();
+assert_eq!(origins[0].source_ranges, vec![3..4, 7..14]);
+# }
+```
+
+The `source-map` feature supplies `mapped::extract` for rendering
+without cleanup. It uses the map types from `textprep::spanmap`. For a document renderer that supplies only text, the result
+records the original digest and marks source coordinates as unmapped.
+
 ## Scope
 
 Use `deformat` when one extraction API needs to cover HTML and document files,
