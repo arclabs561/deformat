@@ -2,7 +2,7 @@
 
 use crate::html::{self, SpanKind, SpanMap};
 use crate::{Error, Extracted, Extractor, Format};
-pub use textprep_source_map::{SourceKind, SourceMap, SourceRun};
+pub use textprep::spanmap::{SourceKind, SourceMap, SourceRun};
 
 /// The source map describes the current value of `extracted.text`.
 #[derive(Debug, Clone)]

@@ -40,8 +40,8 @@ assert_eq!(origins[0].source_ranges, vec![3..4, 7..14]);
 # }
 ```
 
-The smaller `source-map` feature supplies `mapped::extract` for rendering
-without cleanup. For a document renderer that supplies only text, the result
+The `source-map` feature supplies `mapped::extract` for rendering
+without cleanup. It uses the map types from `textprep::spanmap`. For a document renderer that supplies only text, the result
 records the original digest and marks source coordinates as unmapped.
 
 ## Scope

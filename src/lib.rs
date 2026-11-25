@@ -29,7 +29,7 @@
 //!
 //! | Feature | Crate | What it adds |
 //! |---------|-------|-------------|
-//! | `source-map` | `textprep-source-map` | Rendered-to-original byte ranges and artifact digests |
+//! | `source-map` | `textprep::spanmap` | Rendered-to-original byte ranges and artifact digests |
 //! | `prepare` | `textprep` | Text cleanup with source maps composed through rendering |
 //! | `serde` | `serde` | [`serde::Serialize`]/[`serde::Deserialize`] on [`Extracted`], [`Format`], [`Extractor`], and [`html::HtmlMetadata`] |
 //! | `readability` | `dom_smoothie` | Mozilla Readability article extraction |
